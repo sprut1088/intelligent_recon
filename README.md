@@ -28,10 +28,10 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate  # Windows: .venv\Scripts\activate
 pip install -r requirements.txt
-uvicorn app.main:app --reload --host 0.0.0.0 --port 8000
+uvicorn app.main:app --reload --host 0.0.0.0 --port 8090
 ```
 
-FastAPI docs: `http://localhost:8000/docs`
+FastAPI docs: `http://localhost:8090/docs`
 
 ### Frontend
 
@@ -41,12 +41,12 @@ npm install
 npm run dev
 ```
 
-React UI: `http://localhost:5173`
+React UI: `http://localhost:8181`
 
-The UI assumes the backend is running at `http://localhost:8000`. To override:
+The UI assumes the backend is running at `http://localhost:8090`. To override:
 
 ```bash
-VITE_API_BASE_URL=http://localhost:8000 npm run dev
+VITE_API_BASE_URL=http://localhost:8090 npm run dev
 ```
 
 ### Docker
@@ -55,8 +55,8 @@ VITE_API_BASE_URL=http://localhost:8000 npm run dev
 docker compose up --build
 ```
 
-Backend: `http://localhost:8000`
-Frontend: `http://localhost:5173`
+Backend: `http://localhost:8090`
+Frontend: `http://localhost:8181`
 
 ## Prototype demo flow
 

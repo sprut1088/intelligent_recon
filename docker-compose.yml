@@ -1,11 +1,14 @@
 services:
   backend:
     build: ./backend
-    ports: ["8000:8000"]
+    ports: ["8090:8090"]
     environment:
       - PSR_AMOUNT_DIVISOR=1
       - MINOR_VARIANCE_TOLERANCE=50
   frontend:
-    build: ./frontend
-    ports: ["5173:80"]
+    build:
+      context: ./frontend
+      args:
+        VITE_API_BASE_URL: http://127.0.0.1:8090
+    ports: ["8181:80"]
     depends_on: [backend]
