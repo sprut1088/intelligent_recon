@@ -105,3 +105,7 @@ POST /api/pattern-candidates/{candidate_id}/approve
 ## Build note
 
 This is intentionally not a black-box AI implementation. The base matching engine is deterministic and explainable. The learning component analyses repeated manual resolutions and proposes governed patterns that must be approved before they become active.
+
+## Developer documentation
+
+See [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) for a deeper reference covering module architecture, data flows, parser internals, the full FRS gap tracker, known bugs, and production upgrade notes.
