@@ -147,7 +147,7 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .negative { color: #aa341f; font-weight: 900; }
 .mini-score { display: grid; grid-template-columns: 80px 40px; align-items: center; gap: 8px; }
 .mini-score span { display: block; height: 8px; background: linear-gradient(90deg, var(--primary), var(--success)); border-radius: 999px; }
-.toolbar input { min-width: 340px; }
+.toolbar > input, .toolbar input[type="text"], .toolbar input[type="search"] { min-width: 240px; flex: 1; }
 .toggle { display: flex; align-items: center; gap: 8px; color: var(--muted); font-weight: 800; font-size: 13px; }
 .drawer { position: fixed; top: 74px; right: 0; bottom: 0; width: min(520px, 96vw); background: #fff; border-left: 1px solid var(--line); box-shadow: -26px 0 55px rgba(16,24,39,.16); z-index: 9; padding: 22px; overflow: auto; }
 .close { float: right; }
