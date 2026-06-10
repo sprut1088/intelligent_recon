@@ -87,27 +87,61 @@ PSR_AMOUNT_DIVISOR=100
 ## Key APIs
 
 ```text
+# Reconciliation
 GET  /health
 POST /api/load-sample
 POST /api/reconcile/run
 GET  /api/reconcile/summary
 GET  /api/reconcile/cases
 GET  /api/reconcile/cases/{case_id}
+GET  /api/reconcile/cases/{case_id}/explanation
 POST /api/reconcile/cases/{case_id}/resolve
 POST /api/reconcile/events
+GET  /api/events
+
+# File ingestion & data quality
+POST /api/files/upload
+GET  /api/files/batches
+GET  /api/files/batches/{batch_id}
+POST /api/files/batches/{batch_id}/run
+POST /api/data-quality/batches/{batch_id}/validate
+GET  /api/data-quality/batches/{batch_id}
+
+# Workspace
+GET  /api/workspace/overview
+GET  /api/workspace/submissions
+GET  /api/workspace/data-preview
+GET  /api/workspace/match-field-predictions
+GET  /api/workspace/no-code-rules
+GET  /api/workspace/workflow-rules
+GET  /api/workspace/dashboard
+POST /api/workspace/snapshot
+GET  /api/workspace/export/reconciliation-results
+
+# Exception workflow
+GET  /api/exceptions/workflow
+GET  /api/exceptions/{case_id}/workflow
+PATCH /api/exceptions/{case_id}/workflow
+
+# Patterns & learning
 GET  /api/patterns
+POST /api/patterns
+PATCH /api/patterns/{pattern_id}
+POST /api/patterns/{pattern_id}/activate
+POST /api/patterns/{pattern_id}/deactivate
 GET  /api/pattern-candidates
 POST /api/learning/demo-signals
 POST /api/learning/run
 POST /api/pattern-candidates/{candidate_id}/approve
+
+# Copilot
+GET  /api/assistant/query
 ```
 
 ## Build note
 
 This is intentionally not a black-box AI implementation. The base matching engine is deterministic and explainable. The learning component analyses repeated manual resolutions and proposes governed patterns that must be approved before they become active.
 
-## Duco-comparable UI refresh
+## Developer documentation
 
-This version adds an operations-studio UI that covers control room, submissions, data prep, match-field prediction, no-code rules, multi-pass pattern registry, results workbench, exception workflow, dashboards, learning lab, copilot and governance.
-
-Backend ports remain `8090`; frontend ports remain `8181`. See `DUCO_REPLACEMENT_UI_NOTES.md` for the detailed change summary.
+See [docs/DEVELOPER_GUIDE.md](docs/DEVELOPER_GUIDE.md) for a deeper reference covering module architecture, data flows, parser internals, the full API contract, database schema, FRS gap tracker, known bugs, and production upgrade notes.
