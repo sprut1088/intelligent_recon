@@ -6,6 +6,7 @@ from .config import settings
 from .db import get_conn, json_dumps, reset_runtime_tables, rows_to_dicts, set_meta
 from .parsers import CamtTransaction, PsrTransaction, parse_camt_file, parse_psr_file
 from .reconciliation import case_to_db_tuple, reconcile_transactions
+from .workflow import sync_exception_workflow
 
 CASE_INSERT_SQL = """
 INSERT INTO recon_cases
@@ -27,6 +28,7 @@ def load_samples_and_reconcile(amount_divisor: Optional[float] = None, reset: bo
         cases = reconcile_transactions(psr_transactions, camt_transactions, patterns)
         conn.execute("DELETE FROM recon_cases")
         conn.executemany(CASE_INSERT_SQL, [case_to_db_tuple(case) for case in cases])
+        sync_exception_workflow(conn)
         set_meta(conn, "last_load_header", json.dumps(asdict(header) if header else {}))
         set_meta(conn, "last_amount_divisor", amount_divisor or settings.psr_amount_divisor)
         set_meta(conn, "psr_count", len(psr_transactions)); set_meta(conn, "camt_count", len(camt_transactions)); set_meta(conn, "case_count", len(cases))

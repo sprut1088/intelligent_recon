@@ -37,12 +37,76 @@ def safe_date_diff(value_date: str, booking_date: str) -> int:
 def features(psr: Optional[PsrTransaction], bank: Optional[CamtTransaction]) -> Dict:
     return {"psr_id": psr.id if psr else None, "bank_id": bank.camt_id if bank else None, "end_to_end_id_exact": bool(psr and bank and psr.id == bank.end_to_end_id), "pmt_ref_exact": bool(psr and bank and psr.reference == bank.pmt_ref), "invoice_exact": bool(psr and bank and psr.invoice == bank.invoice), "invoice_suffix_match": bool(psr and bank and invoice_suffix(psr.invoice) and invoice_suffix(psr.invoice) == invoice_suffix(bank.invoice)), "amount_exact": bool(psr and bank and amount_equal(psr.amount, bank.amount)), "currency_match": bool(psr and bank and psr.currency == bank.currency), "counterparty_similarity": round(similarity(psr.counterparty, bank.counterparty), 4) if psr and bank else 0, "amount_variance": amount_variance(psr.amount, bank.amount) if psr and bank else None}
 
+
+def score_breakdown(feature_map: Dict, rule: str, confidence: int) -> Dict:
+    components = []
+
+    def add(component: str, passed: bool, weight: int, evidence: str) -> None:
+        components.append({
+            "component": component,
+            "passed": bool(passed),
+            "weight": weight,
+            "evidence": evidence,
+        })
+
+    add("Reference", feature_map.get("end_to_end_id_exact") or feature_map.get("pmt_ref_exact"), 30,
+        "EndToEndId or PMT-REF matched" if feature_map.get("end_to_end_id_exact") or feature_map.get("pmt_ref_exact") else "No exact reference match")
+    add("Amount", feature_map.get("amount_exact"), 25,
+        "Amount matched exactly" if feature_map.get("amount_exact") else f"Variance: {feature_map.get('amount_variance')}")
+    add("Invoice", feature_map.get("invoice_exact") or feature_map.get("invoice_suffix_match"), 20,
+        "Invoice exact/suffix match" if feature_map.get("invoice_exact") or feature_map.get("invoice_suffix_match") else "Invoice did not match or was missing")
+    add("Counterparty", (feature_map.get("counterparty_similarity") or 0) >= 0.85, 15,
+        f"Counterparty similarity: {round((feature_map.get('counterparty_similarity') or 0) * 100, 2)}%")
+    add("Currency", feature_map.get("currency_match"), 10,
+        "Currency matched" if feature_map.get("currency_match") else "Currency did not match or one side is missing")
+
+    passed_weight = sum(item["weight"] for item in components if item["passed"])
+    total_weight = sum(item["weight"] for item in components) or 1
+    raw_score = round((passed_weight / total_weight) * 100, 2)
+    matched_fields = [item["component"] for item in components if item["passed"]]
+    failed_fields = [item["component"] for item in components if not item["passed"]]
+    return {
+        "rule_applied": rule,
+        "engine_confidence": confidence,
+        "raw_component_score": raw_score,
+        "components": components,
+        "matched_fields": matched_fields,
+        "failed_fields": failed_fields,
+        "decision_basis": f"Rule {rule} produced {confidence}% engine confidence. Component score was {raw_score}%.",
+    }
+
 def build_case(idx:int, psr: Optional[PsrTransaction], bank: Optional[CamtTransaction], status: str, reason: str, match_type: str, confidence:int, rule:str, exception_flag:str, explanation:str, suggestions: Optional[List[Dict]]=None) -> ReconCase:
     internal = psr.amount if psr else None; bank_amt = bank.amount if bank else None
     variance = amount_variance(internal, bank_amt) if bank and psr else (internal if psr else bank_amt)
     value_dt = psr.execution_date if psr else (bank.value_date if bank else ""); booking_dt = bank.booking_date if bank else ""
     days = safe_date_diff(value_dt, booking_dt) if value_dt and booking_dt else settings.in_transit_days
-    return ReconCase(f"CASE-{idx:06d}", bank.ntry_id if bank else (psr.id if psr else f"CASE-{idx:06d}"), psr.id if psr else "", bank.camt_id if bank else "", psr.reference if psr else (bank.pmt_ref if bank else ""), psr.invoice if psr else (bank.invoice if bank else ""), psr.counterparty if psr else (bank.counterparty if bank else ""), internal, bank_amt, variance, psr.currency if psr else (bank.currency if bank else "EUR"), value_dt, booking_dt, status, reason, match_type, confidence, days, aging_bucket(days), rule, exception_flag, explanation, features(psr, bank), suggestions or [])
+    feature_map = features(psr, bank)
+    feature_map["score_breakdown"] = score_breakdown(feature_map, rule, confidence)
+    return ReconCase(f"CASE-{idx:06d}", bank.ntry_id if bank else (psr.id if psr else f"CASE-{idx:06d}"), psr.id if psr else "", bank.camt_id if bank else "", psr.reference if psr else (bank.pmt_ref if bank else ""), psr.invoice if psr else (bank.invoice if bank else ""), psr.counterparty if psr else (bank.counterparty if bank else ""), internal, bank_amt, variance, psr.currency if psr else (bank.currency if bank else "EUR"), value_dt, booking_dt, status, reason, match_type, confidence, days, aging_bucket(days), rule, exception_flag, explanation, feature_map, suggestions or [])
+
+
+def pattern_config(pattern_registry_rows: Sequence[Dict]) -> Dict[str, Dict]:
+    config = {}
+    for row in pattern_registry_rows:
+        rule = row.get("pattern_rule")
+        if rule is None:
+            try:
+                rule = json.loads(row.get("pattern_rule_json") or "{}")
+            except json.JSONDecodeError:
+                rule = {}
+        config[row.get("pattern_id")] = {**row, "rule": rule or {}}
+    return config
+
+
+def pattern_is_active(config: Dict[str, Dict], pattern_id: str) -> bool:
+    row = config.get(pattern_id)
+    return not row or row.get("status") == "ACTIVE"
+
+
+def pattern_rule_value(config: Dict[str, Dict], pattern_id: str, key: str, default):
+    row = config.get(pattern_id) or {}
+    rule = row.get("rule") or {}
+    return rule.get(key, default)
 
 def active_learned_patterns(pattern_registry_rows: Sequence[Dict]) -> List[Dict]:
     out=[]
@@ -66,6 +130,9 @@ def learned_invoice_suffix_match(psr: PsrTransaction, banks: Sequence[CamtTransa
 
 def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_transactions: Sequence[CamtTransaction], pattern_registry_rows: Sequence[Dict]) -> List[ReconCase]:
     cases=[]; used=set(); idx=1
+    config = pattern_config(pattern_registry_rows)
+    p4_threshold = float(pattern_rule_value(config, "P4", "threshold", 0.85))
+    p7_minor_tolerance = float(pattern_rule_value(config, "P7", "minor_tolerance", settings.minor_variance_tolerance))
     by_e2e={b.end_to_end_id:b for b in camt_transactions if b.end_to_end_id}
     by_ref_amt={}; by_inv_amt={}; by_amt={}
     for b in camt_transactions:
@@ -75,12 +142,12 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     learned = active_learned_patterns(pattern_registry_rows)
     for psr in psr_transactions:
         bank = by_e2e.get(psr.id)
-        if bank and bank.ntry_id not in used:
+        if pattern_is_active(config, "P1") and bank and bank.ntry_id not in used:
             var = amount_variance(psr.amount, bank.amount) or 0
             if amount_equal(psr.amount, bank.amount):
                 status, reason, conf, rule, flag, expl = "Matched & Settled (Auto-Close)", "EXACT_MATCH", 100, "P1_EXACT_END_TO_END_ID", "N", "Exact EndToEndId match and exact amount match. Auto-close is safe."
                 sugg=[]
-            elif abs(var) <= settings.minor_variance_tolerance:
+            elif pattern_is_active(config, "P7") and abs(var) <= p7_minor_tolerance:
                 status, reason, conf, rule, flag, expl = "Post to Short or Over Ledger", "AMOUNT_VARIANCE_MINOR", 86, "P7_AMOUNT_VARIANCE", "Y", f"Identity matched but amount variance {var} is within configured minor tolerance."
                 sugg=[{"action":"POST_LEDGER_CANDIDATE","confidence":0.86,"variance":var}]
             else:
@@ -88,10 +155,10 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
                 sugg=[{"action":"ROUTE_TO_REVIEW","confidence":0.70,"variance":var}]
             used.add(bank.ntry_id); cases.append(build_case(idx, psr, bank, status, reason, "1_TO_1", conf, rule, flag, expl, sugg)); idx+=1; continue
         secondary = next((b for b in by_ref_amt.get((psr.reference,psr.amount),[]) if b.ntry_id not in used), None)
-        if secondary:
+        if pattern_is_active(config, "P2") and secondary:
             used.add(secondary.ntry_id); cases.append(build_case(idx, psr, secondary, "Matched & Settled (Auto-Close)", "PMT_REF_AMOUNT_MATCH", "1_TO_1", 96, "P2_PMT_REF_AMOUNT", "N", "EndToEndId was not available or did not match, but PMT-REF and amount matched.")); idx+=1; continue
         inv = next((b for b in by_inv_amt.get((psr.invoice,psr.amount),[]) if b.ntry_id not in used), None)
-        if inv:
+        if pattern_is_active(config, "P3") and inv:
             used.add(inv.ntry_id); cases.append(build_case(idx, psr, inv, "Matched & Settled (Auto-Close)", "INVOICE_AMOUNT_MATCH", "1_TO_1", 92, "P3_INVOICE_USTRD_AMOUNT", "N", "Invoice extracted from CAMT remittance matched PSR invoice and amount.")); idx+=1; continue
         learned_match = learned_invoice_suffix_match(psr, camt_transactions, used, learned)
         if learned_match:
@@ -101,7 +168,7 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
         for b in cands:
             sc=similarity(psr.counterparty,b.counterparty)
             if sc>score: fuzzy,score=b,sc
-        if fuzzy and score>=0.85:
+        if pattern_is_active(config, "P4") and fuzzy and score>=p4_threshold:
             used.add(fuzzy.ntry_id); cases.append(build_case(idx, psr, fuzzy, "Suggested Match - Analyst Review", "COUNTERPARTY_FUZZY_AMOUNT", "1_TO_1", int(score*100), "P4_COUNTERPARTY_FUZZY", "Y", f"Counterparty similarity {score:.2f} with exact amount. Requires analyst confirmation.", [{"action":"REVIEW_FUZZY_CANDIDATE","confidence":round(score,3),"bank_id":fuzzy.camt_id}])); idx+=1; continue
         cases.append(build_case(idx, psr, None, "Uncleared / In-Transit Payment", "NO_ACCEPTABLE_CANDIDATES", "UNMATCHED_PSR", 45, "P5_EXCEPTION_HANDLING", "Y", "No acceptable bank candidate was found. Route to exception queue and monitor next CAMT cycle.", [{"action":"ROUTE_TO_EXCEPTION_QUEUE","confidence":0.45,"expected_clear_days":settings.in_transit_days}])); idx+=1
     for bank in camt_transactions:

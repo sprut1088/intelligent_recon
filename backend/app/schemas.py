@@ -27,3 +27,31 @@ class CandidateApprovalRequest(BaseModel):
     approved_by: str = "recon_lead"
     execution_mode: str = "SUGGESTION"
     confidence_threshold: float = 0.90
+
+
+class PatternCreateRequest(BaseModel):
+    pattern_id: Optional[str] = None
+    pattern_name: str
+    pattern_type: str = "CUSTOM"
+    pattern_rule: Dict[str, Any] = Field(default_factory=dict)
+    status: str = "DRAFT"
+    execution_mode: str = "SUGGESTION"
+    confidence_threshold: float = 0.80
+    approved_by: str = "prototype_user"
+
+class PatternUpdateRequest(BaseModel):
+    pattern_name: Optional[str] = None
+    pattern_type: Optional[str] = None
+    pattern_rule: Optional[Dict[str, Any]] = None
+    status: Optional[str] = None
+    execution_mode: Optional[str] = None
+    confidence_threshold: Optional[float] = None
+    approved_by: Optional[str] = None
+
+
+class WorkflowUpdateRequest(BaseModel):
+    workflow_status: Optional[str] = None
+    owner: Optional[str] = None
+    priority: Optional[str] = None
+    comment: Optional[str] = None
+    updated_by: str = "prototype_user"

@@ -13,6 +13,7 @@ class Settings:
     app_name: str = "Intelligent Recon Engine"
     app_version: str = "0.1.0"
     database_path: Path = DB_PATH
+    runtime_data_dir: Path = RUNTIME_DATA_DIR
     sample_data_dir: Path = SAMPLE_DATA_DIR
     psr_sample_path: Path = SAMPLE_DATA_DIR / "psr_10000_payments.txt"
     camt_sample_path: Path = SAMPLE_DATA_DIR / "camt_10000_payments.xml"

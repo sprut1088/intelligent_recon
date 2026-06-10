@@ -1,8 +1,9 @@
 const API_BASE = import.meta.env.VITE_API_BASE_URL || 'http://127.0.0.1:8090';
 
 async function request(path, options = {}) {
+  const isFormData = options.body instanceof FormData;
   const response = await fetch(`${API_BASE}${path}`, {
-    headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
+    headers: isFormData ? (options.headers || {}) : { 'Content-Type': 'application/json', ...(options.headers || {}) },
     ...options,
   });
   if (!response.ok) {
@@ -49,10 +50,33 @@ function mapSummary(payload) {
 
 export const api = {
   health: () => request('/health'),
+
+  workspaceOverview: () => request('/api/workspace/overview'),
+  workspaceSubmissions: () => request('/api/workspace/submissions'),
+  dataPreview: () => request('/api/workspace/data-preview?limit=12'),
+  fieldPredictions: () => request('/api/workspace/match-field-predictions'),
+  noCodeRules: () => request('/api/workspace/no-code-rules'),
+  workflowRules: () => request('/api/workspace/workflow-rules'),
+  dashboardModel: () => request('/api/workspace/dashboard'),
+  createSnapshot: () => request('/api/workspace/snapshot', { method: 'POST' }),
+  exportResultsUrl: () => `${API_BASE}/api/workspace/export/reconciliation-results`,
   counts: async () => {
     const s = await request('/api/reconcile/summary');
     return { psr_transactions: s.psr_count || 0, camt_transactions: s.camt_count || 0, reconciliation_results: s.total_cases || 0 };
   },
+
+  batches: async () => request('/api/files/batches?limit=50'),
+  uploadFile: (file, fileType, batchId = '', batchName = '') => {
+    const form = new FormData();
+    form.append('file', file);
+    form.append('file_type', fileType);
+    if (batchId) form.append('batch_id', batchId);
+    if (batchName) form.append('batch_name', batchName);
+    return request('/api/files/upload', { method: 'POST', body: form });
+  },
+  validateBatch: (batchId) => request(`/api/data-quality/batches/${batchId}/validate`, { method: 'POST' }),
+  quality: (batchId) => request(`/api/data-quality/batches/${batchId}`),
+  runBatch: (batchId) => request(`/api/files/batches/${batchId}/run`, { method: 'POST', body: JSON.stringify({ reset: true }) }),
   loadSampleData: () => request('/api/load-sample', { method: 'POST', body: JSON.stringify({ reset: true }) }),
   runRecon: () => request('/api/reconcile/run', { method: 'POST' }),
   summary: async () => mapSummary(await request('/api/reconcile/summary')),
@@ -62,7 +86,8 @@ export const api = {
     return mapCaseList(await request(`/api/reconcile/cases?${qs.toString()}`));
   },
   exceptions: async ({ limit = 100, offset = 0 } = {}) =>
-    mapCaseList(await request(`/api/reconcile/cases?exception_only=true&limit=${limit}&offset=${offset}`)),
+    mapCaseList(await request(`/api/exceptions/workflow?limit=${limit}&offset=${offset}`)),
+  updateWorkflow: (caseId, payload) => request(`/api/exceptions/${caseId}/workflow`, { method: 'PATCH', body: JSON.stringify(payload) }),
   resolveException: (caseId, payload) => request(`/api/reconcile/cases/${caseId}/resolve`, {
     method: 'POST',
     body: JSON.stringify({
@@ -78,6 +103,11 @@ export const api = {
     }),
   }),
   patterns: async () => (await request('/api/patterns')).items || [],
+  createPattern: (payload) => request('/api/patterns', { method: 'POST', body: JSON.stringify(payload) }),
+
+  updatePattern: (patternId, payload) => request(`/api/patterns/${patternId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
+  activatePattern: (patternId) => request(`/api/patterns/${patternId}/activate`, { method: 'POST' }),
+  deactivatePattern: (patternId) => request(`/api/patterns/${patternId}/deactivate`, { method: 'POST' }),
   candidates: async () => (await request('/api/pattern-candidates')).items || [],
   discover: () => request('/api/learning/run', { method: 'POST' }),
   approveCandidate: (id) => request(`/api/pattern-candidates/${id}/approve`, {

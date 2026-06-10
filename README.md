@@ -105,3 +105,9 @@ POST /api/pattern-candidates/{candidate_id}/approve
 ## Build note
 
 This is intentionally not a black-box AI implementation. The base matching engine is deterministic and explainable. The learning component analyses repeated manual resolutions and proposes governed patterns that must be approved before they become active.
+
+## Duco-comparable UI refresh
+
+This version adds an operations-studio UI that covers control room, submissions, data prep, match-field prediction, no-code rules, multi-pass pattern registry, results workbench, exception workflow, dashboards, learning lab, copilot and governance.
+
+Backend ports remain `8090`; frontend ports remain `8181`. See `DUCO_REPLACEMENT_UI_NOTES.md` for the detailed change summary.
