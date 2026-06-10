@@ -104,7 +104,7 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
     <section className="screen">
       <div className="hero-card">
         <div className="hero-copy">
-          <div className="eyebrow">Intelligent Recon Engine · Duco-replacement prototype</div>
+          <div className="eyebrow">Intelligent Recon Engine · Prototype</div>
           <h1>{process.name || 'Cash Account Real-Time Reconciliation'}</h1>
           <p>
             A distinct operations cockpit covering intake, data prep, no-code matching, exception workflow, dashboards,
@@ -144,7 +144,7 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
         </Panel>
       </div>
 
-      <Panel title="Capability matrix" subtitle="Coverage mapped to the observed Duco-style operational flow, presented in our own product pattern">
+      <Panel title="Capability matrix" subtitle="End-to-end operational coverage from ingestion to exception resolution and pattern learning">
         <div className="capability-grid">
           {caps.map((c) => (
             <div className="capability" key={c.name}>
@@ -524,9 +524,9 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults }) {
           <h1>Matched, proposed and unresolved records</h1>
           <p>Drill into match evidence, failed fields, confidence and next-best action.</p>
         </div>
-        <div className="toolbar">
+        <div className="toolbar" style={{ flexWrap: 'nowrap' }}>
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search PSR, CAMT, invoice, party" />
-          <label className="toggle"><input type="checkbox" checked={exceptionOnly} onChange={(e) => setExceptionOnly(e.target.checked)} /> Exceptions only</label>
+          <label className="toggle" style={{ whiteSpace: 'nowrap' }}><input type="checkbox" checked={exceptionOnly} onChange={(e) => setExceptionOnly(e.target.checked)} /> Exceptions only</label>
           <button className="btn secondary" onClick={runSearch}>Apply</button>
         </div>
       </div>
@@ -984,14 +984,14 @@ export default function App() {
         <div className="sidebar-card">
           <span>Client demo mode</span>
           <strong>PSR ↔ CAMT.053</strong>
-          <p>Distinct UI, Duco-comparable operational flow.</p>
+          <p>Intelligent reconciliation with explainability and learning.</p>
         </div>
       </aside>
       <main>
         <header className="topbar">
           <div>
             <strong>Cash Account Reconciliation</strong>
-            <span>Solution 2 · real-time reconciliation, exception automation and learning</span>
+            <span>Real-time reconciliation · exception automation · learning</span>
           </div>
           <div className="topbar-actions">
             {loading && <span className="loading">Working…</span>}
