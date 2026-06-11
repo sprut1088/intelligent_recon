@@ -91,6 +91,7 @@ PSR_AMOUNT_DIVISOR=100
 GET  /health
 POST /api/load-sample
 POST /api/reconcile/run
+POST /api/reconcile/ai-triage
 GET  /api/reconcile/summary
 GET  /api/reconcile/cases
 GET  /api/reconcile/cases/{case_id}
