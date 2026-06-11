@@ -464,7 +464,7 @@ function ResultTable({ rows, onSelect }) {
               <td>{r.counterparty || '-'}</td>
               <td className={Number(r.variance) === 0 ? 'positive' : 'negative'}>{money(r.variance)}</td>
               <td><Tag tone={classForStatus(r.reconciliation_status)}>{AI_STATUS_LABELS[r.reconciliation_status] || r.reconciliation_status}</Tag></td>
-              <td>{r.rule_applied || '-'}}</td>
+              <td>{r.rule_applied || '-'}</td>
               <td><div className="mini-score"><span style={{ width: `${r.match_confidence || 0}%` }} />{r.match_confidence}%</div></td>
             </tr>
           ))}
@@ -546,9 +546,18 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAi
 }
 
 function ManualResolveModal({ exceptionItem, onClose, onSubmit }) {
-  const [reason, setReason] = useState('REMITTANCE_FORMAT_MISMATCH');
+  const suggestions = exceptionItem?.suggestions || [];
+  const aiSuggestion = suggestions.find(s => s.action === 'CONFIRM_AI_MATCH' || s.action === 'ROUTE_TO_ANALYST');
+  const isAiPreFilled = !!aiSuggestion;
+
+  const defaultReason = aiSuggestion ? 'AI_ASSISTED_MATCH' : 'REMITTANCE_FORMAT_MISMATCH';
+  const defaultComment = aiSuggestion
+    ? `AI triage suggested this match (confidence ${Math.round((aiSuggestion.confidence || 0) * 100)}%). ${exceptionItem?.explanation || ''} Analyst reviewed and confirmed.`
+    : 'Analyst confirmed this case after checking invoice, amount and counterparty evidence.';
+
+  const [reason, setReason] = useState(defaultReason);
   const [resolutionType, setResolutionType] = useState('MATCHED_MANUAL');
-  const [comment, setComment] = useState('Analyst confirmed this case after checking invoice, amount and counterparty evidence.');
+  const [comment, setComment] = useState(defaultComment);
   const [fields, setFields] = useState(['invoice_suffix', 'amount', 'counterparty']);
   if (!exceptionItem) return null;
   const fieldOptions = ['reference', 'invoice', 'invoice_suffix', 'amount', 'currency', 'counterparty', 'booking_date', 'remittance_text'];
@@ -557,6 +566,9 @@ function ManualResolveModal({ exceptionItem, onClose, onSubmit }) {
     <div className="modal-backdrop">
       <div className="modal large">
         <div className="eyebrow">Human-in-loop learning</div>
+        {isAiPreFilled && (
+          <div className="eyebrow" style={{ color: '#7c3aed', marginBottom: '8px' }}>✦ AI pre-filled · review before confirming</div>
+        )}
         <h2>Resolve exception and record learning signal</h2>
         <p>Case {exceptionItem.result_id}. The engine records trusted fields, selected outcome and reason code as governed learning data.</p>
         <div className="grid two no-gap">
@@ -570,6 +582,7 @@ function ManualResolveModal({ exceptionItem, onClose, onSubmit }) {
             </select>
             <label>Reason code</label>
             <select value={reason} onChange={(e) => setReason(e.target.value)}>
+              {isAiPreFilled && <option value="AI_ASSISTED_MATCH">AI-assisted match (analyst confirmed)</option>}
               <option value="REMITTANCE_FORMAT_MISMATCH">Remittance format mismatch</option>
               <option value="COUNTERPARTY_ALIAS">Counterparty alias issue</option>
               <option value="BATCH_SETTLEMENT">Batch settlement grouping</option>
