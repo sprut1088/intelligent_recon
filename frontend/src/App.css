@@ -71,6 +71,8 @@ p { margin: 0; color: var(--muted); line-height: 1.55; }
 .tag.danger { background: var(--danger-soft); color: #9f202a; border-color: #fac2c7; }
 .tag.info { background: var(--info-soft); color: #185fa9; border-color: #bfe0ff; }
 .tag.neutral { background: #eef2f7; color: #475569; border-color: #dbe4ee; }
+.tag.ai       { background: #ede9fe; color: #5b21b6; border-color: #c4b5fd; }
+.tag.ai-maybe { background: #f5f3ff; color: #7c3aed; border-color: #ddd6fe; }
 .metric-grid { display: grid; gap: 14px; margin-bottom: 20px; }
 .metric-grid.six { grid-template-columns: repeat(6, minmax(0, 1fr)); }
 .metric-grid.five { grid-template-columns: repeat(5, minmax(0, 1fr)); }
