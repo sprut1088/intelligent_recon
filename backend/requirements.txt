@@ -2,3 +2,8 @@ fastapi>=0.115
 uvicorn[standard]>=0.30
 pydantic>=2.7
 python-multipart>=0.0.9
+rapidfuzz>=3.9
+sentence-transformers>=3.0
+openai>=1.30
+python-dotenv>=1.0
+python-certifi-win32==1.6.1

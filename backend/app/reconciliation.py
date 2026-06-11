@@ -1,7 +1,7 @@
 from __future__ import annotations
 from dataclasses import dataclass, asdict
 from datetime import date
-from difflib import SequenceMatcher
+from rapidfuzz import fuzz as _rfuzz
 from typing import Dict, List, Optional, Sequence, Tuple
 import json
 from .config import settings
@@ -22,7 +22,13 @@ def amount_variance(left: Optional[float], right: Optional[float]) -> Optional[f
     return round(float(left) - float(right), 2)
 
 def similarity(left: str, right: str) -> float:
-    return SequenceMatcher(None, (left or "").upper(), (right or "").upper()).ratio()
+    """Token-set aware similarity. Handles legal entity suffixes (Ltd, plc, Group).
+    Returns 0.0–1.0. Uses max of token_set_ratio and WRatio."""
+    a = (left or "").upper()
+    b = (right or "").upper()
+    ts = _rfuzz.token_set_ratio(a, b) / 100.0
+    wr = _rfuzz.WRatio(a, b) / 100.0
+    return max(ts, wr)
 
 def aging_bucket(days: int) -> str:
     if days <= 1: return "0-1 Days"

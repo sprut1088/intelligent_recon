@@ -23,6 +23,8 @@ const pct = (value) => `${Number(value || 0).toFixed(Number(value || 0) % 1 === 
 
 function classForStatus(value = '') {
   const v = String(value).toLowerCase();
+  if (v.startsWith('ai-assisted')) return 'ai';
+  if (v.startsWith('ai -') || v.startsWith('ai –')) return 'ai-maybe';
   if (v.includes('matched') || v.includes('active') || v.includes('processed') || v.includes('ok') || v.includes('complete')) return 'success';
   if (v.includes('variance') || v.includes('ledger') || v.includes('warning') || v.includes('review') || v.includes('candidate')) return 'warning';
   if (v.includes('transit') || v.includes('new') || v.includes('manual')) return 'info';
@@ -440,6 +442,11 @@ function MatchingStudio({ patterns, rules, onTunePattern, onTogglePattern, onCre
   );
 }
 
+const AI_STATUS_LABELS = {
+  'AI-Assisted Suggested Match': 'AI · Suggested',
+  'AI - Analyst Adjudication Required': 'AI · Review',
+};
+
 function ResultTable({ rows, onSelect }) {
   return (
     <div className="table-wrap results-table">
@@ -456,7 +463,7 @@ function ResultTable({ rows, onSelect }) {
               <td>{r.reference || '-'}</td>
               <td>{r.counterparty || '-'}</td>
               <td className={Number(r.variance) === 0 ? 'positive' : 'negative'}>{money(r.variance)}</td>
-              <td><Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag></td>
+              <td><Tag tone={classForStatus(r.reconciliation_status)}>{AI_STATUS_LABELS[r.reconciliation_status] || r.reconciliation_status}</Tag></td>
               <td>{r.rule_applied || '-'}</td>
               <td><div className="mini-score"><span style={{ width: `${r.match_confidence || 0}%` }} />{r.match_confidence}%</div></td>
             </tr>
@@ -512,7 +519,7 @@ function EvidenceDrawer({ selected, onClose, onResolve }) {
   );
 }
 
-function ResultsWorkbench({ results, selected, setSelected, refreshResults }) {
+function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAiTriage, loading }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const runSearch = async () => refreshResults({ search, exceptionOnly });
@@ -528,6 +535,8 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults }) {
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search PSR, CAMT, invoice, party" />
           <label className="toggle" style={{ whiteSpace: 'nowrap' }}><input type="checkbox" checked={exceptionOnly} onChange={(e) => setExceptionOnly(e.target.checked)} /> Exceptions only</label>
           <button className="btn secondary" onClick={runSearch}>Apply</button>
+          <span style={{ borderLeft: '1px solid var(--border)', height: '1.5rem', alignSelf: 'center' }} />
+          <button className="btn primary" disabled={loading} onClick={onAiTriage}>Run AI triage</button>
         </div>
       </div>
       <ResultTable rows={results.items || []} onSelect={setSelected} />
@@ -537,9 +546,18 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults }) {
 }
 
 function ManualResolveModal({ exceptionItem, onClose, onSubmit }) {
-  const [reason, setReason] = useState('REMITTANCE_FORMAT_MISMATCH');
+  const suggestions = exceptionItem?.suggestions || [];
+  const aiSuggestion = suggestions.find(s => s.action === 'CONFIRM_AI_MATCH' || s.action === 'ROUTE_TO_ANALYST');
+  const isAiPreFilled = !!aiSuggestion;
+
+  const defaultReason = aiSuggestion ? 'AI_ASSISTED_MATCH' : 'REMITTANCE_FORMAT_MISMATCH';
+  const defaultComment = aiSuggestion
+    ? `AI triage suggested this match (confidence ${Math.round((aiSuggestion.confidence || 0) * 100)}%). ${exceptionItem?.explanation || ''} Analyst reviewed and confirmed.`
+    : 'Analyst confirmed this case after checking invoice, amount and counterparty evidence.';
+
+  const [reason, setReason] = useState(defaultReason);
   const [resolutionType, setResolutionType] = useState('MATCHED_MANUAL');
-  const [comment, setComment] = useState('Analyst confirmed this case after checking invoice, amount and counterparty evidence.');
+  const [comment, setComment] = useState(defaultComment);
   const [fields, setFields] = useState(['invoice_suffix', 'amount', 'counterparty']);
   if (!exceptionItem) return null;
   const fieldOptions = ['reference', 'invoice', 'invoice_suffix', 'amount', 'currency', 'counterparty', 'booking_date', 'remittance_text'];
@@ -548,6 +566,9 @@ function ManualResolveModal({ exceptionItem, onClose, onSubmit }) {
     <div className="modal-backdrop">
       <div className="modal large">
         <div className="eyebrow">Human-in-loop learning</div>
+        {isAiPreFilled && (
+          <div className="eyebrow" style={{ color: '#7c3aed', marginBottom: '8px' }}>✦ AI pre-filled · review before confirming</div>
+        )}
         <h2>Resolve exception and record learning signal</h2>
         <p>Case {exceptionItem.result_id}. The engine records trusted fields, selected outcome and reason code as governed learning data.</p>
         <div className="grid two no-gap">
@@ -561,6 +582,7 @@ function ManualResolveModal({ exceptionItem, onClose, onSubmit }) {
             </select>
             <label>Reason code</label>
             <select value={reason} onChange={(e) => setReason(e.target.value)}>
+              {isAiPreFilled && <option value="AI_ASSISTED_MATCH">AI-assisted match (analyst confirmed)</option>}
               <option value="REMITTANCE_FORMAT_MISMATCH">Remittance format mismatch</option>
               <option value="COUNTERPARTY_ALIAS">Counterparty alias issue</option>
               <option value="BATCH_SETTLEMENT">Batch settlement grouping</option>
@@ -908,6 +930,14 @@ export default function App() {
     await safe(() => api.runBatch(batchId), 'Uploaded batch reconciled');
   };
 
+  const runAiTriage = async () => {
+    let result;
+    await safe(async () => {
+      result = await api.aiTriage();
+      await refreshResults({ search: '', exceptionOnly: false });
+    }, `AI triage complete — ${result?.clear_count ?? 0} suggestions added`);
+  };
+
   const tunePattern = async (patternId, draft) => {
     await safe(() => api.updatePattern(patternId, {
       execution_mode: draft.execution_mode,
@@ -959,7 +989,7 @@ export default function App() {
     if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} onUpload={uploadReconFile} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
-    if (active === 'results') return <ResultsWorkbench results={results} selected={selected} setSelected={setSelected} refreshResults={refreshResults} />;
+    if (active === 'results') return <ResultsWorkbench results={results} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} loading={loading} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;
