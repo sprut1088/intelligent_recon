@@ -12,7 +12,7 @@ from .quality import get_quality_report, validate_batch
 from .workflow import get_exception_workflow, list_exception_workflow, mark_workflow_resolved, update_exception_workflow
 from .workspace import create_snapshot, export_reconciliation_results, get_dashboard_model, get_data_preview, get_no_code_rules, get_workspace_overview, get_workflow_rules, list_submissions, predict_match_fields
 from .schemas import CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
-from .ai_triage import run_tier2b
+from .ai_triage import run_tier2b, run_tier2c
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -167,11 +167,14 @@ def run_ai_triage() -> dict:
 
         conn.commit()
 
+    llm_decisions = run_tier2c(maybe)
+
     return {
         "status": "ok",
         "inserted_count": inserted,
         "clear_count": len(clear),
         "maybe_count": len(maybe),
+        "llm_adjudicated_count": len(llm_decisions),
         "skipped_count": len(candidates) - len(clear) - len(maybe),
     }
 

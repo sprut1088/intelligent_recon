@@ -177,3 +177,139 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
             })
 
     return candidates
+
+
+def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
+    """
+    Tier 2c: LLM adjudication for 'maybe' zone records via OpenRouter.
+
+    For each unique PSR in maybe_candidates, sends one LLM call with
+    that PSR + its Top 5 CAMT candidates. Updates recon_cases in-place.
+
+    Returns list of LLM decision dicts. Silently skips if OPENROUTER_API_KEY
+    is not set.
+    """
+    import os
+    import json
+    import logging
+
+    logger = logging.getLogger(__name__)
+
+    api_key = os.getenv("OPENROUTER_API_KEY")
+    if not api_key:
+        logger.warning("OPENROUTER_API_KEY not set — Tier 2c LLM adjudication skipped.")
+        return []
+
+    from openai import OpenAI
+    from collections import defaultdict
+
+    client = OpenAI(
+        api_key=api_key,
+        base_url="https://openrouter.ai/api/v1",
+    )
+
+    # Group candidates by PSR ID, keep Top 5 per PSR sorted by score descending
+    by_psr: Dict[str, List[Dict]] = defaultdict(list)
+    for c in maybe_candidates:
+        by_psr[c["psr_id"]].append(c)
+    for psr_id in by_psr:
+        by_psr[psr_id] = sorted(by_psr[psr_id], key=lambda x: x["cosine_score"], reverse=True)[:5]
+
+    # Fetch full PSR and CAMT rows for the prompt
+    with get_conn() as conn:
+        psr_map = {
+            r["id"]: r for r in rows_to_dicts(
+                conn.execute("SELECT * FROM psr_transactions").fetchall()
+            )
+        }
+        camt_map = {
+            r["camt_id"]: r for r in rows_to_dicts(
+                conn.execute("SELECT * FROM camt_transactions").fetchall()
+            )
+        }
+
+    decisions = []
+
+    for psr_id, top_candidates in by_psr.items():
+        psr = psr_map.get(psr_id)
+        if not psr:
+            continue
+
+        candidate_lines = []
+        for i, c in enumerate(top_candidates, 1):
+            camt = camt_map.get(c["camt_id"])
+            if not camt:
+                continue
+            candidate_lines.append(
+                f"  {i}. ID:{camt['camt_id']} | Dir:{camt.get('direction', '')} "
+                f"| Amt:{camt.get('amount', '')} {camt.get('currency', '')} "
+                f"| Date:{camt.get('booking_date', '')} "
+                f"| Party:{camt.get('counterparty', '')} "
+                f"| Remittance:{camt.get('remittance', '')}"
+            )
+
+        if not candidate_lines:
+            continue
+
+        prompt = (
+            "You are a cash reconciliation analyst. One internal PSR payment record is unmatched.\n"
+            "Review the candidate bank (CAMT) entries below and identify the best match.\n\n"
+            f"PSR:\n"
+            f"  ID: {psr['id']} | Direction: {psr.get('direction', '')} "
+            f"| Amount: {psr.get('amount', '')} {psr.get('currency', '')}\n"
+            f"  Date: {psr.get('execution_date', '')} | Reference: {psr.get('reference', '')}\n"
+            f"  Invoice: {psr.get('invoice', '')} | Counterparty: {psr.get('counterparty', '')}\n\n"
+            "CAMT Candidates (pre-filtered by amount/date/direction):\n"
+            + "\n".join(candidate_lines)
+            + "\n\nReturn valid JSON matching this schema exactly:\n"
+            '{\n'
+            '  "psr_id": "string",\n'
+            '  "matched_camt_id": "string or null",\n'
+            '  "confidence_pct": "number between 0 and 100",\n'
+            '  "reason": "one sentence explaining the match or why no match exists",\n'
+            '  "suggested_action": "CONFIRM_AI_MATCH or ROUTE_TO_ANALYST or NO_MATCH"\n'
+            "}\n"
+            "If no candidate is a credible match, set matched_camt_id to null and "
+            "suggested_action to NO_MATCH."
+        )
+
+        try:
+            response = client.chat.completions.create(
+                model="openai/gpt-4o-mini",
+                messages=[{"role": "user", "content": prompt}],
+                response_format={"type": "json_object"},
+                temperature=0,
+                max_tokens=300,
+            )
+            result = json.loads(response.choices[0].message.content)
+        except Exception as exc:
+            logger.error("Tier 2c LLM call failed for PSR %s: %s", psr_id, exc)
+            continue
+
+        decisions.append(result)
+
+        # Update the recon_case in DB
+        if result.get("suggested_action") == "NO_MATCH":
+            new_status = "Uncleared / In-Transit Payment"
+            rule = "TIER2C_NO_MATCH"
+        else:
+            new_status = "AI-Assisted Suggested Match"
+            rule = "TIER2C_LLM"
+
+        conf = int(result.get("confidence_pct") or 0)
+        reason_text = result.get("reason", "")
+        matched_camt = result.get("matched_camt_id")
+
+        with get_conn() as conn:
+            conn.execute(
+                """UPDATE recon_cases
+                   SET reconciliation_status=?, match_confidence=?, rule_applied=?,
+                       explanation=?, camt_id=COALESCE(?, camt_id),
+                       updated_at=CURRENT_TIMESTAMP
+                   WHERE psr_id=?
+                     AND reconciliation_status='AI - Analyst Adjudication Required'""",
+                (new_status, conf, rule, reason_text, matched_camt, psr_id)
+            )
+            conn.commit()
+
+    return decisions
