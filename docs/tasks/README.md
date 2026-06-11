@@ -34,7 +34,7 @@ TASK-01  rapidfuzz P4 upgrade
 | [TASK-02](TASK-02-ai-triage-tier2b-embeddings.md) | Create `ai_triage.py` — Tier 2b embeddings | Backend | TASK-01 | ✅ Complete |
 | [TASK-03](TASK-03-ai-triage-endpoint.md) | Add `POST /api/reconcile/ai-triage` endpoint | Backend | TASK-02 | ✅ Complete |
 | [TASK-04](TASK-04-ai-triage-tier2c-llm.md) | Tier 2c LLM adjudication | Backend | TASK-02, TASK-03 | ✅ Complete |
-| [TASK-05](TASK-05-frontend-ai-triage-button.md) | Frontend: API client + Run AI triage button | Frontend | TASK-03 | 🔲 Not started |
+| [TASK-05](TASK-05-frontend-ai-triage-button.md) | Frontend: API client + Run AI triage button | Frontend | TASK-03 | ✅ Complete |
 | [TASK-06](TASK-06-frontend-ai-status-badge.md) | Frontend: AI status badge in ResultTable | Frontend | TASK-03 | 🔲 Not started |
 | [TASK-07](TASK-07-frontend-resolve-modal-ai-prefill.md) | Frontend: pre-fill Resolve modal from AI suggestion | Frontend | TASK-05, TASK-06 | 🔲 Not started |
 

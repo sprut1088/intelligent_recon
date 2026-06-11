@@ -512,7 +512,7 @@ function EvidenceDrawer({ selected, onClose, onResolve }) {
   );
 }
 
-function ResultsWorkbench({ results, selected, setSelected, refreshResults }) {
+function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAiTriage, loading }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const runSearch = async () => refreshResults({ search, exceptionOnly });
@@ -528,6 +528,8 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults }) {
           <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search PSR, CAMT, invoice, party" />
           <label className="toggle" style={{ whiteSpace: 'nowrap' }}><input type="checkbox" checked={exceptionOnly} onChange={(e) => setExceptionOnly(e.target.checked)} /> Exceptions only</label>
           <button className="btn secondary" onClick={runSearch}>Apply</button>
+          <span style={{ borderLeft: '1px solid var(--border)', height: '1.5rem', alignSelf: 'center' }} />
+          <button className="btn primary" disabled={loading} onClick={onAiTriage}>Run AI triage</button>
         </div>
       </div>
       <ResultTable rows={results.items || []} onSelect={setSelected} />
@@ -908,6 +910,14 @@ export default function App() {
     await safe(() => api.runBatch(batchId), 'Uploaded batch reconciled');
   };
 
+  const runAiTriage = async () => {
+    let result;
+    await safe(async () => {
+      result = await api.aiTriage();
+      await refreshResults({ search: '', exceptionOnly: false });
+    }, `AI triage complete — ${result?.clear_count ?? 0} suggestions added`);
+  };
+
   const tunePattern = async (patternId, draft) => {
     await safe(() => api.updatePattern(patternId, {
       execution_mode: draft.execution_mode,
@@ -959,7 +969,7 @@ export default function App() {
     if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} onUpload={uploadReconFile} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
-    if (active === 'results') return <ResultsWorkbench results={results} selected={selected} setSelected={setSelected} refreshResults={refreshResults} />;
+    if (active === 'results') return <ResultsWorkbench results={results} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} loading={loading} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;

@@ -79,6 +79,7 @@ export const api = {
   runBatch: (batchId) => request(`/api/files/batches/${batchId}/run`, { method: 'POST', body: JSON.stringify({ reset: true }) }),
   loadSampleData: () => request('/api/load-sample', { method: 'POST', body: JSON.stringify({ reset: true }) }),
   runRecon: () => request('/api/reconcile/run', { method: 'POST' }),
+  aiTriage: () => request('/api/reconcile/ai-triage', { method: 'POST' }),
   summary: async () => mapSummary(await request('/api/reconcile/summary')),
   results: async ({ limit = 100, offset = 0, exceptionOnly = false, search = '' } = {}) => {
     const qs = new URLSearchParams({ limit, offset, exception_only: exceptionOnly });
