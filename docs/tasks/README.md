@@ -30,7 +30,7 @@ TASK-01  rapidfuzz P4 upgrade
 
 | Task | Title | Type | Depends on | Status |
 |---|---|---|---|---|
-| [TASK-01](TASK-01-rapidfuzz-p4-upgrade.md) | Upgrade P4 fuzzy matching to rapidfuzz | Backend | — | 🔲 Not started |
+| [TASK-01](TASK-01-rapidfuzz-p4-upgrade.md) | Upgrade P4 fuzzy matching to rapidfuzz | Backend | — | ✅ Complete |
 | [TASK-02](TASK-02-ai-triage-tier2b-embeddings.md) | Create `ai_triage.py` — Tier 2b embeddings | Backend | TASK-01 | 🔲 Not started |
 | [TASK-03](TASK-03-ai-triage-endpoint.md) | Add `POST /api/reconcile/ai-triage` endpoint | Backend | TASK-02 | 🔲 Not started |
 | [TASK-04](TASK-04-ai-triage-tier2c-llm.md) | Tier 2c LLM adjudication | Backend | TASK-02, TASK-03 | 🔲 Not started |
