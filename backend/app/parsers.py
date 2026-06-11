@@ -89,7 +89,7 @@ def parse_psr_file(path: Path, amount_divisor: Optional[float] = None) -> tuple[
             # The client brief provides a fixed-width layout, but the uploaded 10k
             # sample uses wider reference/invoice fields and variable-length IDs
             # once the sequence reaches TX-2026-10000. Prefer semantic parsing.
-            semantic = re.match(r"^20(?P<tid>TX-\d{4}-\d+?)(?P<dt>\d{8})(?P<rest>PMT-REF.*)$", line)
+            semantic = re.match(r"^20(?P<tid>TX-\d{4}-\d+?)(?P<dt>\d{8})(?P<rest>PMT-.*)$", line)
             if semantic:
                 txn_id = semantic.group("tid").strip()
                 execution_date = parse_yyyymmdd(semantic.group("dt"))

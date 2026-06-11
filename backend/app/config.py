@@ -1,6 +1,9 @@
 from dataclasses import dataclass
 from pathlib import Path
 import os
+from dotenv import load_dotenv
+
+load_dotenv(Path(__file__).resolve().parents[1] / '.env')
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 SAMPLE_DATA_DIR = ROOT_DIR / "sample_data"

@@ -100,8 +100,11 @@ def run_ai_triage() -> dict:
 
     inserted = 0
     with get_conn() as conn:
-        # Remove previous AI suggestions so reruns are idempotent
-        conn.execute("DELETE FROM recon_cases WHERE reconciliation_status LIKE 'AI%'")
+        # Remove previous AI suggestions so reruns are idempotent.
+        # Use case_id prefix (always "AI-…") not reconciliation_status, which
+        # Tier 2c may have overwritten to "Uncleared / In-Transit Payment" for
+        # NO_MATCH decisions — those ghost rows must be cleaned up too.
+        conn.execute("DELETE FROM recon_cases WHERE case_id LIKE 'AI%'")
 
         for c in clear:
             case_id = f"AI-{c['psr_id']}-{c['camt_id']}"

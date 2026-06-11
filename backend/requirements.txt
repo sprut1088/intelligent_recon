@@ -5,3 +5,4 @@ python-multipart>=0.0.9
 rapidfuzz>=3.9
 sentence-transformers>=3.0
 openai>=1.30
+python-dotenv>=1.0

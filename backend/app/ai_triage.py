@@ -19,6 +19,8 @@ def _get_model():
     global _model
     if _model is None:
         from sentence_transformers import SentenceTransformer
+        import os
+        os.environ.setdefault("HF_HUB_DISABLE_SSL_VERIFICATION", "1")
         _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
 
@@ -117,11 +119,15 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
                 f"SELECT * FROM psr_transactions WHERE id IN ({placeholders})", ids
             ).fetchall())
 
-        # Pull all CAMT entries not already linked to a matched case
+        # Pull all CAMT entries not already linked to a matched PSR-CAMT case.
+        # Exclude only rows where BOTH psr_id and camt_id are present — bank-only
+        # items (psr_id IS NULL) must remain available as AI triage candidates.
         matched_camt_ids = {
             r["camt_id"] for r in rows_to_dicts(
                 conn.execute(
-                    "SELECT camt_id FROM recon_cases WHERE camt_id IS NOT NULL AND camt_id != ''"
+                    """SELECT camt_id FROM recon_cases
+                       WHERE camt_id IS NOT NULL AND camt_id != ''
+                         AND psr_id  IS NOT NULL AND psr_id  != ''"""
                 ).fetchall()
             )
         }
