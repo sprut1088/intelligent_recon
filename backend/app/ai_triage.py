@@ -1,15 +1,19 @@
 """
 ai_triage.py — Pass 2 AI residual triage.
 
-Tier 2b: deterministic pre-filter + sentence-transformer embedding similarity.
+Tier 2b: deterministic pre-filter + embedding similarity (local SentenceTransformer
+or OpenRouter API, toggled via EMBEDDING_PROVIDER env var).
 Returns up to Top 5 candidate CAMT matches per unmatched PSR.
 Tier 2c (LLM adjudication) is implemented in a separate function in this module.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+import logging
+from typing import Any, Dict, List, Optional
 from .config import settings
 from .db import get_conn, json_dumps, rows_to_dicts
+
+logger = logging.getLogger(__name__)
 
 # Lazy-load the model so import is fast and tests don't download the model
 _model = None
@@ -23,6 +27,56 @@ def _get_model():
         os.environ.setdefault("HF_HUB_DISABLE_SSL_VERIFICATION", "1")
         _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
+
+
+def _get_openrouter_embeddings(texts: List[str]) -> Any:
+    """
+    Fetch embeddings from OpenRouter in a single batch call.
+    Returns an L2-normalised float32 numpy array of shape (len(texts), dim),
+    so cosine similarity = dot product — identical contract to the local path.
+    """
+    import numpy as np
+    from openai import OpenAI
+
+    api_key = _openrouter_api_key()
+    client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+    response = client.embeddings.create(
+        model=settings.embedding_model_openrouter,
+        input=texts,
+        encoding_format="float",
+    )
+    # response.data is ordered by index
+    vecs = np.array([item.embedding for item in response.data], dtype=np.float32)
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    return vecs / norms
+
+
+def _openrouter_api_key() -> str:
+    import os
+    key = os.getenv("OPENROUTER_API_KEY", "")
+    return key
+
+
+def _encode(texts: List[str]) -> Any:
+    """
+    Encode texts to normalised embedding vectors.
+
+    Dispatches based on EMBEDDING_PROVIDER setting:
+      "openrouter" + OPENROUTER_API_KEY set  → OpenRouter batch API call
+      "openrouter" + key missing             → warning, falls back to local
+      "local" (default)                      → local SentenceTransformer
+    """
+    if settings.embedding_provider == "openrouter":
+        if _openrouter_api_key():
+            logger.debug("Embedding via OpenRouter (%s)", settings.embedding_model_openrouter)
+            return _get_openrouter_embeddings(texts)
+        logger.warning(
+            "EMBEDDING_PROVIDER=openrouter but OPENROUTER_API_KEY is not set "
+            "— falling back to local SentenceTransformer."
+        )
+    logger.debug("Embedding via local SentenceTransformer (all-MiniLM-L6-v2)")
+    return _get_model().encode(texts, normalize_embeddings=True)
 
 
 def _psr_text(row: Dict) -> str:
@@ -137,7 +191,6 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
     if not psr_rows or not unmatched_camt:
         return []
 
-    model = _get_model()
     candidates = []
 
     for psr in psr_rows:
@@ -154,7 +207,7 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
             continue
 
         all_texts = [psr_txt] + camt_texts
-        embeddings = model.encode(all_texts, normalize_embeddings=True)
+        embeddings = _encode(all_texts)
         psr_vec = embeddings[0]
         camt_vecs = embeddings[1:]
 
