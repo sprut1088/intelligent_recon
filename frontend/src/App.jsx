@@ -930,7 +930,14 @@ export default function App() {
     await safe(async () => {
       result = await api.aiTriage();
       await refreshResults({ search: '', exceptionOnly: false });
-    }, `AI triage complete — ${result?.clear_count ?? 0} suggestions added`);
+    }, (() => {
+      const suggested = (result?.clear_count ?? 0) + (result?.llm_adjudicated_count ?? 0);
+      const review = (result?.maybe_count ?? 0) - (result?.llm_adjudicated_count ?? 0);
+      const parts = [];
+      if (suggested) parts.push(`${suggested} suggested`);
+      if (review > 0) parts.push(`${review} awaiting review`);
+      return `AI triage complete — ${parts.length ? parts.join(', ') : '0 suggestions'}`;
+    })());
   };
 
   const tunePattern = async (patternId, draft) => {
