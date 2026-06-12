@@ -449,6 +449,12 @@ const varianceTone = (v) => {
   return 'negative';
 };
 
+function AiPill({ rule }) {
+  if (!rule || (!rule.startsWith('TIER2B') && !rule.startsWith('TIER2C'))) return null;
+  const isNoMatch = rule === 'TIER2C_NO_MATCH';
+  return <span className={`ai-pill ${isNoMatch ? 'muted' : 'accent'}`} title={rule}>AI</span>;
+}
+
 function SortTh({ col, label, sortCol, sortDir, onSort }) {
   const active = sortCol === col;
   return (
@@ -499,7 +505,7 @@ function ResultTable({ rows, onSelect }) {
         <tbody>
           {sorted.map((r) => (
             <tr key={r.result_id} onClick={() => onSelect?.(r)} className="clickable">
-              <td><strong>{r.result_id}</strong><br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
+              <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} /><br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
               <td>{money(r.internal_amount)}</td>
               <td>{money(r.bank_amount)}</td>
               <td>{r.reference || '-'}</td>
