@@ -442,82 +442,219 @@ function MatchingStudio({ patterns, rules, onTunePattern, onTogglePattern, onCre
   );
 }
 
+const varianceTone = (v) => {
+  if (v === null || v === undefined) return '';
+  if (v === 0) return 'positive';
+  if (Math.abs(v) <= MINOR_VARIANCE_TOLERANCE) return 'warning';
+  return 'negative';
+};
+
+function AiPill({ rule }) {
+  if (!rule || (!rule.startsWith('TIER2B') && !rule.startsWith('TIER2C'))) return null;
+  const isNoMatch = rule === 'TIER2C_NO_MATCH';
+  return <span className={`ai-pill ${isNoMatch ? 'muted' : 'accent'}`} title={rule}>AI</span>;
+}
+
+function SortTh({ col, label, sortCol, sortDir, onSort }) {
+  const active = sortCol === col;
+  return (
+    <th onClick={() => onSort(col)} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+      {label}{active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+    </th>
+  );
+}
+
 function ResultTable({ rows, onSelect }) {
+  const [sortCol, setSortCol] = useState(null);
+  const [sortDir, setSortDir] = useState('asc');
+
+  const onSort = (col) => {
+    if (sortCol === col) setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  };
+
+  const sorted = useMemo(() => {
+    if (!sortCol) return rows;
+    return [...rows].sort((a, b) => {
+      const av = a[sortCol] ?? '';
+      const bv = b[sortCol] ?? '';
+      if (av < bv) return sortDir === 'asc' ? -1 : 1;
+      if (av > bv) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [rows, sortCol, sortDir]);
+
+  const sp = { sortCol, sortDir, onSort };
+
   return (
     <div className="table-wrap results-table">
       <table>
         <thead>
-          <tr><th>Case</th><th>Internal</th><th>Bank</th><th>Reference</th><th>Counterparty</th><th>Variance</th><th>Status</th><th>Rule</th><th>Confidence</th></tr>
+          <tr>
+            <th>Case</th>
+            <th>Internal</th>
+            <th>Bank</th>
+            <th>Reference</th>
+            <th>Counterparty</th>
+            <SortTh col="variance" label="Variance" {...sp} />
+            <SortTh col="reconciliation_status" label="Status" {...sp} />
+            <SortTh col="rule_applied" label="Rule" {...sp} />
+            <SortTh col="match_confidence" label="Confidence" {...sp} />
+          </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
+          {sorted.map((r) => (
             <tr key={r.result_id} onClick={() => onSelect?.(r)} className="clickable">
-              <td><strong>{r.result_id}</strong><br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
+              <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} /><br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
               <td>{money(r.internal_amount)}</td>
               <td>{money(r.bank_amount)}</td>
               <td>{r.reference || '-'}</td>
               <td>{r.counterparty || '-'}</td>
-              <td className={Number(r.variance) === 0 ? 'positive' : 'negative'}>{money(r.variance)}</td>
+              <td className={varianceTone(r.variance)}>{r.variance != null ? money(r.variance) : '-'}</td>
               <td><Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag></td>
               <td>{r.rule_applied || '-'}</td>
               <td><div className="mini-score"><span style={{ width: `${r.match_confidence || 0}%` }} />{r.match_confidence}%</div></td>
             </tr>
           ))}
-          {!rows.length && <tr><td colSpan="9" className="empty">No records to display.</td></tr>}
+          {!sorted.length && <tr><td colSpan="9" className="empty">No records to display.</td></tr>}
         </tbody>
       </table>
     </div>
   );
 }
 
-function EvidenceDrawer({ selected, onClose, onResolve }) {
+function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex = -1, onPrev, onNext }) {
   if (!selected) return null;
   const score = selected.feature_snapshot?.score_breakdown || {};
   const components = score.components || [];
   const suggestions = selected.suggestions || [];
+  const aiSuggestion = suggestions.find(s => s.action === 'CONFIRM_AI_MATCH');
+  const total = rows.length;
   return (
-    <aside className="drawer">
-      <button className="btn ghost close" onClick={onClose}>Close</button>
-      <div className="eyebrow">Match evidence</div>
-      <h2>{selected.result_id}</h2>
-      <p>{selected.explanation}</p>
-      <dl className="kv drawer-kv">
-        <dt>Status</dt><dd><Tag tone={classForStatus(selected.reconciliation_status)}>{selected.reconciliation_status}</Tag></dd>
-        <dt>Rule applied</dt><dd>{selected.rule_applied || '-'}</dd>
-        <dt>Reason</dt><dd>{selected.reason_code || '-'}</dd>
-        <dt>Invoice</dt><dd>{selected.invoice || '-'}</dd>
-        <dt>Counterparty</dt><dd>{selected.counterparty || '-'}</dd>
-        <dt>Variance</dt><dd>{money(selected.variance)}</dd>
-      </dl>
-      <Panel title="Why this decision?" subtitle={score.decision_basis || 'Evidence breakdown captured by the engine.'} className="nested-panel">
-        <div className="score-large"><span style={{ width: `${selected.match_confidence || 0}%` }} /></div>
-        <div className="evidence-list">
-          {components.map((c) => (
-            <div className="evidence" key={c.component}>
-              <Tag tone={c.passed ? 'success' : 'warning'}>{c.passed ? 'Pass' : 'Check'}</Tag>
-              <strong>{c.component}</strong>
-              <span>{c.weight}%</span>
-              <p>{c.evidence}</p>
+    <>
+      <div className="drawer-backdrop" onClick={onClose} />
+      <aside className="drawer">
+        <div className="drawer-nav">
+          <button className="btn ghost" disabled={selectedIndex <= 0} onClick={onPrev}>← Prev</button>
+          <span>{selectedIndex >= 0 ? `${selectedIndex + 1} / ${total}` : ''}</span>
+          <button className="btn ghost" disabled={selectedIndex < 0 || selectedIndex >= total - 1} onClick={onNext}>Next →</button>
+          <button className="btn ghost" onClick={onClose}>Close</button>
+        </div>
+        <div className="drawer-body">
+          <div className="eyebrow">Match evidence</div>
+          <h2>{selected.result_id}</h2>
+          <p>{selected.explanation}</p>
+          <dl className="kv drawer-kv">
+            <dt>Status</dt><dd><Tag tone={classForStatus(selected.reconciliation_status)}>{selected.reconciliation_status}</Tag></dd>
+            <dt>Rule applied</dt><dd>{selected.rule_applied || '-'}</dd>
+            <dt>Reason</dt><dd>{selected.reason_code || '-'}</dd>
+            <dt>Invoice</dt><dd>{selected.invoice || '-'}</dd>
+            <dt>Counterparty</dt><dd>{selected.counterparty || '-'}</dd>
+            <dt>Variance</dt><dd>{money(selected.variance)}</dd>
+          </dl>
+          <Panel title="Why this decision?" subtitle={score.decision_basis || 'Evidence breakdown captured by the engine.'} className="nested-panel">
+            <div className="score-large"><span style={{ width: `${selected.match_confidence || 0}%` }} /></div>
+            <div className="evidence-list">
+              {components.map((c) => (
+                <div className="evidence" key={c.component}>
+                  <Tag tone={c.passed ? 'success' : 'warning'}>{c.passed ? 'Pass' : 'Check'}</Tag>
+                  <strong>{c.component}</strong>
+                  <span>{c.weight}%</span>
+                  <p>{c.evidence}</p>
+                </div>
+              ))}
+              {!components.length && <p className="empty small">No field-level evidence stored.</p>}
             </div>
-          ))}
-          {!components.length && <p className="empty small">No field-level evidence stored.</p>}
+          </Panel>
+          <Panel title="Suggested actions" className="nested-panel">
+            <div className="action-stack">
+              {suggestions.map((s, idx) => (
+                <div className="suggestion" key={idx}>
+                  <strong>{s.action}</strong>
+                  <p>{s.reason || (s.confidence != null ? `${(s.confidence * 100).toFixed(1)}%` : '')}</p>
+                </div>
+              ))}
+              {!suggestions.length && <p className="empty small">No suggestions available.</p>}
+            </div>
+          </Panel>
         </div>
-      </Panel>
-      <Panel title="Suggested actions" className="nested-panel">
-        <div className="action-stack">
-          {suggestions.map((s, idx) => <div className="suggestion" key={idx}><strong>{s.action}</strong><p>{s.reason || s.confidence || ''}</p></div>)}
-          {!suggestions.length && <p className="empty small">No suggestions available.</p>}
-        </div>
-      </Panel>
-      {selected.exception_flag === 'Y' && <button className="btn primary full" onClick={() => onResolve(selected)}>Resolve and capture learning</button>}
-    </aside>
+        {selected.exception_flag === 'Y' && (
+          <div className="drawer-footer">
+            {aiSuggestion && (
+              <button className="btn primary full" onClick={() => onResolve(selected, 'CONFIRM_AI_MATCH')}>Confirm AI match</button>
+            )}
+            <button className={`btn ${aiSuggestion ? 'ghost' : 'primary'} full`} onClick={() => onResolve(selected)}>Resolve and capture learning</button>
+          </div>
+        )}
+      </aside>
+    </>
+  );
+}
+
+const PAGE_SIZE = 100;
+const MINOR_VARIANCE_TOLERANCE = 50;
+
+const STATUS_OPTIONS = [
+  '',
+  'Matched & Settled (Auto-Close)',
+  'Uncleared / In-Transit Payment',
+  'AI-Assisted Suggested Match',
+  'AI - Analyst Adjudication Required',
+  'Post to Short or Over Ledger',
+  'Suggested Match - Analyst Review',
+  'Bank-only Item - Investigation',
+];
+
+function SummaryBar({ items = [], total = 0, activeFilter, onFilter }) {
+  const count = (pred) => items.filter(pred).length;
+  const chips = [
+    { label: 'Total',        value: total,   filter: '' },
+    { label: 'Matched',      value: count(r => r.reconciliation_status?.includes('Matched') || r.reconciliation_status?.includes('Auto-Close')), filter: 'Matched & Settled (Auto-Close)' },
+    { label: 'AI Suggested', value: count(r => r.reconciliation_status === 'AI-Assisted Suggested Match'), filter: 'AI-Assisted Suggested Match' },
+    { label: 'Exceptions',   value: count(r => r.exception_flag === 'Y' && !r.reconciliation_status?.startsWith('AI')), filter: 'exceptions' },
+    { label: 'In-Transit',   value: count(r => r.reconciliation_status?.includes('In-Transit') || r.reconciliation_status?.includes('Uncleared')), filter: 'Uncleared / In-Transit Payment' },
+  ];
+  return (
+    <div className="summary-bar">
+      {chips.map(c => (
+        <button key={c.label} className={`chip${activeFilter === c.filter ? ' active' : ''}`} onClick={() => onFilter(c.filter)}>
+          <strong>{c.value}</strong><span>{c.label}</span>
+        </button>
+      ))}
+    </div>
   );
 }
 
 function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAiTriage, loading }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
-  const runSearch = async () => refreshResults({ search, exceptionOnly });
+  const [selectedStatus, setSelectedStatus] = useState('');
+  const [page, setPage] = useState(0);
+
+  const total = results.total || 0;
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const from = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const to = Math.min((page + 1) * PAGE_SIZE, total);
+  const countLabel = total === 0 ? 'No records' : `Showing ${from}\u2013${to} of ${total}`;
+
+  const activeFilter = exceptionOnly ? 'exceptions' : selectedStatus;
+
+  const onFilter = (filter) => {
+    setPage(0);
+    if (filter === '') {
+      setSelectedStatus(''); setExceptionOnly(false);
+      refreshResults({ status: '', exceptionOnly: false, limit: PAGE_SIZE, offset: 0 });
+    } else if (filter === 'exceptions') {
+      setExceptionOnly(true); setSelectedStatus('');
+      refreshResults({ exceptionOnly: true, status: '', limit: PAGE_SIZE, offset: 0 });
+    } else {
+      setSelectedStatus(filter); setExceptionOnly(false);
+      refreshResults({ status: filter, exceptionOnly: false, limit: PAGE_SIZE, offset: 0 });
+    }
+  };
+
+  const runSearch = () => { setPage(0); refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: 0 }); };
+
   return (
     <section className="screen">
       <div className="screen-title split">
@@ -526,16 +663,79 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAi
           <h1>Matched, proposed and unresolved records</h1>
           <p>Drill into match evidence, failed fields, confidence and next-best action.</p>
         </div>
-        <div className="toolbar" style={{ flexWrap: 'nowrap' }}>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search PSR, CAMT, invoice, party" />
-          <label className="toggle" style={{ whiteSpace: 'nowrap' }}><input type="checkbox" checked={exceptionOnly} onChange={(e) => setExceptionOnly(e.target.checked)} /> Exceptions only</label>
-          <button className="btn secondary" onClick={runSearch}>Apply</button>
-          <span style={{ borderLeft: '1px solid var(--border)', height: '1.5rem', alignSelf: 'center' }} />
-          <button className="btn primary" disabled={loading} onClick={onAiTriage}>Run AI triage</button>
+        <div className="toolbar" style={{ flexWrap: 'nowrap', gap: '0.5rem', alignItems: 'center' }}>
+          {/* Filter group — allowed to shrink/wrap internally */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', flex: 1, minWidth: 0 }}>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+              placeholder="Search PSR, CAMT, invoice, party"
+              style={{ minWidth: '180px', flex: 1 }}
+            />
+            <select
+              value={selectedStatus}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedStatus(val);
+                setPage(0);
+                refreshResults({ search, exceptionOnly, status: val, limit: PAGE_SIZE, offset: 0 });
+              }}
+              style={{ minWidth: '160px' }}
+            >
+              <option value="">All statuses</option>
+              {STATUS_OPTIONS.filter(Boolean).map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            <label className="toggle" style={{ whiteSpace: 'nowrap' }}>
+              <input
+                type="checkbox"
+                checked={exceptionOnly}
+                onChange={(e) => {
+                  const val = e.target.checked;
+                  setExceptionOnly(val);
+                  setPage(0);
+                  refreshResults({ search, exceptionOnly: val, status: selectedStatus, limit: PAGE_SIZE, offset: 0 });
+                }}
+              /> Exceptions only
+            </label>
+          </div>
+          {/* AI triage — always anchored to the right, never wraps */}
+          <span style={{ borderLeft: '1px solid var(--border)', height: '1.5rem', flexShrink: 0 }} />
+          <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
         </div>
       </div>
+      <SummaryBar items={results.items || []} total={total} activeFilter={activeFilter} onFilter={onFilter} />
+      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0.25rem 0', fontSize: '0.8rem', color: 'var(--muted, #888)' }}>
+        {countLabel}
+      </div>
       <ResultTable rows={results.items || []} onSelect={setSelected} />
-      <EvidenceDrawer selected={selected} onClose={() => setSelected(null)} onResolve={setSelected} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <button
+            className="btn secondary"
+            disabled={page === 0}
+            onClick={() => { const p = page - 1; setPage(p); refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: p * PAGE_SIZE }); }}
+          >← Prev</button>
+          <span style={{ fontSize: '0.85rem', color: 'var(--muted, #888)' }}>Page {page + 1} of {totalPages || 1}</span>
+          <button
+            className="btn secondary"
+            disabled={page >= totalPages - 1}
+            onClick={() => { const p = page + 1; setPage(p); refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: p * PAGE_SIZE }); }}
+          >Next →</button>
+        </div>
+        <span style={{ fontSize: '0.8rem', color: 'var(--muted, #888)' }}>{countLabel}</span>
+      </div>
+      <EvidenceDrawer
+        selected={selected}
+        onClose={() => setSelected(null)}
+        onResolve={setSelected}
+        rows={results.items || []}
+        selectedIndex={(results.items || []).findIndex(r => r.result_id === selected?.result_id)}
+        onPrev={() => { const idx = (results.items || []).findIndex(r => r.result_id === selected?.result_id); if (idx > 0) setSelected(results.items[idx - 1]); }}
+        onNext={() => { const idx = (results.items || []).findIndex(r => r.result_id === selected?.result_id); if (idx < (results.items || []).length - 1) setSelected(results.items[idx + 1]); }}
+      />
     </section>
   );
 }
@@ -856,7 +1056,8 @@ export default function App() {
   const refresh = async () => {
     const [summaryData, resultsData, exceptionsData, patternsData, candidatesData, eventsData, batchesData, workspaceData, submissionsData, previewData, predictionData, ruleData, workflowRuleData, dashboardData] = await Promise.all([
       api.summary(),
-      api.results({ limit: 150 }),
+      api.results({ limit: PAGE_SIZE }),
+
       api.exceptions({ limit: 150 }),
       api.patterns(),
       api.candidates(),
@@ -902,8 +1103,8 @@ export default function App() {
 
   useEffect(() => { refresh().catch(() => {}); }, []);
 
-  const refreshResults = async ({ search = '', exceptionOnly = false } = {}) => {
-    setResults(await api.results({ limit: 150, search, exceptionOnly }));
+  const refreshResults = async ({ search = '', exceptionOnly = false, status = '', limit = PAGE_SIZE, offset = 0 } = {}) => {
+    setResults(await api.results({ limit, offset, search, exceptionOnly, status }));
   };
 
   const uploadReconFile = async (fileType, file, batchId, batchName) => {
@@ -930,7 +1131,7 @@ export default function App() {
     await safe(
       async () => {
         result = await api.aiTriage();
-        await refreshResults({ search: '', exceptionOnly: false });
+        await refreshResults({ search: '', exceptionOnly: false, status: '' });
       },
       () => {
         const suggested = (result?.clear_count ?? 0) + (result?.llm_adjudicated_count ?? 0);

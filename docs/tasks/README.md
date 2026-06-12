@@ -1,10 +1,10 @@
-# Task Index — `feature/residual-match-ai`
+# Task Index
 
 Reference: [docs/AI_TRIAGE_PLAN.md](../AI_TRIAGE_PLAN.md)
 
 ---
 
-## Dependency Map
+## Dependency Map — AI Triage branch (`feature/residual-match-ai`)
 
 ```
 TASK-01  rapidfuzz P4 upgrade
@@ -22,11 +22,25 @@ TASK-01  rapidfuzz P4 upgrade
                                                                             TASK-07  Resolve modal AI pre-fill
 ```
 
-**TASK-05 and TASK-06 can be worked in parallel** — they touch different parts of the frontend and have no dependency on each other.
+## Dependency Map — Results Workbench UI (`fix/ui-result-workbench`)
+
+```
+TASK-08  Search UX & status filter
+TASK-09  Pagination & record count
+    │
+    └──► TASK-13  Summary bar (uses pagination state)
+
+TASK-10  Column sorting & variance colour fix
+TASK-11  AI-reviewed row indicators
+TASK-12  Evidence drawer improvements
+```
+
+TASK-08, TASK-09, TASK-10, TASK-11, TASK-12 are all independent and can run in parallel.
+TASK-13 depends on TASK-09 for pagination state.
 
 ---
 
-## Task Summary
+## Task Summary — AI Triage (`feature/residual-match-ai`)
 
 | Task | Title | Type | Depends on | Status |
 |---|---|---|---|---|
@@ -37,6 +51,39 @@ TASK-01  rapidfuzz P4 upgrade
 | [TASK-05](TASK-05-frontend-ai-triage-button.md) | Frontend: API client + Run AI triage button | Frontend | TASK-03 | ✅ Complete |
 | [TASK-06](TASK-06-frontend-ai-status-badge.md) | Frontend: AI status badge in ResultTable | Frontend | TASK-03 | ✅ Complete |
 | [TASK-07](TASK-07-frontend-resolve-modal-ai-prefill.md) | Frontend: pre-fill Resolve modal from AI suggestion | Frontend | TASK-05, TASK-06 | ✅ Complete |
+
+## Task Summary — Results Workbench UI (`fix/ui-result-workbench`)
+
+| Task | Title | Type | Depends on | Status |
+|---|---|---|---|---|
+| [TASK-08](TASK-08-rw-search-and-filter.md) | Search UX & status filter dropdown | Frontend | — | ✅ Complete |
+| [TASK-09](TASK-09-rw-pagination-and-count.md) | Pagination & record count | Frontend | — | ✅ Complete |
+| [TASK-10](TASK-10-rw-sorting-and-variance-colour.md) | Column sorting & variance colour fix | Frontend | — | ✅ Complete |
+| [TASK-11](TASK-11-rw-ai-reviewed-row-indicators.md) | AI-reviewed row indicators | Frontend | — | ✅ Complete |
+| [TASK-12](TASK-12-rw-evidence-drawer-improvements.md) | Evidence drawer improvements | Frontend | — | ✅ Complete |
+| [TASK-13](TASK-13-rw-summary-bar.md) | Toolbar summary bar | Frontend | TASK-09 | ✅ Complete |
+
+---
+
+## Recommended Pickup Order
+
+### Solo developer — AI Triage
+```
+TASK-01 → TASK-02 → TASK-03 → TASK-05 → TASK-06 → TASK-07 → TASK-04
+```
+
+### Solo developer — Results Workbench UI
+```
+TASK-08 + TASK-10 + TASK-11  (parallel, independent)
+TASK-09 → TASK-13
+TASK-12  (independent, slightly larger)
+```
+
+### Two developers — Results Workbench UI
+```
+Dev A: TASK-08, TASK-09, TASK-13
+Dev B: TASK-10, TASK-11, TASK-12
+```
 
 ---
 
