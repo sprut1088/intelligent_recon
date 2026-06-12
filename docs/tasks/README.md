@@ -56,12 +56,12 @@ TASK-13 depends on TASK-09 for pagination state.
 
 | Task | Title | Type | Depends on | Status |
 |---|---|---|---|---|
-| [TASK-08](TASK-08-rw-search-and-filter.md) | Search UX & status filter dropdown | Frontend | — | 🔲 Open |
-| [TASK-09](TASK-09-rw-pagination-and-count.md) | Pagination & record count | Frontend | — | 🔲 Open |
-| [TASK-10](TASK-10-rw-sorting-and-variance-colour.md) | Column sorting & variance colour fix | Frontend | — | 🔲 Open |
-| [TASK-11](TASK-11-rw-ai-reviewed-row-indicators.md) | AI-reviewed row indicators | Frontend | — | 🔲 Open |
-| [TASK-12](TASK-12-rw-evidence-drawer-improvements.md) | Evidence drawer improvements | Frontend | — | 🔲 Open |
-| [TASK-13](TASK-13-rw-summary-bar.md) | Toolbar summary bar | Frontend | TASK-09 | 🔲 Open |
+| [TASK-08](TASK-08-rw-search-and-filter.md) | Search UX & status filter dropdown | Frontend | — | ✅ Complete |
+| [TASK-09](TASK-09-rw-pagination-and-count.md) | Pagination & record count | Frontend | — | ✅ Complete |
+| [TASK-10](TASK-10-rw-sorting-and-variance-colour.md) | Column sorting & variance colour fix | Frontend | — | ✅ Complete |
+| [TASK-11](TASK-11-rw-ai-reviewed-row-indicators.md) | AI-reviewed row indicators | Frontend | — | ✅ Complete |
+| [TASK-12](TASK-12-rw-evidence-drawer-improvements.md) | Evidence drawer improvements | Frontend | — | ✅ Complete |
+| [TASK-13](TASK-13-rw-summary-bar.md) | Toolbar summary bar | Frontend | TASK-09 | ✅ Complete |
 
 ---
 
