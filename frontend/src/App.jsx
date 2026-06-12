@@ -605,14 +605,19 @@ const STATUS_OPTIONS = [
   'Bank-only Item - Investigation',
 ];
 
-function SummaryBar({ items = [], total = 0, activeFilter, onFilter }) {
-  const count = (pred) => items.filter(pred).length;
+function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
+  const statuses = summary.statuses || [];
+  const statusCount = (match) => statuses
+    .filter(s => match(s.reconciliation_status || ''))
+    .reduce((acc, s) => acc + (s.count || 0), 0);
+  const exceptionCount = summary.raw?.kpi?.exception_count ?? 0;
+  const aiSuggestedCount = statusCount(s => s === 'AI-Assisted Suggested Match');
   const chips = [
-    { label: 'Total',        value: total,   filter: '' },
-    { label: 'Matched',      value: count(r => r.reconciliation_status?.includes('Matched') || r.reconciliation_status?.includes('Auto-Close')), filter: 'Matched & Settled (Auto-Close)' },
-    { label: 'AI Suggested', value: count(r => r.reconciliation_status === 'AI-Assisted Suggested Match'), filter: 'AI-Assisted Suggested Match' },
-    { label: 'Exceptions',   value: count(r => r.exception_flag === 'Y' && !r.reconciliation_status?.startsWith('AI')), filter: 'exceptions' },
-    { label: 'In-Transit',   value: count(r => r.reconciliation_status?.includes('In-Transit') || r.reconciliation_status?.includes('Uncleared')), filter: 'Uncleared / In-Transit Payment' },
+    { label: 'Total',        value: total,            filter: '' },
+    { label: 'Matched',      value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close')), filter: 'Matched & Settled (Auto-Close)' },
+    { label: 'AI Suggested', value: aiSuggestedCount, filter: 'AI-Assisted Suggested Match' },
+    { label: 'Exceptions',   value: exceptionCount - aiSuggestedCount,   filter: 'exceptions' },
+    { label: 'In-Transit',   value: statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')), filter: 'Uncleared / In-Transit Payment' },
   ];
   return (
     <div className="summary-bar">
@@ -625,7 +630,7 @@ function SummaryBar({ items = [], total = 0, activeFilter, onFilter }) {
   );
 }
 
-function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAiTriage, loading }) {
+function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, loading }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -706,9 +711,22 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAi
           <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
         </div>
       </div>
-      <SummaryBar items={results.items || []} total={total} activeFilter={activeFilter} onFilter={onFilter} />
-      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0.25rem 0', fontSize: '0.8rem', color: 'var(--muted, #888)' }}>
-        {countLabel}
+      <SummaryBar summary={summary} total={total} activeFilter={activeFilter} onFilter={onFilter} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.25rem 0' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <button
+            className="btn secondary"
+            disabled={page === 0}
+            onClick={() => { const p = page - 1; setPage(p); refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: p * PAGE_SIZE }); }}
+          >← Prev</button>
+          <span style={{ fontSize: '0.85rem', color: 'var(--muted, #888)' }}>Page {page + 1} of {totalPages || 1}</span>
+          <button
+            className="btn secondary"
+            disabled={page >= totalPages - 1}
+            onClick={() => { const p = page + 1; setPage(p); refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: p * PAGE_SIZE }); }}
+          >Next →</button>
+        </div>
+        <span style={{ fontSize: '0.8rem', color: 'var(--muted, #888)' }}>{countLabel}</span>
       </div>
       <ResultTable rows={results.items || []} onSelect={setSelected} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0', gap: '0.75rem' }}>
@@ -1195,7 +1213,7 @@ export default function App() {
     if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} onUpload={uploadReconFile} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
-    if (active === 'results') return <ResultsWorkbench results={results} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} loading={loading} />;
+    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} loading={loading} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;
