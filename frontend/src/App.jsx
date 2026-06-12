@@ -514,6 +514,8 @@ function EvidenceDrawer({ selected, onClose, onResolve }) {
   );
 }
 
+const PAGE_SIZE = 100;
+
 const STATUS_OPTIONS = [
   '',
   'Matched & Settled (Auto-Close)',
@@ -529,8 +531,15 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAi
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
+  const [page, setPage] = useState(0);
 
-  const runSearch = () => refreshResults({ search, exceptionOnly, status: selectedStatus });
+  const total = results.total || 0;
+  const totalPages = Math.ceil(total / PAGE_SIZE);
+  const from = total === 0 ? 0 : page * PAGE_SIZE + 1;
+  const to = Math.min((page + 1) * PAGE_SIZE, total);
+  const countLabel = total === 0 ? 'No records' : `Showing ${from}\u2013${to} of ${total}`;
+
+  const runSearch = () => { setPage(0); refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: 0 }); };
 
   return (
     <section className="screen">
@@ -555,7 +564,8 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAi
               onChange={(e) => {
                 const val = e.target.value;
                 setSelectedStatus(val);
-                refreshResults({ search, exceptionOnly, status: val });
+                setPage(0);
+                refreshResults({ search, exceptionOnly, status: val, limit: PAGE_SIZE, offset: 0 });
               }}
               style={{ minWidth: '160px' }}
             >
@@ -571,7 +581,8 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAi
                 onChange={(e) => {
                   const val = e.target.checked;
                   setExceptionOnly(val);
-                  refreshResults({ search, exceptionOnly: val, status: selectedStatus });
+                  setPage(0);
+                  refreshResults({ search, exceptionOnly: val, status: selectedStatus, limit: PAGE_SIZE, offset: 0 });
                 }}
               /> Exceptions only
             </label>
@@ -581,7 +592,26 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAi
           <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
         </div>
       </div>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0.25rem 0', fontSize: '0.8rem', color: 'var(--muted, #888)' }}>
+        {countLabel}
+      </div>
       <ResultTable rows={results.items || []} onSelect={setSelected} />
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.5rem 0', gap: '0.75rem' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <button
+            className="btn secondary"
+            disabled={page === 0}
+            onClick={() => { const p = page - 1; setPage(p); refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: p * PAGE_SIZE }); }}
+          >← Prev</button>
+          <span style={{ fontSize: '0.85rem', color: 'var(--muted, #888)' }}>Page {page + 1} of {totalPages || 1}</span>
+          <button
+            className="btn secondary"
+            disabled={page >= totalPages - 1}
+            onClick={() => { const p = page + 1; setPage(p); refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: p * PAGE_SIZE }); }}
+          >Next →</button>
+        </div>
+        <span style={{ fontSize: '0.8rem', color: 'var(--muted, #888)' }}>{countLabel}</span>
+      </div>
       <EvidenceDrawer selected={selected} onClose={() => setSelected(null)} onResolve={setSelected} />
     </section>
   );
@@ -903,7 +933,8 @@ export default function App() {
   const refresh = async () => {
     const [summaryData, resultsData, exceptionsData, patternsData, candidatesData, eventsData, batchesData, workspaceData, submissionsData, previewData, predictionData, ruleData, workflowRuleData, dashboardData] = await Promise.all([
       api.summary(),
-      api.results({ limit: 150 }),
+      api.results({ limit: PAGE_SIZE }),
+
       api.exceptions({ limit: 150 }),
       api.patterns(),
       api.candidates(),
@@ -949,8 +980,8 @@ export default function App() {
 
   useEffect(() => { refresh().catch(() => {}); }, []);
 
-  const refreshResults = async ({ search = '', exceptionOnly = false, status = '' } = {}) => {
-    setResults(await api.results({ limit: 150, search, exceptionOnly, status }));
+  const refreshResults = async ({ search = '', exceptionOnly = false, status = '', limit = PAGE_SIZE, offset = 0 } = {}) => {
+    setResults(await api.results({ limit, offset, search, exceptionOnly, status }));
   };
 
   const uploadReconFile = async (fileType, file, batchId, batchName) => {
