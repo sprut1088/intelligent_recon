@@ -605,6 +605,26 @@ const STATUS_OPTIONS = [
   'Bank-only Item - Investigation',
 ];
 
+function SummaryBar({ items = [], total = 0, activeFilter, onFilter }) {
+  const count = (pred) => items.filter(pred).length;
+  const chips = [
+    { label: 'Total',        value: total,   filter: '' },
+    { label: 'Matched',      value: count(r => r.reconciliation_status?.includes('Matched') || r.reconciliation_status?.includes('Auto-Close')), filter: 'Matched & Settled (Auto-Close)' },
+    { label: 'AI Suggested', value: count(r => r.reconciliation_status === 'AI-Assisted Suggested Match'), filter: 'AI-Assisted Suggested Match' },
+    { label: 'Exceptions',   value: count(r => r.exception_flag === 'Y' && !r.reconciliation_status?.startsWith('AI')), filter: 'exceptions' },
+    { label: 'In-Transit',   value: count(r => r.reconciliation_status?.includes('In-Transit') || r.reconciliation_status?.includes('Uncleared')), filter: 'Uncleared / In-Transit Payment' },
+  ];
+  return (
+    <div className="summary-bar">
+      {chips.map(c => (
+        <button key={c.label} className={`chip${activeFilter === c.filter ? ' active' : ''}`} onClick={() => onFilter(c.filter)}>
+          <strong>{c.value}</strong><span>{c.label}</span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAiTriage, loading }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
@@ -616,6 +636,22 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAi
   const from = total === 0 ? 0 : page * PAGE_SIZE + 1;
   const to = Math.min((page + 1) * PAGE_SIZE, total);
   const countLabel = total === 0 ? 'No records' : `Showing ${from}\u2013${to} of ${total}`;
+
+  const activeFilter = exceptionOnly ? 'exceptions' : selectedStatus;
+
+  const onFilter = (filter) => {
+    setPage(0);
+    if (filter === '') {
+      setSelectedStatus(''); setExceptionOnly(false);
+      refreshResults({ status: '', exceptionOnly: false, limit: PAGE_SIZE, offset: 0 });
+    } else if (filter === 'exceptions') {
+      setExceptionOnly(true); setSelectedStatus('');
+      refreshResults({ exceptionOnly: true, status: '', limit: PAGE_SIZE, offset: 0 });
+    } else {
+      setSelectedStatus(filter); setExceptionOnly(false);
+      refreshResults({ status: filter, exceptionOnly: false, limit: PAGE_SIZE, offset: 0 });
+    }
+  };
 
   const runSearch = () => { setPage(0); refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: 0 }); };
 
@@ -670,6 +706,7 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAi
           <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
         </div>
       </div>
+      <SummaryBar items={results.items || []} total={total} activeFilter={activeFilter} onFilter={onFilter} />
       <div style={{ display: 'flex', justifyContent: 'flex-end', padding: '0.25rem 0', fontSize: '0.8rem', color: 'var(--muted, #888)' }}>
         {countLabel}
       </div>
