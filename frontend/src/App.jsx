@@ -442,28 +442,75 @@ function MatchingStudio({ patterns, rules, onTunePattern, onTogglePattern, onCre
   );
 }
 
+const varianceTone = (v) => {
+  if (v === null || v === undefined) return '';
+  if (v === 0) return 'positive';
+  if (Math.abs(v) <= MINOR_VARIANCE_TOLERANCE) return 'warning';
+  return 'negative';
+};
+
+function SortTh({ col, label, sortCol, sortDir, onSort }) {
+  const active = sortCol === col;
+  return (
+    <th onClick={() => onSort(col)} style={{ cursor: 'pointer', userSelect: 'none', whiteSpace: 'nowrap' }}>
+      {label}{active ? (sortDir === 'asc' ? ' ▲' : ' ▼') : ''}
+    </th>
+  );
+}
+
 function ResultTable({ rows, onSelect }) {
+  const [sortCol, setSortCol] = useState(null);
+  const [sortDir, setSortDir] = useState('asc');
+
+  const onSort = (col) => {
+    if (sortCol === col) setSortDir((d) => d === 'asc' ? 'desc' : 'asc');
+    else { setSortCol(col); setSortDir('asc'); }
+  };
+
+  const sorted = useMemo(() => {
+    if (!sortCol) return rows;
+    return [...rows].sort((a, b) => {
+      const av = a[sortCol] ?? '';
+      const bv = b[sortCol] ?? '';
+      if (av < bv) return sortDir === 'asc' ? -1 : 1;
+      if (av > bv) return sortDir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }, [rows, sortCol, sortDir]);
+
+  const sp = { sortCol, sortDir, onSort };
+
   return (
     <div className="table-wrap results-table">
       <table>
         <thead>
-          <tr><th>Case</th><th>Internal</th><th>Bank</th><th>Reference</th><th>Counterparty</th><th>Variance</th><th>Status</th><th>Rule</th><th>Confidence</th></tr>
+          <tr>
+            <th>Case</th>
+            <th>Internal</th>
+            <th>Bank</th>
+            <th>Reference</th>
+            <th>Counterparty</th>
+            <SortTh col="variance" label="Variance" {...sp} />
+            <SortTh col="reconciliation_status" label="Status" {...sp} />
+            <SortTh col="rule_applied" label="Rule" {...sp} />
+            <SortTh col="match_confidence" label="Confidence" {...sp} />
+          </tr>
         </thead>
         <tbody>
-          {rows.map((r) => (
+          {sorted.map((r) => (
             <tr key={r.result_id} onClick={() => onSelect?.(r)} className="clickable">
               <td><strong>{r.result_id}</strong><br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
               <td>{money(r.internal_amount)}</td>
               <td>{money(r.bank_amount)}</td>
               <td>{r.reference || '-'}</td>
               <td>{r.counterparty || '-'}</td>
-              <td className={Number(r.variance) === 0 ? 'positive' : 'negative'}>{money(r.variance)}</td>
+              <td className={varianceTone(r.variance)}>{r.variance != null ? money(r.variance) : '-'}</td>
               <td><Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag></td>
               <td>{r.rule_applied || '-'}</td>
               <td><div className="mini-score"><span style={{ width: `${r.match_confidence || 0}%` }} />{r.match_confidence}%</div></td>
             </tr>
           ))}
-          {!rows.length && <tr><td colSpan="9" className="empty">No records to display.</td></tr>}
+          {!sorted.length && <tr><td colSpan="9" className="empty">No records to display.</td></tr>}
         </tbody>
       </table>
     </div>
@@ -515,6 +562,7 @@ function EvidenceDrawer({ selected, onClose, onResolve }) {
 }
 
 const PAGE_SIZE = 100;
+const MINOR_VARIANCE_TOLERANCE = 50;
 
 const STATUS_OPTIONS = [
   '',
