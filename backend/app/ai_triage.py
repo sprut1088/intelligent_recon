@@ -306,15 +306,50 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
         reason_text = result.get("reason", "")
         matched_camt = result.get("matched_camt_id")
 
+        # Build updated suggestions reflecting the LLM decision
+        llm_suggestions = json.dumps([{
+            "action": result.get("suggested_action", "ROUTE_TO_ANALYST"),
+            "confidence": round(conf / 100.0, 4),
+            "tier": "2c_llm",
+            "reason": reason_text,
+            "camt_id": matched_camt,
+        }])
+
+        # Build a feature snapshot with LLM-specific evidence components
+        llm_action = result.get("suggested_action", "ROUTE_TO_ANALYST")
+        llm_components = [
+            {"component": "LLM adjudication", "passed": llm_action == "CONFIRM_AI_MATCH",
+             "weight": 60, "evidence": reason_text or "LLM assessed the match."},
+            {"component": "Confidence threshold", "passed": conf >= 50,
+             "weight": 40, "evidence": f"LLM confidence: {conf}%"},
+        ]
+        passed_w = sum(x["weight"] for x in llm_components if x["passed"])
+        total_w = sum(x["weight"] for x in llm_components) or 1
+        llm_raw_score = round((passed_w / total_w) * 100, 2)
+        llm_snapshot = json.dumps({
+            "tier": "2c_llm",
+            "score_breakdown": {
+                "rule_applied": rule,
+                "engine_confidence": conf,
+                "raw_component_score": llm_raw_score,
+                "components": llm_components,
+                "matched_fields": [x["component"] for x in llm_components if x["passed"]],
+                "failed_fields": [x["component"] for x in llm_components if not x["passed"]],
+                "decision_basis": f"Tier 2c LLM: {rule}. Confidence {conf}%. {reason_text}",
+            },
+        })
+
         with get_conn() as conn:
             conn.execute(
                 """UPDATE recon_cases
                    SET reconciliation_status=?, match_confidence=?, rule_applied=?,
                        explanation=?, camt_id=COALESCE(?, camt_id),
+                       suggestions_json=?, feature_snapshot_json=?,
                        updated_at=CURRENT_TIMESTAMP
                    WHERE psr_id=?
                      AND reconciliation_status='AI - Analyst Adjudication Required'""",
-                (new_status, conf, rule, reason_text, matched_camt, psr_id)
+                (new_status, conf, rule, reason_text, matched_camt,
+                 llm_suggestions, llm_snapshot, psr_id)
             )
             conn.commit()
 

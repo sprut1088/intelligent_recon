@@ -1,6 +1,6 @@
 from __future__ import annotations
 import uuid
-from typing import Optional
+from typing import Dict, Optional
 from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from .config import settings
@@ -84,6 +84,46 @@ def load_sample(request: ReconcileRunRequest = ReconcileRunRequest()) -> dict:
 def run_reconcile() -> dict:
     return rerun_reconciliation_only()
 
+def _build_ai_snapshot(c: Dict, conf: int, rule: str) -> Dict:
+    """Build a feature_snapshot dict for a Tier 2b AI triage case."""
+    psr_dir = (c.get("psr_direction") or "").upper()
+    camt_dir = (c.get("camt_direction") or "").upper()
+    dir_match = bool(psr_dir and camt_dir and psr_dir == camt_dir)
+    try:
+        psr_amt = float(c.get("psr_amount") or 0)
+        camt_amt = float(c.get("camt_amount") or 0)
+        amt_diff = abs(psr_amt - camt_amt)
+        amt_match = amt_diff <= settings.minor_variance_tolerance
+    except (TypeError, ValueError):
+        psr_amt = camt_amt = amt_diff = 0.0
+        amt_match = False
+    cosine = c.get("cosine_score", 0.0)
+    zone = c.get("zone", "maybe")
+    components = [
+        {"component": "Direction", "passed": dir_match, "weight": 25,
+         "evidence": f"PSR: {psr_dir or '-'} | CAMT: {camt_dir or '-'}"},
+        {"component": "Amount", "passed": amt_match, "weight": 30,
+         "evidence": f"PSR: {psr_amt} | CAMT: {camt_amt} | Δ{amt_diff:.2f}"},
+        {"component": "Text similarity", "passed": zone == "clear", "weight": 45,
+         "evidence": f"Cosine {cosine:.4f} — {zone} zone (≥0.85=clear, 0.60–0.84=maybe)"},
+    ]
+    passed_w = sum(x["weight"] for x in components if x["passed"])
+    total_w = sum(x["weight"] for x in components) or 1
+    raw_score = round((passed_w / total_w) * 100, 2)
+    return {
+        "tier": "2b_embedding",
+        "score_breakdown": {
+            "rule_applied": rule,
+            "engine_confidence": conf,
+            "raw_component_score": raw_score,
+            "components": components,
+            "matched_fields": [x["component"] for x in components if x["passed"]],
+            "failed_fields": [x["component"] for x in components if not x["passed"]],
+            "decision_basis": f"Tier 2b embedding cosine {cosine:.4f}. Component score {raw_score}%.",
+        },
+    }
+
+
 @app.post("/api/reconcile/ai-triage")
 def run_ai_triage() -> dict:
     """
@@ -106,33 +146,55 @@ def run_ai_triage() -> dict:
         # NO_MATCH decisions — those ghost rows must be cleaned up too.
         conn.execute("DELETE FROM recon_cases WHERE case_id LIKE 'AI%'")
 
+        # Pre-fetch PSR and CAMT rows so we can populate financial fields on AI cases
+        all_psr_ids = list({c["psr_id"] for c in candidates})
+        all_camt_ids = list({c["camt_id"] for c in candidates})
+        psr_map: Dict[str, Dict] = {}
+        camt_map: Dict[str, Dict] = {}
+        if all_psr_ids:
+            ph = ",".join("?" * len(all_psr_ids))
+            psr_map = {r["id"]: r for r in rows_to_dicts(
+                conn.execute(f"SELECT * FROM psr_transactions WHERE id IN ({ph})", all_psr_ids).fetchall()
+            )}
+        if all_camt_ids:
+            ph = ",".join("?" * len(all_camt_ids))
+            camt_map = {r["camt_id"]: r for r in rows_to_dicts(
+                conn.execute(f"SELECT * FROM camt_transactions WHERE camt_id IN ({ph})", all_camt_ids).fetchall()
+            )}
+
         for c in clear:
             case_id = f"AI-{c['psr_id']}-{c['camt_id']}"
             conf = int(c["cosine_score"] * 100)
+            psr = psr_map.get(c["psr_id"], {})
+            camt = camt_map.get(c["camt_id"], {})
+            internal_amt = psr.get("amount")
+            bank_amt = camt.get("amount")
+            variance = round(float(internal_amt or 0) - float(bank_amt or 0), 2) if (internal_amt is not None and bank_amt is not None) else None
             conn.execute(
                 """INSERT OR REPLACE INTO recon_cases
                    (case_id, psr_id, camt_id, reconciliation_status, reason_code,
                     match_type, match_confidence, rule_applied, exception_flag,
-                    explanation, suggestions_json, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+                    explanation, suggestions_json, feature_snapshot_json,
+                    reference, invoice, counterparty, internal_amount, bank_amount,
+                    variance, currency, value_date, booking_date,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
                 (
-                    case_id,
-                    c["psr_id"],
-                    c["camt_id"],
-                    "AI-Assisted Suggested Match",
-                    "AI_EMBEDDING_MATCH",
-                    "1_TO_1",
-                    conf,
-                    "TIER2B_EMBEDDING",
-                    "Y",
+                    case_id, c["psr_id"], c["camt_id"],
+                    "AI-Assisted Suggested Match", "AI_EMBEDDING_MATCH", "1_TO_1",
+                    conf, "TIER2B_EMBEDDING", "Y",
                     f"Embedding cosine similarity {c['cosine_score']:.4f}. "
                     f"PSR text: '{c['psr_text']}'. CAMT text: '{c['camt_text']}'.",
-                    json_dumps([{
-                        "action": "CONFIRM_AI_MATCH",
-                        "confidence": c["cosine_score"],
-                        "tier": "2b",
-                        "camt_id": c["camt_id"],
-                    }]),
+                    json_dumps([{"action": "CONFIRM_AI_MATCH", "confidence": c["cosine_score"],
+                                 "tier": "2b", "camt_id": c["camt_id"]}]),
+                    json_dumps(_build_ai_snapshot(c, conf, "TIER2B_EMBEDDING")),
+                    psr.get("reference") or camt.get("pmt_ref"),
+                    psr.get("invoice") or camt.get("invoice"),
+                    psr.get("counterparty") or camt.get("counterparty"),
+                    internal_amt, bank_amt, variance,
+                    psr.get("currency") or camt.get("currency") or "EUR",
+                    psr.get("execution_date") or "",
+                    camt.get("booking_date") or "",
                 )
             )
             inserted += 1
@@ -140,30 +202,36 @@ def run_ai_triage() -> dict:
         for c in maybe:
             case_id = f"AI-MAYBE-{c['psr_id']}-{c['camt_id']}"
             conf = int(c["cosine_score"] * 100)
+            psr = psr_map.get(c["psr_id"], {})
+            camt = camt_map.get(c["camt_id"], {})
+            internal_amt = psr.get("amount")
+            bank_amt = camt.get("amount")
+            variance = round(float(internal_amt or 0) - float(bank_amt or 0), 2) if (internal_amt is not None and bank_amt is not None) else None
             conn.execute(
                 """INSERT OR REPLACE INTO recon_cases
                    (case_id, psr_id, camt_id, reconciliation_status, reason_code,
                     match_type, match_confidence, rule_applied, exception_flag,
-                    explanation, suggestions_json, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
+                    explanation, suggestions_json, feature_snapshot_json,
+                    reference, invoice, counterparty, internal_amount, bank_amount,
+                    variance, currency, value_date, booking_date,
+                    created_at, updated_at)
+                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
                 (
-                    case_id,
-                    c["psr_id"],
-                    c["camt_id"],
-                    "AI - Analyst Adjudication Required",
-                    "AI_MAYBE_ZONE",
-                    "1_TO_1",
-                    conf,
-                    "TIER2B_EMBEDDING",
-                    "Y",
+                    case_id, c["psr_id"], c["camt_id"],
+                    "AI - Analyst Adjudication Required", "AI_MAYBE_ZONE", "1_TO_1",
+                    conf, "TIER2B_EMBEDDING", "Y",
                     f"Embedding similarity {c['cosine_score']:.4f} — in 'maybe' zone (0.60–0.84). "
                     f"Awaiting LLM adjudication (Tier 2c).",
-                    json_dumps([{
-                        "action": "ROUTE_TO_ANALYST",
-                        "confidence": c["cosine_score"],
-                        "tier": "2b_maybe",
-                        "camt_id": c["camt_id"],
-                    }]),
+                    json_dumps([{"action": "ROUTE_TO_ANALYST", "confidence": c["cosine_score"],
+                                 "tier": "2b_maybe", "camt_id": c["camt_id"]}]),
+                    json_dumps(_build_ai_snapshot(c, conf, "TIER2B_EMBEDDING")),
+                    psr.get("reference") or camt.get("pmt_ref"),
+                    psr.get("invoice") or camt.get("invoice"),
+                    psr.get("counterparty") or camt.get("counterparty"),
+                    internal_amt, bank_amt, variance,
+                    psr.get("currency") or camt.get("currency") or "EUR",
+                    psr.get("execution_date") or "",
+                    camt.get("booking_date") or "",
                 )
             )
             inserted += 1
