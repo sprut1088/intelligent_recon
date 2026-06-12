@@ -442,11 +442,6 @@ function MatchingStudio({ patterns, rules, onTunePattern, onTogglePattern, onCre
   );
 }
 
-const AI_STATUS_LABELS = {
-  'AI-Assisted Suggested Match': 'AI · Suggested',
-  'AI - Analyst Adjudication Required': 'AI · Review',
-};
-
 function ResultTable({ rows, onSelect }) {
   return (
     <div className="table-wrap results-table">
@@ -463,7 +458,7 @@ function ResultTable({ rows, onSelect }) {
               <td>{r.reference || '-'}</td>
               <td>{r.counterparty || '-'}</td>
               <td className={Number(r.variance) === 0 ? 'positive' : 'negative'}>{money(r.variance)}</td>
-              <td><Tag tone={classForStatus(r.reconciliation_status)}>{AI_STATUS_LABELS[r.reconciliation_status] || r.reconciliation_status}</Tag></td>
+              <td><Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag></td>
               <td>{r.rule_applied || '-'}</td>
               <td><div className="mini-score"><span style={{ width: `${r.match_confidence || 0}%` }} />{r.match_confidence}%</div></td>
             </tr>
