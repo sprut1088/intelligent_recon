@@ -523,47 +523,71 @@ function ResultTable({ rows, onSelect }) {
   );
 }
 
-function EvidenceDrawer({ selected, onClose, onResolve }) {
+function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex = -1, onPrev, onNext }) {
   if (!selected) return null;
   const score = selected.feature_snapshot?.score_breakdown || {};
   const components = score.components || [];
   const suggestions = selected.suggestions || [];
+  const aiSuggestion = suggestions.find(s => s.action === 'CONFIRM_AI_MATCH');
+  const total = rows.length;
   return (
-    <aside className="drawer">
-      <button className="btn ghost close" onClick={onClose}>Close</button>
-      <div className="eyebrow">Match evidence</div>
-      <h2>{selected.result_id}</h2>
-      <p>{selected.explanation}</p>
-      <dl className="kv drawer-kv">
-        <dt>Status</dt><dd><Tag tone={classForStatus(selected.reconciliation_status)}>{selected.reconciliation_status}</Tag></dd>
-        <dt>Rule applied</dt><dd>{selected.rule_applied || '-'}</dd>
-        <dt>Reason</dt><dd>{selected.reason_code || '-'}</dd>
-        <dt>Invoice</dt><dd>{selected.invoice || '-'}</dd>
-        <dt>Counterparty</dt><dd>{selected.counterparty || '-'}</dd>
-        <dt>Variance</dt><dd>{money(selected.variance)}</dd>
-      </dl>
-      <Panel title="Why this decision?" subtitle={score.decision_basis || 'Evidence breakdown captured by the engine.'} className="nested-panel">
-        <div className="score-large"><span style={{ width: `${selected.match_confidence || 0}%` }} /></div>
-        <div className="evidence-list">
-          {components.map((c) => (
-            <div className="evidence" key={c.component}>
-              <Tag tone={c.passed ? 'success' : 'warning'}>{c.passed ? 'Pass' : 'Check'}</Tag>
-              <strong>{c.component}</strong>
-              <span>{c.weight}%</span>
-              <p>{c.evidence}</p>
+    <>
+      <div className="drawer-backdrop" onClick={onClose} />
+      <aside className="drawer">
+        <div className="drawer-nav">
+          <button className="btn ghost" disabled={selectedIndex <= 0} onClick={onPrev}>← Prev</button>
+          <span>{selectedIndex >= 0 ? `${selectedIndex + 1} / ${total}` : ''}</span>
+          <button className="btn ghost" disabled={selectedIndex < 0 || selectedIndex >= total - 1} onClick={onNext}>Next →</button>
+          <button className="btn ghost" onClick={onClose}>Close</button>
+        </div>
+        <div className="drawer-body">
+          <div className="eyebrow">Match evidence</div>
+          <h2>{selected.result_id}</h2>
+          <p>{selected.explanation}</p>
+          <dl className="kv drawer-kv">
+            <dt>Status</dt><dd><Tag tone={classForStatus(selected.reconciliation_status)}>{selected.reconciliation_status}</Tag></dd>
+            <dt>Rule applied</dt><dd>{selected.rule_applied || '-'}</dd>
+            <dt>Reason</dt><dd>{selected.reason_code || '-'}</dd>
+            <dt>Invoice</dt><dd>{selected.invoice || '-'}</dd>
+            <dt>Counterparty</dt><dd>{selected.counterparty || '-'}</dd>
+            <dt>Variance</dt><dd>{money(selected.variance)}</dd>
+          </dl>
+          <Panel title="Why this decision?" subtitle={score.decision_basis || 'Evidence breakdown captured by the engine.'} className="nested-panel">
+            <div className="score-large"><span style={{ width: `${selected.match_confidence || 0}%` }} /></div>
+            <div className="evidence-list">
+              {components.map((c) => (
+                <div className="evidence" key={c.component}>
+                  <Tag tone={c.passed ? 'success' : 'warning'}>{c.passed ? 'Pass' : 'Check'}</Tag>
+                  <strong>{c.component}</strong>
+                  <span>{c.weight}%</span>
+                  <p>{c.evidence}</p>
+                </div>
+              ))}
+              {!components.length && <p className="empty small">No field-level evidence stored.</p>}
             </div>
-          ))}
-          {!components.length && <p className="empty small">No field-level evidence stored.</p>}
+          </Panel>
+          <Panel title="Suggested actions" className="nested-panel">
+            <div className="action-stack">
+              {suggestions.map((s, idx) => (
+                <div className="suggestion" key={idx}>
+                  <strong>{s.action}</strong>
+                  <p>{s.reason || (s.confidence != null ? `${(s.confidence * 100).toFixed(1)}%` : '')}</p>
+                </div>
+              ))}
+              {!suggestions.length && <p className="empty small">No suggestions available.</p>}
+            </div>
+          </Panel>
         </div>
-      </Panel>
-      <Panel title="Suggested actions" className="nested-panel">
-        <div className="action-stack">
-          {suggestions.map((s, idx) => <div className="suggestion" key={idx}><strong>{s.action}</strong><p>{s.reason || s.confidence || ''}</p></div>)}
-          {!suggestions.length && <p className="empty small">No suggestions available.</p>}
-        </div>
-      </Panel>
-      {selected.exception_flag === 'Y' && <button className="btn primary full" onClick={() => onResolve(selected)}>Resolve and capture learning</button>}
-    </aside>
+        {selected.exception_flag === 'Y' && (
+          <div className="drawer-footer">
+            {aiSuggestion && (
+              <button className="btn primary full" onClick={() => onResolve(selected, 'CONFIRM_AI_MATCH')}>Confirm AI match</button>
+            )}
+            <button className={`btn ${aiSuggestion ? 'ghost' : 'primary'} full`} onClick={() => onResolve(selected)}>Resolve and capture learning</button>
+          </div>
+        )}
+      </aside>
+    </>
   );
 }
 
@@ -666,7 +690,15 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAi
         </div>
         <span style={{ fontSize: '0.8rem', color: 'var(--muted, #888)' }}>{countLabel}</span>
       </div>
-      <EvidenceDrawer selected={selected} onClose={() => setSelected(null)} onResolve={setSelected} />
+      <EvidenceDrawer
+        selected={selected}
+        onClose={() => setSelected(null)}
+        onResolve={setSelected}
+        rows={results.items || []}
+        selectedIndex={(results.items || []).findIndex(r => r.result_id === selected?.result_id)}
+        onPrev={() => { const idx = (results.items || []).findIndex(r => r.result_id === selected?.result_id); if (idx > 0) setSelected(results.items[idx - 1]); }}
+        onNext={() => { const idx = (results.items || []).findIndex(r => r.result_id === selected?.result_id); if (idx < (results.items || []).length - 1) setSelected(results.items[idx + 1]); }}
+      />
     </section>
   );
 }
