@@ -1,15 +1,19 @@
 """
 ai_triage.py — Pass 2 AI residual triage.
 
-Tier 2b: deterministic pre-filter + sentence-transformer embedding similarity.
+Tier 2b: deterministic pre-filter + embedding similarity (local SentenceTransformer
+or OpenRouter API, toggled via EMBEDDING_PROVIDER env var).
 Returns up to Top 5 candidate CAMT matches per unmatched PSR.
 Tier 2c (LLM adjudication) is implemented in a separate function in this module.
 """
 from __future__ import annotations
 
-from typing import Dict, List, Optional
+import logging
+from typing import Any, Dict, List, Optional
 from .config import settings
-from .db import get_conn, rows_to_dicts
+from .db import get_conn, json_dumps, rows_to_dicts
+
+logger = logging.getLogger(__name__)
 
 # Lazy-load the model so import is fast and tests don't download the model
 _model = None
@@ -23,6 +27,56 @@ def _get_model():
         os.environ.setdefault("HF_HUB_DISABLE_SSL_VERIFICATION", "1")
         _model = SentenceTransformer("all-MiniLM-L6-v2")
     return _model
+
+
+def _get_openrouter_embeddings(texts: List[str]) -> Any:
+    """
+    Fetch embeddings from OpenRouter in a single batch call.
+    Returns an L2-normalised float32 numpy array of shape (len(texts), dim),
+    so cosine similarity = dot product — identical contract to the local path.
+    """
+    import numpy as np
+    from openai import OpenAI
+
+    api_key = _openrouter_api_key()
+    client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+    response = client.embeddings.create(
+        model=settings.embedding_model_openrouter,
+        input=texts,
+        encoding_format="float",
+    )
+    # response.data is ordered by index
+    vecs = np.array([item.embedding for item in response.data], dtype=np.float32)
+    norms = np.linalg.norm(vecs, axis=1, keepdims=True)
+    norms = np.where(norms == 0, 1.0, norms)
+    return vecs / norms
+
+
+def _openrouter_api_key() -> str:
+    import os
+    key = os.getenv("OPENROUTER_API_KEY", "")
+    return key
+
+
+def _encode(texts: List[str]) -> Any:
+    """
+    Encode texts to normalised embedding vectors.
+
+    Dispatches based on EMBEDDING_PROVIDER setting:
+      "openrouter" + OPENROUTER_API_KEY set  → OpenRouter batch API call
+      "openrouter" + key missing             → warning, falls back to local
+      "local" (default)                      → local SentenceTransformer
+    """
+    if settings.embedding_provider == "openrouter":
+        if _openrouter_api_key():
+            logger.debug("Embedding via OpenRouter (%s)", settings.embedding_model_openrouter)
+            return _get_openrouter_embeddings(texts)
+        logger.warning(
+            "EMBEDDING_PROVIDER=openrouter but OPENROUTER_API_KEY is not set "
+            "— falling back to local SentenceTransformer."
+        )
+    logger.debug("Embedding via local SentenceTransformer (all-MiniLM-L6-v2)")
+    return _get_model().encode(texts, normalize_embeddings=True)
 
 
 def _psr_text(row: Dict) -> str:
@@ -137,7 +191,6 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
     if not psr_rows or not unmatched_camt:
         return []
 
-    model = _get_model()
     candidates = []
 
     for psr in psr_rows:
@@ -154,7 +207,7 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
             continue
 
         all_texts = [psr_txt] + camt_texts
-        embeddings = model.encode(all_texts, normalize_embeddings=True)
+        embeddings = _encode(all_texts)
         psr_vec = embeddings[0]
         camt_vecs = embeddings[1:]
 
@@ -176,13 +229,68 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
                 "zone": zone,
                 "psr_text": psr_txt,
                 "camt_text": _camt_text(camt),
+                # Identity & financial fields — already in memory, zero extra DB cost
                 "psr_amount": psr.get("amount"),
-                "camt_amount": camt.get("amount"),
                 "psr_direction": psr.get("direction"),
+                "psr_reference": psr.get("reference"),
+                "psr_invoice": psr.get("invoice"),
+                "psr_counterparty": psr.get("counterparty"),
+                "psr_currency": psr.get("currency"),
+                "psr_execution_date": psr.get("execution_date"),
+                "camt_amount": camt.get("amount"),
                 "camt_direction": camt.get("direction"),
+                "camt_booking_date": camt.get("booking_date"),
+                "camt_invoice": camt.get("invoice"),
+                "camt_pmt_ref": camt.get("pmt_ref"),
+                "camt_counterparty": camt.get("counterparty"),
+                "camt_currency": camt.get("currency"),
+                "camt_remittance": camt.get("remittance"),
             })
 
     return candidates
+
+
+def build_ai_snapshot(c: Dict, conf: int, rule: str) -> Dict:
+    """
+    Build a feature_snapshot dict for a Tier 2b AI triage case.
+    All inputs come from the enriched candidate dict returned by run_tier2b().
+    """
+    psr_dir = (c.get("psr_direction") or "").upper()
+    camt_dir = (c.get("camt_direction") or "").upper()
+    dir_match = bool(psr_dir and camt_dir and psr_dir == camt_dir)
+    try:
+        psr_amt = float(c.get("psr_amount") or 0)
+        camt_amt = float(c.get("camt_amount") or 0)
+        amt_diff = abs(psr_amt - camt_amt)
+        amt_match = amt_diff <= settings.minor_variance_tolerance
+    except (TypeError, ValueError):
+        psr_amt = camt_amt = amt_diff = 0.0
+        amt_match = False
+    cosine = c.get("cosine_score", 0.0)
+    zone = c.get("zone", "maybe")
+    components = [
+        {"component": "Direction", "passed": dir_match, "weight": 25,
+         "evidence": f"PSR: {psr_dir or '-'} | CAMT: {camt_dir or '-'}"},
+        {"component": "Amount", "passed": amt_match, "weight": 30,
+         "evidence": f"PSR: {psr_amt} | CAMT: {camt_amt} | \u0394{amt_diff:.2f}"},
+        {"component": "Text similarity", "passed": zone == "clear", "weight": 45,
+         "evidence": f"Cosine {cosine:.4f} \u2014 {zone} zone (\u22650.85=clear, 0.60\u20130.84=maybe)"},
+    ]
+    passed_w = sum(x["weight"] for x in components if x["passed"])
+    total_w = sum(x["weight"] for x in components) or 1
+    raw_score = round((passed_w / total_w) * 100, 2)
+    return {
+        "tier": "2b_embedding",
+        "score_breakdown": {
+            "rule_applied": rule,
+            "engine_confidence": conf,
+            "raw_component_score": raw_score,
+            "components": components,
+            "matched_fields": [x["component"] for x in components if x["passed"]],
+            "failed_fields": [x["component"] for x in components if not x["passed"]],
+            "decision_basis": f"Tier 2b embedding cosine {cosine:.4f}. Component score {raw_score}%.",
+        },
+    }
 
 
 def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
@@ -221,50 +329,29 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
     for psr_id in by_psr:
         by_psr[psr_id] = sorted(by_psr[psr_id], key=lambda x: x["cosine_score"], reverse=True)[:5]
 
-    # Fetch full PSR and CAMT rows for the prompt
-    with get_conn() as conn:
-        psr_map = {
-            r["id"]: r for r in rows_to_dicts(
-                conn.execute("SELECT * FROM psr_transactions").fetchall()
-            )
-        }
-        camt_map = {
-            r["camt_id"]: r for r in rows_to_dicts(
-                conn.execute("SELECT * FROM camt_transactions").fetchall()
-            )
-        }
-
     decisions = []
 
     for psr_id, top_candidates in by_psr.items():
-        psr = psr_map.get(psr_id)
-        if not psr:
-            continue
+        # PSR fields are identical across all candidates for the same PSR
+        first = top_candidates[0]
 
-        candidate_lines = []
-        for i, c in enumerate(top_candidates, 1):
-            camt = camt_map.get(c["camt_id"])
-            if not camt:
-                continue
-            candidate_lines.append(
-                f"  {i}. ID:{camt['camt_id']} | Dir:{camt.get('direction', '')} "
-                f"| Amt:{camt.get('amount', '')} {camt.get('currency', '')} "
-                f"| Date:{camt.get('booking_date', '')} "
-                f"| Party:{camt.get('counterparty', '')} "
-                f"| Remittance:{camt.get('remittance', '')}"
-            )
-
-        if not candidate_lines:
-            continue
+        candidate_lines = [
+            f"  {i}. ID:{c['camt_id']} | Dir:{c.get('camt_direction', '')} "
+            f"| Amt:{c.get('camt_amount', '')} {c.get('camt_currency', '')} "
+            f"| Date:{c.get('camt_booking_date', '')} "
+            f"| Party:{c.get('camt_counterparty', '')} "
+            f"| Remittance:{c.get('camt_remittance', '')}"
+            for i, c in enumerate(top_candidates, 1)
+        ]
 
         prompt = (
             "You are a cash reconciliation analyst. One internal PSR payment record is unmatched.\n"
             "Review the candidate bank (CAMT) entries below and identify the best match.\n\n"
             f"PSR:\n"
-            f"  ID: {psr['id']} | Direction: {psr.get('direction', '')} "
-            f"| Amount: {psr.get('amount', '')} {psr.get('currency', '')}\n"
-            f"  Date: {psr.get('execution_date', '')} | Reference: {psr.get('reference', '')}\n"
-            f"  Invoice: {psr.get('invoice', '')} | Counterparty: {psr.get('counterparty', '')}\n\n"
+            f"  ID: {psr_id} | Direction: {first.get('psr_direction', '')} "
+            f"| Amount: {first.get('psr_amount', '')} {first.get('psr_currency', '')}\n"
+            f"  Date: {first.get('psr_execution_date', '')} | Reference: {first.get('psr_reference', '')}\n"
+            f"  Invoice: {first.get('psr_invoice', '')} | Counterparty: {first.get('psr_counterparty', '')}\n\n"
             "CAMT Candidates (pre-filtered by amount/date/direction):\n"
             + "\n".join(candidate_lines)
             + "\n\nReturn valid JSON matching this schema exactly:\n"
@@ -306,16 +393,67 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
         reason_text = result.get("reason", "")
         matched_camt = result.get("matched_camt_id")
 
+        # Build updated suggestions reflecting the LLM decision
+        llm_suggestions = json_dumps([{
+            "action": result.get("suggested_action", "ROUTE_TO_ANALYST"),
+            "confidence": round(conf / 100.0, 4),
+            "tier": "2c_llm",
+            "reason": reason_text,
+            "camt_id": matched_camt,
+        }])
+
+        # Build a feature snapshot with LLM-specific evidence components
+        llm_action = result.get("suggested_action", "ROUTE_TO_ANALYST")
+        llm_components = [
+            {"component": "LLM adjudication", "passed": llm_action == "CONFIRM_AI_MATCH",
+             "weight": 60, "evidence": reason_text or "LLM assessed the match."},
+            {"component": "Confidence threshold", "passed": conf >= 50,
+             "weight": 40, "evidence": f"LLM confidence: {conf}%"},
+        ]
+        passed_w = sum(x["weight"] for x in llm_components if x["passed"])
+        total_w = sum(x["weight"] for x in llm_components) or 1
+        llm_raw_score = round((passed_w / total_w) * 100, 2)
+        llm_snapshot = json_dumps({
+            "tier": "2c_llm",
+            "score_breakdown": {
+                "rule_applied": rule,
+                "engine_confidence": conf,
+                "raw_component_score": llm_raw_score,
+                "components": llm_components,
+                "matched_fields": [x["component"] for x in llm_components if x["passed"]],
+                "failed_fields": [x["component"] for x in llm_components if not x["passed"]],
+                "decision_basis": f"Tier 2c LLM: {rule}. Confidence {conf}%. {reason_text}",
+            },
+        })
+
         with get_conn() as conn:
-            conn.execute(
-                """UPDATE recon_cases
-                   SET reconciliation_status=?, match_confidence=?, rule_applied=?,
-                       explanation=?, camt_id=COALESCE(?, camt_id),
-                       updated_at=CURRENT_TIMESTAMP
-                   WHERE psr_id=?
-                     AND reconciliation_status='AI - Analyst Adjudication Required'""",
-                (new_status, conf, rule, reason_text, matched_camt, psr_id)
-            )
+            if result.get("suggested_action") == "NO_MATCH":
+                # LLM rejected the candidate — sever the CAMT link entirely so
+                # bank_amount and variance are no longer shown in the UI.
+                conn.execute(
+                    """UPDATE recon_cases
+                       SET reconciliation_status=?, match_confidence=?, rule_applied=?,
+                           explanation=?,
+                           camt_id=NULL, bank_amount=NULL, variance=NULL,
+                           suggestions_json=?, feature_snapshot_json=?,
+                           updated_at=CURRENT_TIMESTAMP
+                       WHERE psr_id=?
+                         AND reconciliation_status='AI - Analyst Adjudication Required'""",
+                    (new_status, conf, rule, reason_text,
+                     llm_suggestions, llm_snapshot, psr_id)
+                )
+            else:
+                conn.execute(
+                    """UPDATE recon_cases
+                       SET reconciliation_status=?, match_confidence=?, rule_applied=?,
+                           explanation=?, camt_id=COALESCE(?, camt_id),
+                           suggestions_json=?, feature_snapshot_json=?,
+                           updated_at=CURRENT_TIMESTAMP
+                       WHERE psr_id=?
+                         AND reconciliation_status='AI - Analyst Adjudication Required'""",
+                    (new_status, conf, rule, reason_text, matched_camt,
+                     llm_suggestions, llm_snapshot, psr_id)
+                )
             conn.commit()
 
     return decisions

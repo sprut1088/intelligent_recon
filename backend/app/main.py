@@ -12,7 +12,7 @@ from .quality import get_quality_report, validate_batch
 from .workflow import get_exception_workflow, list_exception_workflow, mark_workflow_resolved, update_exception_workflow
 from .workspace import create_snapshot, export_reconciliation_results, get_dashboard_model, get_data_preview, get_no_code_rules, get_workspace_overview, get_workflow_rules, list_submissions, predict_match_fields
 from .schemas import CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
-from .ai_triage import run_tier2b, run_tier2c
+from .ai_triage import build_ai_snapshot, run_tier2b, run_tier2c
 
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
@@ -84,17 +84,46 @@ def load_sample(request: ReconcileRunRequest = ReconcileRunRequest()) -> dict:
 def run_reconcile() -> dict:
     return rerun_reconciliation_only()
 
+
+
+_ZONE_CFG = {
+    "clear": {
+        "prefix": "AI",
+        "status": "AI-Assisted Suggested Match",
+        "reason_code": "AI_EMBEDDING_MATCH",
+        "suggestion_action": "CONFIRM_AI_MATCH",
+        "tier_label": "2b",
+    },
+    "maybe": {
+        "prefix": "AI-MAYBE",
+        "status": "AI - Analyst Adjudication Required",
+        "reason_code": "AI_MAYBE_ZONE",
+        "suggestion_action": "ROUTE_TO_ANALYST",
+        "tier_label": "2b_maybe",
+    },
+}
+
+_AI_CASE_INSERT_SQL = """
+INSERT OR REPLACE INTO recon_cases
+   (case_id, psr_id, camt_id, reconciliation_status, reason_code,
+    match_type, match_confidence, rule_applied, exception_flag,
+    explanation, suggestions_json, feature_snapshot_json,
+    reference, invoice, counterparty, internal_amount, bank_amount,
+    variance, currency, value_date, booking_date,
+    created_at, updated_at)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+        CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
+"""
+
+
 @app.post("/api/reconcile/ai-triage")
 def run_ai_triage() -> dict:
     """
     Pass 2 AI residual triage.
     Tier 2b: embedding similarity on unmatched PSR pool.
-    Stores AI_SUGGESTED cases in recon_cases.
-    Tier 2c (LLM adjudication) runs automatically for 'maybe' zone records
-    once TASK-04 is implemented.
+    Stores AI cases in recon_cases then hands 'maybe' zone records to Tier 2c.
     """
     candidates = run_tier2b()
-
     clear = [c for c in candidates if c["zone"] == "clear"]
     maybe = [c for c in candidates if c["zone"] == "maybe"]
 
@@ -106,66 +135,45 @@ def run_ai_triage() -> dict:
         # NO_MATCH decisions — those ghost rows must be cleaned up too.
         conn.execute("DELETE FROM recon_cases WHERE case_id LIKE 'AI%'")
 
-        for c in clear:
-            case_id = f"AI-{c['psr_id']}-{c['camt_id']}"
+        for c in candidates:
+            zone = c["zone"]
+            cfg = _ZONE_CFG[zone]
+            case_id = f"{cfg['prefix']}-{c['psr_id']}-{c['camt_id']}"
             conf = int(c["cosine_score"] * 100)
-            conn.execute(
-                """INSERT OR REPLACE INTO recon_cases
-                   (case_id, psr_id, camt_id, reconciliation_status, reason_code,
-                    match_type, match_confidence, rule_applied, exception_flag,
-                    explanation, suggestions_json, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
-                (
-                    case_id,
-                    c["psr_id"],
-                    c["camt_id"],
-                    "AI-Assisted Suggested Match",
-                    "AI_EMBEDDING_MATCH",
-                    "1_TO_1",
-                    conf,
-                    "TIER2B_EMBEDDING",
-                    "Y",
-                    f"Embedding cosine similarity {c['cosine_score']:.4f}. "
-                    f"PSR text: '{c['psr_text']}'. CAMT text: '{c['camt_text']}'.",
-                    json_dumps([{
-                        "action": "CONFIRM_AI_MATCH",
-                        "confidence": c["cosine_score"],
-                        "tier": "2b",
-                        "camt_id": c["camt_id"],
-                    }]),
-                )
+            internal_amt = c.get("psr_amount")
+            bank_amt = c.get("camt_amount")
+            variance = (
+                round(float(internal_amt) - float(bank_amt), 2)
+                if internal_amt is not None and bank_amt is not None
+                else None
             )
-            inserted += 1
-
-        for c in maybe:
-            case_id = f"AI-MAYBE-{c['psr_id']}-{c['camt_id']}"
-            conf = int(c["cosine_score"] * 100)
-            conn.execute(
-                """INSERT OR REPLACE INTO recon_cases
-                   (case_id, psr_id, camt_id, reconciliation_status, reason_code,
-                    match_type, match_confidence, rule_applied, exception_flag,
-                    explanation, suggestions_json, created_at, updated_at)
-                   VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)""",
-                (
-                    case_id,
-                    c["psr_id"],
-                    c["camt_id"],
-                    "AI - Analyst Adjudication Required",
-                    "AI_MAYBE_ZONE",
-                    "1_TO_1",
-                    conf,
-                    "TIER2B_EMBEDDING",
-                    "Y",
-                    f"Embedding similarity {c['cosine_score']:.4f} — in 'maybe' zone (0.60–0.84). "
-                    f"Awaiting LLM adjudication (Tier 2c).",
-                    json_dumps([{
-                        "action": "ROUTE_TO_ANALYST",
-                        "confidence": c["cosine_score"],
-                        "tier": "2b_maybe",
-                        "camt_id": c["camt_id"],
-                    }]),
-                )
+            explanation = (
+                f"Embedding cosine similarity {c['cosine_score']:.4f}. "
+                f"PSR text: '{c['psr_text']}'. CAMT text: '{c['camt_text']}'."
+                if zone == "clear" else
+                f"Embedding similarity {c['cosine_score']:.4f} \u2014 in 'maybe' zone (0.60\u20130.84). "
+                f"Awaiting LLM adjudication (Tier 2c)."
             )
+            conn.execute(_AI_CASE_INSERT_SQL, (
+                case_id, c["psr_id"], c["camt_id"],
+                cfg["status"], cfg["reason_code"], "1_TO_1",
+                conf, "TIER2B_EMBEDDING", "Y",
+                explanation,
+                json_dumps([{
+                    "action": cfg["suggestion_action"],
+                    "confidence": c["cosine_score"],
+                    "tier": cfg["tier_label"],
+                    "camt_id": c["camt_id"],
+                }]),
+                json_dumps(build_ai_snapshot(c, conf, "TIER2B_EMBEDDING")),
+                c.get("psr_reference") or c.get("camt_pmt_ref"),
+                c.get("psr_invoice") or c.get("camt_invoice"),
+                c.get("psr_counterparty") or c.get("camt_counterparty"),
+                internal_amt, bank_amt, variance,
+                c.get("psr_currency") or c.get("camt_currency") or "EUR",
+                c.get("psr_execution_date") or "",
+                c.get("camt_booking_date") or "",
+            ))
             inserted += 1
 
         conn.commit()
