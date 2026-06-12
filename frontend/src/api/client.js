@@ -81,9 +81,10 @@ export const api = {
   runRecon: () => request('/api/reconcile/run', { method: 'POST' }),
   aiTriage: () => request('/api/reconcile/ai-triage', { method: 'POST' }),
   summary: async () => mapSummary(await request('/api/reconcile/summary')),
-  results: async ({ limit = 100, offset = 0, exceptionOnly = false, search = '' } = {}) => {
+  results: async ({ limit = 100, offset = 0, exceptionOnly = false, search = '', status = '' } = {}) => {
     const qs = new URLSearchParams({ limit, offset, exception_only: exceptionOnly });
     if (search) qs.set('search', search);
+    if (status) qs.set('status', status);
     return mapCaseList(await request(`/api/reconcile/cases?${qs.toString()}`));
   },
   exceptions: async ({ limit = 100, offset = 0 } = {}) =>

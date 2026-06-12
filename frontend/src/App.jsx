@@ -514,10 +514,24 @@ function EvidenceDrawer({ selected, onClose, onResolve }) {
   );
 }
 
+const STATUS_OPTIONS = [
+  '',
+  'Matched & Settled (Auto-Close)',
+  'Uncleared / In-Transit Payment',
+  'AI-Assisted Suggested Match',
+  'AI - Analyst Adjudication Required',
+  'Post to Short or Over Ledger',
+  'Suggested Match - Analyst Review',
+  'Bank-only Item - Investigation',
+];
+
 function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAiTriage, loading }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
-  const runSearch = async () => refreshResults({ search, exceptionOnly });
+  const [selectedStatus, setSelectedStatus] = useState('');
+
+  const runSearch = () => refreshResults({ search, exceptionOnly, status: selectedStatus });
+
   return (
     <section className="screen">
       <div className="screen-title split">
@@ -526,12 +540,45 @@ function ResultsWorkbench({ results, selected, setSelected, refreshResults, onAi
           <h1>Matched, proposed and unresolved records</h1>
           <p>Drill into match evidence, failed fields, confidence and next-best action.</p>
         </div>
-        <div className="toolbar" style={{ flexWrap: 'nowrap' }}>
-          <input value={search} onChange={(e) => setSearch(e.target.value)} placeholder="Search PSR, CAMT, invoice, party" />
-          <label className="toggle" style={{ whiteSpace: 'nowrap' }}><input type="checkbox" checked={exceptionOnly} onChange={(e) => setExceptionOnly(e.target.checked)} /> Exceptions only</label>
-          <button className="btn secondary" onClick={runSearch}>Apply</button>
-          <span style={{ borderLeft: '1px solid var(--border)', height: '1.5rem', alignSelf: 'center' }} />
-          <button className="btn primary" disabled={loading} onClick={onAiTriage}>Run AI triage</button>
+        <div className="toolbar" style={{ flexWrap: 'nowrap', gap: '0.5rem', alignItems: 'center' }}>
+          {/* Filter group — allowed to shrink/wrap internally */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', flex: 1, minWidth: 0 }}>
+            <input
+              value={search}
+              onChange={(e) => setSearch(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && runSearch()}
+              placeholder="Search PSR, CAMT, invoice, party"
+              style={{ minWidth: '180px', flex: 1 }}
+            />
+            <select
+              value={selectedStatus}
+              onChange={(e) => {
+                const val = e.target.value;
+                setSelectedStatus(val);
+                refreshResults({ search, exceptionOnly, status: val });
+              }}
+              style={{ minWidth: '160px' }}
+            >
+              <option value="">All statuses</option>
+              {STATUS_OPTIONS.filter(Boolean).map((s) => (
+                <option key={s} value={s}>{s}</option>
+              ))}
+            </select>
+            <label className="toggle" style={{ whiteSpace: 'nowrap' }}>
+              <input
+                type="checkbox"
+                checked={exceptionOnly}
+                onChange={(e) => {
+                  const val = e.target.checked;
+                  setExceptionOnly(val);
+                  refreshResults({ search, exceptionOnly: val, status: selectedStatus });
+                }}
+              /> Exceptions only
+            </label>
+          </div>
+          {/* AI triage — always anchored to the right, never wraps */}
+          <span style={{ borderLeft: '1px solid var(--border)', height: '1.5rem', flexShrink: 0 }} />
+          <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
         </div>
       </div>
       <ResultTable rows={results.items || []} onSelect={setSelected} />
@@ -902,8 +949,8 @@ export default function App() {
 
   useEffect(() => { refresh().catch(() => {}); }, []);
 
-  const refreshResults = async ({ search = '', exceptionOnly = false } = {}) => {
-    setResults(await api.results({ limit: 150, search, exceptionOnly }));
+  const refreshResults = async ({ search = '', exceptionOnly = false, status = '' } = {}) => {
+    setResults(await api.results({ limit: 150, search, exceptionOnly, status }));
   };
 
   const uploadReconFile = async (fileType, file, batchId, batchName) => {
@@ -930,7 +977,7 @@ export default function App() {
     await safe(
       async () => {
         result = await api.aiTriage();
-        await refreshResults({ search: '', exceptionOnly: false });
+        await refreshResults({ search: '', exceptionOnly: false, status: '' });
       },
       () => {
         const suggested = (result?.clear_count ?? 0) + (result?.llm_adjudicated_count ?? 0);
