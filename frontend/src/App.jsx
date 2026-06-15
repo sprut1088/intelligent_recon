@@ -523,12 +523,54 @@ function ResultTable({ rows, onSelect }) {
   );
 }
 
+function FieldDiff({ item }) {
+  const fmt = (v) => (v == null || v === '') ? '\u2014' : String(v);
+  const mismatch = (a, b) => a != null && a !== '' && b != null && b !== '' && String(a).trim() !== String(b).trim();
+  const hasPsr = Boolean(item.psr_id);
+  const hasCamt = Boolean(item.camt_id || item.bank_amount != null);
+  const rows = [
+    { label: 'Amount',       psr: hasPsr  ? item.internal_amount  : null,  camt: hasCamt ? item.bank_amount        : null },
+    { label: 'Direction',    psr: hasPsr  ? item.psr_direction     : null,  camt: hasCamt ? item.camt_direction     : null },
+    { label: 'Date',         psr: hasPsr  ? item.value_date        : null,  camt: hasCamt ? item.booking_date       : null },
+    { label: 'Reference',    psr: hasPsr  ? item.reference         : null,  camt: hasCamt ? item.camt_pmt_ref       : null },
+    { label: 'Counterparty', psr: hasPsr  ? item.counterparty      : null,  camt: hasCamt ? item.camt_counterparty  : null },
+    { label: 'Invoice',      psr: hasPsr  ? item.invoice           : null,  camt: hasCamt ? item.camt_invoice       : null },
+    { label: 'Remittance',   psr: null,                                     camt: hasCamt ? item.camt_remittance    : null },
+  ];
+  return (
+    <div className="field-diff">
+      <div className="field-diff-header">
+        <span className="field-label"></span>
+        <span>PSR (Internal)</span>
+        <span>Bank (CAMT)</span>
+      </div>
+      {rows.map(({ label, psr, camt }) => (
+        <div key={label} className={`field-diff-row${mismatch(psr, camt) ? ' mismatch' : ''}`}>
+          <span className="field-label">{label}</span>
+          <span className="field-val">{fmt(psr)}</span>
+          <span className="field-val">{fmt(camt)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex = -1, onPrev, onNext }) {
+  const [detail, setDetail] = useState(null);
+  useEffect(() => {
+    if (!selected?.result_id) { setDetail(null); return; }
+    setDetail(null);
+    api.caseDetail(selected.result_id)
+      .then(d => setDetail(d.case))
+      .catch(() => {});
+  }, [selected?.result_id]);
   if (!selected) return null;
-  const score = selected.feature_snapshot?.score_breakdown || {};
+  const item = detail ? { ...selected, ...detail } : selected;
+  const score = item.feature_snapshot?.score_breakdown || {};
   const components = score.components || [];
-  const suggestions = selected.suggestions || [];
+  const suggestions = item.suggestions || [];
   const aiSuggestion = suggestions.find(s => s.action === 'CONFIRM_AI_MATCH');
+  const hasMatch = item.bank_amount != null || item.camt_id;
   const total = rows.length;
   return (
     <>
@@ -545,20 +587,19 @@ function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex
           <h2>{selected.result_id}</h2>
           <p>{selected.explanation}</p>
           <dl className="kv drawer-kv">
-            <dt>Status</dt><dd><Tag tone={classForStatus(selected.reconciliation_status)}>{selected.reconciliation_status}</Tag></dd>
+            <dt>Status</dt><dd><Tag tone={classForStatus(item.reconciliation_status)}>{item.reconciliation_status}</Tag></dd>
             <dt>Rule applied</dt><dd>
-              {ruleLabel(selected.rule_applied) || '-'}
-              {selected.rule_applied && <span className="rule-code">{selected.rule_applied}</span>}
+              {ruleLabel(item.rule_applied) || '-'}
+              {item.rule_applied && <span className="rule-code">{item.rule_applied}</span>}
             </dd>
-            <dt>Reason</dt><dd>{selected.reason_code || '-'}</dd>
-            <dt>Invoice</dt><dd>{selected.invoice || '-'}</dd>
-            <dt>Counterparty</dt><dd>{selected.counterparty || '-'}</dd>
-            {selected.variance != null && <><dt>Variance</dt><dd>{money(selected.variance)}</dd></>}
+            <dt>Reason</dt><dd>{item.reason_code || '-'}</dd>
+            {item.variance != null && <><dt>Variance</dt><dd>{money(item.variance)}</dd></>}
           </dl>
+          {hasMatch && <FieldDiff item={item} />}
           <Panel title="Why this decision?" subtitle={score.decision_basis || 'Evidence breakdown captured by the engine.'} className="nested-panel">
             <div className="score-labelled">
               <p className="score-label">Overall match confidence</p>
-              <div className="score-large"><span style={{ width: `${score.engine_confidence ?? selected.match_confidence ?? 0}%` }} /></div>
+              <div className="score-large"><span style={{ width: `${score.engine_confidence ?? item.match_confidence ?? 0}%` }} /></div>
             </div>
             <div className="evidence-list">
               {components.map((c) => (
@@ -586,12 +627,12 @@ function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex
             </div>
           </Panel>
         </div>
-        {selected.exception_flag === 'Y' && (
+        {item.exception_flag === 'Y' && (
           <div className="drawer-footer">
             {aiSuggestion && (
-              <button className="btn primary full" onClick={() => onResolve(selected, 'CONFIRM_AI_MATCH')}>Confirm AI match</button>
+              <button className="btn primary full" onClick={() => onResolve(item, 'CONFIRM_AI_MATCH')}>Confirm AI match</button>
             )}
-            <button className={`btn ${aiSuggestion ? 'ghost' : 'primary'} full`} onClick={() => onResolve(selected)}>Resolve and capture learning</button>
+            <button className={`btn ${aiSuggestion ? 'ghost' : 'primary'} full`} onClick={() => onResolve(item)}>Resolve and capture learning</button>
           </div>
         )}
       </aside>

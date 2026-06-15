@@ -94,7 +94,7 @@ TASK-19 + TASK-23 ──► TASK-25  Bulk resolution
 |---|---|---|---|---|
 | [TASK-14](TASK-14-evidence-drawer-stage1-clarity.md) | Stage 1: trust & clarity fixes | Frontend | — | ✅ Complete |
 | [TASK-15](TASK-15-backend-surface-raw-fields.md) | Backend: surface raw PSR/CAMT fields | Backend | — | ✅ Complete |
-| [TASK-16](TASK-16-evidence-drawer-field-diff.md) | Side-by-side field diff | Frontend | TASK-14, TASK-15 | 🔲 Not started |
+| [TASK-16](TASK-16-evidence-drawer-field-diff.md) | Side-by-side field diff | Frontend | TASK-14, TASK-15 | ✅ Complete |
 | [TASK-17](TASK-17-evidence-drawer-action-labels.md) | Action-oriented suggested actions | Frontend | TASK-14 | 🔲 Not started |
 | [TASK-18](TASK-18-evidence-drawer-split-cta.md) | Split resolve CTA | Frontend | TASK-16, TASK-17 | 🔲 Not started |
 | [TASK-19](TASK-19-override-reason-capture.md) | Override reason capture | Full-stack | TASK-18 | 🔲 Not started |
