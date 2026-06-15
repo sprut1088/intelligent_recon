@@ -87,6 +87,10 @@ export const api = {
     if (status) qs.set('status', status);
     return mapCaseList(await request(`/api/reconcile/cases?${qs.toString()}`));
   },
+  caseDetail: async (caseId) => {
+    const data = await request(`/api/reconcile/cases/${caseId}`);
+    return { ...data, case: mapCase(data.case || {}) };
+  },
   exceptions: async ({ limit = 100, offset = 0 } = {}) =>
     mapCaseList(await request(`/api/exceptions/workflow?limit=${limit}&offset=${offset}`)),
   updateWorkflow: (caseId, payload) => request(`/api/exceptions/${caseId}/workflow`, { method: 'PATCH', body: JSON.stringify(payload) }),
