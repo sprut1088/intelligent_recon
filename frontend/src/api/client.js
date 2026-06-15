@@ -108,6 +108,16 @@ export const api = {
       learning_eligible: payload.learning_eligible ?? true,
     }),
   }),
+  overrideResolve: (caseId, overrideReason, overrideNote) => request(`/api/reconcile/cases/${caseId}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({
+      resolution_type: 'OVERRIDE_AI',
+      reason_code: overrideReason,
+      override_reason: overrideReason,
+      override_note: overrideNote || '',
+      learning_eligible: false,
+    }),
+  }),
   patterns: async () => (await request('/api/patterns')).items || [],
   createPattern: (payload) => request('/api/patterns', { method: 'POST', body: JSON.stringify(payload) }),
 

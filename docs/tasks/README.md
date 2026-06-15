@@ -97,7 +97,7 @@ TASK-19 + TASK-23 ──► TASK-25  Bulk resolution
 | [TASK-16](TASK-16-evidence-drawer-field-diff.md) | Side-by-side field diff | Frontend | TASK-14, TASK-15 | ✅ Complete |
 | [TASK-17](TASK-17-evidence-drawer-action-labels.md) | Action-oriented suggested actions | Frontend | TASK-14 | ✅ Complete |
 | [TASK-18](TASK-18-evidence-drawer-split-cta.md) | Split resolve CTA | Frontend | TASK-16, TASK-17 | ✅ Complete |
-| [TASK-19](TASK-19-override-reason-capture.md) | Override reason capture | Full-stack | TASK-18 | 🔲 Not started |
+| [TASK-19](TASK-19-override-reason-capture.md) | Override reason capture | Full-stack | TASK-18 | ✅ Complete |
 | [TASK-20](TASK-20-evidence-drawer-similar-cases.md) | Similar resolved cases panel | Full-stack | TASK-19 | 🔲 Not started |
 | [TASK-21](TASK-21-evidence-drawer-confidence-trend.md) | Confidence trend indicator | Frontend | TASK-14 | 🔲 Not started |
 | [TASK-22](TASK-22-evidence-drawer-source-links.md) | Direct links to source records | Frontend | TASK-15 | 🔲 Not started |

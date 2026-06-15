@@ -12,6 +12,8 @@ class CaseResolveRequest(BaseModel):
     comment: Optional[str] = None
     final_user_confidence: str = "confirmed"
     learning_eligible: bool = True
+    override_reason: Optional[str] = None
+    override_note: Optional[str] = None
 
 class UserEventRequest(BaseModel):
     event_type: str
