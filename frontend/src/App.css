@@ -184,7 +184,12 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .field-diff-row.mismatch { background: #fffbeb; border-left: 3px solid #f59e0b; }
 .field-label { color: var(--muted); font-size: 0.78rem; }
 .field-val { color: #111827; word-break: break-word; }
-.suggestion strong { display: block; }
+.suggestion strong { display: block; margin-bottom: 4px; }
+.suggestion-desc { font-size: 12px; color: var(--muted); margin: 0 0 4px; }
+.suggestion-conf { font-size: 12px; font-weight: 700; color: var(--muted); margin: 0; }
+.suggestion-confirm { border-left: 3px solid var(--success); }
+.suggestion-analyst { border-left: 3px solid var(--warning); }
+.suggestion-nomatch { border-left: 3px solid var(--danger); }
 .workflow-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .workflow-card ul { margin: 10px 0 0 18px; padding: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }
 .exception-table table { min-width: 1320px; }
