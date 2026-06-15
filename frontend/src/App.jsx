@@ -557,9 +557,11 @@ function FieldDiff({ item }) {
 
 function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex = -1, onPrev, onNext }) {
   const [detail, setDetail] = useState(null);
+  const [overrideMode, setOverrideMode] = useState(false);
   useEffect(() => {
-    if (!selected?.result_id) { setDetail(null); return; }
+    if (!selected?.result_id) { setDetail(null); setOverrideMode(false); return; }
     setDetail(null);
+    setOverrideMode(false);
     api.caseDetail(selected.result_id)
       .then(d => setDetail(d.case))
       .catch(() => {});
@@ -569,7 +571,6 @@ function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex
   const score = item.feature_snapshot?.score_breakdown || {};
   const components = score.components || [];
   const suggestions = item.suggestions || [];
-  const aiSuggestion = suggestions.find(s => s.action === 'CONFIRM_AI_MATCH');
   const hasMatch = item.bank_amount != null || item.camt_id;
   const total = rows.length;
   return (
@@ -634,10 +635,19 @@ function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex
         </div>
         {item.exception_flag === 'Y' && (
           <div className="drawer-footer">
-            {aiSuggestion && (
-              <button className="btn primary full" onClick={() => onResolve(item, 'CONFIRM_AI_MATCH')}>Confirm AI match</button>
+            {!overrideMode ? (
+              <>
+                <button className="btn primary full" onClick={() => onResolve(item)}>Confirm Resolution</button>
+                {item.rule_applied?.startsWith('TIER2') && (
+                  <button className="btn secondary full" onClick={() => setOverrideMode(true)}>Override AI</button>
+                )}
+              </>
+            ) : (
+              <div className="override-panel">
+                <p className="override-hint">Select a reason to complete this override — coming shortly.</p>
+                <button className="btn link" onClick={() => setOverrideMode(false)}>← Back</button>
+              </div>
             )}
-            <button className={`btn ${aiSuggestion ? 'ghost' : 'primary'} full`} onClick={() => onResolve(item)}>Resolve and capture learning</button>
           </div>
         )}
       </aside>
