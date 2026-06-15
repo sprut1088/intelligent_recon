@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import logging
 import re
 import shutil
 import uuid
@@ -10,6 +11,8 @@ from pathlib import Path
 from typing import Dict, Optional
 
 from fastapi import UploadFile
+
+logger = logging.getLogger(__name__)
 
 from .config import settings
 from .db import get_conn, json_dumps, row_to_dict, rows_to_dicts, set_meta
@@ -64,6 +67,7 @@ def store_uploaded_file(
     file_type = (file_type or "").upper().strip()
     if file_type not in {"PSR", "CAMT"}:
         raise ValueError("file_type must be PSR or CAMT")
+    logger.info("Storing uploaded file: type=%s batch_id=%s filename=%s", file_type, batch_id, upload.filename)
 
     if not batch_id:
         batch_id = create_batch(batch_name=batch_name, created_by=created_by)["batch_id"]

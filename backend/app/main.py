@@ -1,8 +1,11 @@
 from __future__ import annotations
+import logging
+import time
 import uuid
 from typing import Optional
-from fastapi import FastAPI, File, Form, HTTPException, Query, UploadFile
+from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from .config import settings
 from .db import get_conn, init_db, json_dumps, row_to_dict, rows_to_dicts
 from .learning import approve_candidate, run_learning, seed_demo_learning_signals
@@ -14,16 +17,49 @@ from .workspace import create_snapshot, export_reconciliation_results, get_dashb
 from .schemas import CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
 from .ai_triage import build_ai_snapshot, run_tier2b, run_tier2c
 
+# Module-level logger — format applied in startup() after uvicorn finishes its own logging setup
+logger = logging.getLogger(__name__)
+
 app = FastAPI(title=settings.app_name, version=settings.app_version)
 app.add_middleware(CORSMiddleware, allow_origins=["*"], allow_credentials=True, allow_methods=["*"], allow_headers=["*"])
 
+
+@app.middleware("http")
+async def _access_and_exception_log(request: Request, call_next):
+    """Log every request with method, path, status, and duration.
+    Any unhandled exception is logged with a full traceback before re-raising."""
+    start = time.perf_counter()
+    try:
+        response = await call_next(request)
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.info("%s %s — %s (%.0fms)", request.method, request.url.path, response.status_code, duration_ms)
+        return response
+    except Exception:
+        duration_ms = (time.perf_counter() - start) * 1000
+        logger.exception("Unhandled exception in %s %s (%.0fms)", request.method, request.url.path, duration_ms)
+        return JSONResponse(status_code=500, content={"detail": "Internal server error"})
+
 @app.on_event("startup")
 def startup() -> None:
+    # Re-apply our logging format here — uvicorn's dictConfig runs before this
+    # event fires, so force=True will win and persist for the life of the process.
+    logging.basicConfig(
+        level=logging.INFO,
+        format="[%(asctime)s] %(levelname)-8s %(name)s — %(message)s",
+        datefmt="%Y-%m-%d %H:%M:%S",
+        force=True,
+    )
+    logging.getLogger("uvicorn.access").setLevel(logging.WARNING)
+    logging.getLogger("watchfiles").setLevel(logging.WARNING)
     init_db()
     with get_conn() as conn:
         existing = conn.execute("SELECT COUNT(*) AS cnt FROM recon_cases").fetchone()["cnt"]
     if existing == 0:
+        logger.info("No existing cases — loading sample data...")
         load_samples_and_reconcile(reset=True)
+        with get_conn() as conn:
+            existing = conn.execute("SELECT COUNT(*) AS cnt FROM recon_cases").fetchone()["cnt"]
+    logger.info("Startup complete. DB ready. recon_cases=%d", existing)
 
 @app.get("/health")
 def health() -> dict:
@@ -123,9 +159,11 @@ def run_ai_triage() -> dict:
     Tier 2b: embedding similarity on unmatched PSR pool.
     Stores AI cases in recon_cases then hands 'maybe' zone records to Tier 2c.
     """
+    logger.info("AI triage requested")
     candidates = run_tier2b()
     clear = [c for c in candidates if c["zone"] == "clear"]
     maybe = [c for c in candidates if c["zone"] == "maybe"]
+    logger.info("Tier 2b complete: %d total candidates (%d clear, %d maybe)", len(candidates), len(clear), len(maybe))
 
     inserted = 0
     with get_conn() as conn:
@@ -179,6 +217,10 @@ def run_ai_triage() -> dict:
         conn.commit()
 
     llm_decisions = run_tier2c(maybe)
+    logger.info(
+        "AI triage complete: inserted=%d clear=%d maybe=%d llm_adjudicated=%d",
+        inserted, len(clear), len(maybe), len(llm_decisions),
+    )
 
     return {
         "status": "ok",

@@ -67,15 +67,41 @@ def _encode(texts: List[str]) -> Any:
       "openrouter" + key missing             → warning, falls back to local
       "local" (default)                      → local SentenceTransformer
     """
-    if settings.embedding_provider == "openrouter":
-        if _openrouter_api_key():
-            logger.debug("Embedding via OpenRouter (%s)", settings.embedding_model_openrouter)
-            return _get_openrouter_embeddings(texts)
+    provider = settings.embedding_provider
+    logger.info("Embedding provider configured: '%s'", provider)
+
+    if provider == "openrouter":
+        api_key = _openrouter_api_key()
+        if api_key:
+            logger.info(
+                "Using OpenRouter embeddings: model=%s, texts=%d",
+                settings.embedding_model_openrouter, len(texts),
+            )
+            try:
+                result = _get_openrouter_embeddings(texts)
+                logger.info("OpenRouter embedding succeeded: returned %d vectors", len(result))
+                return result
+            except Exception as exc:
+                logger.error(
+                    "OpenRouter embedding failed: %s: %s — check OPENROUTER_API_KEY, "
+                    "model availability and account data-policy settings at "
+                    "https://openrouter.ai/settings/privacy",
+                    type(exc).__name__, exc,
+                )
+                raise
+        else:
+            logger.warning(
+                "EMBEDDING_PROVIDER=openrouter but OPENROUTER_API_KEY is not set "
+                "— falling back to local SentenceTransformer (all-MiniLM-L6-v2). "
+                "Set OPENROUTER_API_KEY in .env to use online embeddings."
+            )
+    elif provider != "local":
         logger.warning(
-            "EMBEDDING_PROVIDER=openrouter but OPENROUTER_API_KEY is not set "
-            "— falling back to local SentenceTransformer."
+            "Unknown EMBEDDING_PROVIDER='%s' — expected 'local' or 'openrouter'. "
+            "Falling back to local SentenceTransformer.", provider,
         )
-    logger.debug("Embedding via local SentenceTransformer (all-MiniLM-L6-v2)")
+
+    logger.info("Using local SentenceTransformer (all-MiniLM-L6-v2), texts=%d", len(texts))
     return _get_model().encode(texts, normalize_embeddings=True)
 
 
@@ -151,6 +177,8 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
     """
     import numpy as np
 
+    logger.info("Tier 2b started (unmatched_psr_ids=%s)", "all" if unmatched_psr_ids is None else len(unmatched_psr_ids))
+
     with get_conn() as conn:
         if unmatched_psr_ids:
             placeholders = ",".join("?" * len(unmatched_psr_ids))
@@ -187,6 +215,8 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
         }
         all_camt = rows_to_dicts(conn.execute("SELECT * FROM camt_transactions").fetchall())
         unmatched_camt = [c for c in all_camt if c.get("camt_id") not in matched_camt_ids]
+
+    logger.info("Tier 2b pool: %d unmatched PSR, %d unmatched CAMT", len(psr_rows), len(unmatched_camt))
 
     if not psr_rows or not unmatched_camt:
         return []
@@ -247,6 +277,9 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
                 "camt_remittance": camt.get("remittance"),
             })
 
+    clear_n = sum(1 for c in candidates if c["zone"] == "clear")
+    maybe_n = sum(1 for c in candidates if c["zone"] == "maybe")
+    logger.info("Tier 2b done: %d candidates (%d clear, %d maybe)", len(candidates), clear_n, maybe_n)
     return candidates
 
 

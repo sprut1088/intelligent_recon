@@ -1,10 +1,13 @@
 from __future__ import annotations
+import logging
 from dataclasses import dataclass, asdict
 from pathlib import Path
 from typing import Dict, Iterable, List, Optional
 import re
 import xml.etree.ElementTree as ET
 from .config import settings
+
+logger = logging.getLogger(__name__)
 
 PMT_REF_RE = re.compile(r"PMT-REF-\d+", re.IGNORECASE)
 INVOICE_RE = re.compile(r"INV[-\s]?\d{4}[-\s]?\d+|INV[-\s]?\d+", re.IGNORECASE)
@@ -72,6 +75,7 @@ def parse_yyyymmdd(value: str) -> str:
     return f"{value[0:4]}-{value[4:6]}-{value[6:8]}" if len(value) == 8 and value.isdigit() else value
 
 def parse_psr_file(path: Path, amount_divisor: Optional[float] = None) -> tuple[Optional[PsrHeader], List[PsrTransaction]]:
+    logger.info("Parsing PSR file: %s (divisor=%s)", path, amount_divisor)
     divisor = settings.psr_amount_divisor if amount_divisor is None else amount_divisor
     header: Optional[PsrHeader] = None
     transactions: List[PsrTransaction] = []
@@ -118,7 +122,10 @@ def parse_psr_file(path: Path, amount_divisor: Optional[float] = None) -> tuple[
                 id=txn_id, execution_date=execution_date, reference=reference, amount=float(amount),
                 direction=direction, invoice=invoice, counterparty=counterparty,
                 currency=currency, source_line=line_no, raw_line=line))
+    logger.info("PSR parse complete: %d transactions", len(transactions))
     return header, transactions
+
+
 
 def _first_text_by_local_name(parent: ET.Element, local_name: str) -> str:
     for item in parent.iter():
@@ -138,6 +145,7 @@ def _children_by_local_name(parent: ET.Element, local_name: str) -> Iterable[ET.
             yield item
 
 def parse_camt_file(path: Path) -> List[CamtTransaction]:
+    logger.info("Parsing CAMT file: %s", path)
     root = ET.parse(path).getroot()
     entries = [node for node in root.iter() if node.tag.split("}")[-1] == "Ntry"]
     transactions: List[CamtTransaction] = []
@@ -158,6 +166,7 @@ def parse_camt_file(path: Path) -> List[CamtTransaction]:
         ntry_id = ntry_ref or f"NTRY-{idx}"
         camt_id = end_to_end_id or ntry_id
         transactions.append(CamtTransaction(ntry_id, camt_id, end_to_end_id, amount, direction, booking_date, booking_date, currency, remittance, counterparty, pmt_ref, invoice, {"ntry_id": ntry_id, "camt_id": camt_id, "end_to_end_id": end_to_end_id, "remittance": remittance, "counterparty": counterparty}))
+    logger.info("CAMT parse complete: %d transactions", len(transactions))
     return transactions
 
 def dataclass_to_dict(item):

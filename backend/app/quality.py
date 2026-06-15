@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import uuid
 from collections import Counter
 from pathlib import Path
@@ -9,6 +10,8 @@ from .config import settings
 from .db import get_conn, json_dumps, rows_to_dicts
 from .ingestion import get_batch
 from .parsers import parse_camt_file, parse_psr_file
+
+logger = logging.getLogger(__name__)
 
 
 def _issue_id() -> str:
@@ -124,6 +127,7 @@ def _profile_camt(batch_id: str, file_info: Dict) -> tuple[Dict, List[Dict]]:
 
 
 def validate_batch(batch_id: str) -> Dict:
+    logger.info("Validating batch %s", batch_id)
     batch = get_batch(batch_id)
     files = batch.get("files", [])
     if not files:
@@ -170,6 +174,7 @@ def validate_batch(batch_id: str) -> Dict:
         conn.execute("UPDATE file_ingestion_batch SET status=?, updated_at=CURRENT_TIMESTAMP WHERE batch_id=?", (status, batch_id))
         conn.commit()
 
+    logger.info("validate_batch %s done: errors=%d warnings=%d", batch_id, errors, warnings)
     return get_quality_report(batch_id)
 
 
