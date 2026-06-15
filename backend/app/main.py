@@ -312,12 +312,13 @@ def get_case(case_id: str) -> dict:
             if psr_row:
                 case_dict["psr_direction"] = psr_row["direction"]
         if camt_id:
-            camt_row = conn.execute("SELECT direction, remittance, pmt_ref, invoice FROM camt_transactions WHERE camt_id = ?", (camt_id,)).fetchone()
+            camt_row = conn.execute("SELECT direction, remittance, pmt_ref, invoice, counterparty FROM camt_transactions WHERE camt_id = ?", (camt_id,)).fetchone()
             if camt_row:
                 case_dict["camt_direction"] = camt_row["direction"]
                 case_dict["camt_remittance"] = camt_row["remittance"]
                 case_dict["camt_pmt_ref"] = camt_row["pmt_ref"]
                 case_dict["camt_invoice"] = camt_row["invoice"]
+                case_dict["camt_counterparty"] = camt_row["counterparty"]
     return {"case": case_dict, "events": events, "manual_resolutions": resolutions}
 
 
