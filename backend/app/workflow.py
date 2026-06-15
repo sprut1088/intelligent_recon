@@ -1,10 +1,13 @@
 from __future__ import annotations
 
 import json
+import logging
 from datetime import datetime, timedelta, timezone
 from typing import Dict, Optional
 
 from .db import get_conn, json_dumps, row_to_dict, rows_to_dicts
+
+logger = logging.getLogger(__name__)
 
 
 def _utc_now() -> datetime:
@@ -67,6 +70,7 @@ def sync_exception_workflow(conn=None) -> int:
         inserted = conn.total_changes - before
         if own_conn:
             conn.commit()
+        logger.info("sync_exception_workflow: inserted %d new workflow rows", inserted)
         return inserted
     finally:
         if own_conn:

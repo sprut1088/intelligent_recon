@@ -1,9 +1,12 @@
 from __future__ import annotations
+import logging
 from collections import defaultdict
 from typing import Dict, List
 import json, uuid
 from .config import settings
 from .db import get_conn, json_dumps, rows_to_dicts
+
+logger = logging.getLogger(__name__)
 
 def pattern_name_for(reason_code: str, fields_used: List[str]) -> str:
     if reason_code == "REMITTANCE_FORMAT_MISMATCH" or "invoice_suffix" in fields_used: return "Invoice Suffix Normalisation Match"
@@ -20,6 +23,7 @@ def proposed_rule_for(pattern_name: str, reason_code: str, fields_used: List[str
     return {"pattern_key": "PX_LEARNED_EXCEPTION_CATEGORY", "logic": ["classify future exceptions using repeated analyst reason codes"], "required_fields": fields_used or ["reason_code"], "source_reason_code": reason_code}
 
 def run_learning() -> Dict:
+    logger.info("Running pattern learning")
     with get_conn() as conn:
         rows = rows_to_dicts(conn.execute("SELECT * FROM recon_manual_resolution WHERE learning_eligible = 1 AND reversed_flag = 0").fetchall())
         grouped: Dict[str, List[Dict]] = defaultdict(list)
@@ -38,9 +42,11 @@ def run_learning() -> Dict:
                 cid=f"CAND-{uuid.uuid4().hex[:10].upper()}"; conn.execute("INSERT INTO recon_pattern_candidate (candidate_pattern_id, pattern_name, discovered_from_reason_code, observed_case_count, backtest_precision, estimated_false_positive_rate, proposed_rule_json, status) VALUES (?, ?, ?, ?, ?, ?, ?, 'CANDIDATE')", (cid, pattern_name, reason_code, support, backtest_precision, false_positive, json_dumps(rule)))
             created_or_updated.append({"candidate_pattern_id": cid, "pattern_name": pattern_name, "observed_case_count": support, "backtest_precision": backtest_precision, "status": "CANDIDATE"})
         conn.commit(); candidates=rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_candidate ORDER BY created_at DESC").fetchall())
+    logger.info("Learning complete: analysed=%d, created_or_updated=%d", len(rows), len(created_or_updated))
     return {"analysed_manual_resolutions": len(rows), "candidates": candidates, "created_or_updated": created_or_updated}
 
 def approve_candidate(candidate_id: str, approved_by: str, execution_mode: str, confidence_threshold: float) -> Dict:
+    logger.info("Approving candidate %s by %s", candidate_id, approved_by)
     with get_conn() as conn:
         cand=conn.execute("SELECT * FROM recon_pattern_candidate WHERE candidate_pattern_id=?", (candidate_id,)).fetchone()
         if not cand: raise ValueError(f"Candidate {candidate_id} not found")

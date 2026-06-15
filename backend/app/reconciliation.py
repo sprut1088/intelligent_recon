@@ -1,4 +1,5 @@
 from __future__ import annotations
+import logging
 from dataclasses import dataclass, asdict
 from datetime import date
 from rapidfuzz import fuzz as _rfuzz
@@ -6,6 +7,8 @@ from typing import Dict, List, Optional, Sequence, Tuple
 import json
 from .config import settings
 from .parsers import CamtTransaction, PsrTransaction, invoice_suffix
+
+logger = logging.getLogger(__name__)
 
 @dataclass
 class ReconCase:
@@ -135,6 +138,7 @@ def learned_invoice_suffix_match(psr: PsrTransaction, banks: Sequence[CamtTransa
     return None
 
 def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_transactions: Sequence[CamtTransaction], pattern_registry_rows: Sequence[Dict]) -> List[ReconCase]:
+    logger.info("reconcile_transactions: psr=%d camt=%d patterns=%d", len(psr_transactions), len(camt_transactions), len(pattern_registry_rows))
     cases=[]; used=set(); idx=1
     config = pattern_config(pattern_registry_rows)
     p4_threshold = float(pattern_rule_value(config, "P4", "threshold", 0.85))
@@ -180,6 +184,8 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     for bank in camt_transactions:
         if bank.ntry_id in used: continue
         cases.append(build_case(idx, None, bank, "Bank-only Item - Investigation", "BANK_ONLY_UNMATCHED", "UNMATCHED_BANK", 40, "P5_EXCEPTION_HANDLING", "Y", "Bank entry was present in CAMT but no matching expected payment was found in PSR.", [{"action":"INVESTIGATE_BANK_ONLY","confidence":0.40}])); idx+=1
+    exceptions = sum(1 for c in cases if c.exception_flag == "Y")
+    logger.info("reconcile_transactions done: %d cases, %d exceptions", len(cases), exceptions)
     return cases
 
 def case_to_db_tuple(case: ReconCase) -> tuple:
