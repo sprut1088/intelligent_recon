@@ -303,7 +303,22 @@ def get_case(case_id: str) -> dict:
         if not row: raise HTTPException(status_code=404, detail="Case not found")
         events=rows_to_dicts(conn.execute("SELECT * FROM recon_user_action_event WHERE case_id=? ORDER BY event_timestamp DESC", (case_id,)).fetchall())
         resolutions=rows_to_dicts(conn.execute("SELECT * FROM recon_manual_resolution WHERE case_id=? ORDER BY resolved_at DESC", (case_id,)).fetchall())
-    return {"case":row_to_dict(row),"events":events,"manual_resolutions":resolutions}
+        case_dict = row_to_dict(row)
+        # Augment with raw transaction fields not stored on recon_cases
+        psr_id = case_dict.get("psr_id")
+        camt_id = case_dict.get("camt_id")
+        if psr_id:
+            psr_row = conn.execute("SELECT direction FROM psr_transactions WHERE id = ?", (psr_id,)).fetchone()
+            if psr_row:
+                case_dict["psr_direction"] = psr_row["direction"]
+        if camt_id:
+            camt_row = conn.execute("SELECT direction, remittance, pmt_ref, invoice FROM camt_transactions WHERE camt_id = ?", (camt_id,)).fetchone()
+            if camt_row:
+                case_dict["camt_direction"] = camt_row["direction"]
+                case_dict["camt_remittance"] = camt_row["remittance"]
+                case_dict["camt_pmt_ref"] = camt_row["pmt_ref"]
+                case_dict["camt_invoice"] = camt_row["invoice"]
+    return {"case": case_dict, "events": events, "manual_resolutions": resolutions}
 
 
 @app.get("/api/reconcile/cases/{case_id}/explanation")
