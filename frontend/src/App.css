@@ -173,7 +173,11 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .evidence-list { display: grid; gap: 10px; }
 .evidence { display: grid; grid-template-columns: 55px 1fr 45px; gap: 8px; align-items: center; background: #fff; border: 1px solid var(--line); border-radius: 14px; padding: 10px; }
 .evidence p { grid-column: 2 / span 2; font-size: 12px; }
-.evidence > span:not(.tag) { text-align: right; font-weight: 900; color: var(--muted); }
+.evidence > span:not(.tag) { text-align: right; font-weight: 900; color: var(--muted); font-size: 11px; }
+.score-labelled { margin: 12px 0 0; }
+.score-labelled .score-large { margin: 4px 0 10px; }
+.score-label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 2px; }
+.rule-code { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; font-family: monospace; }
 .suggestion strong { display: block; }
 .workflow-grid { grid-template-columns: repeat(5, minmax(0, 1fr)); }
 .workflow-card ul { margin: 10px 0 0 18px; padding: 0; color: var(--muted); font-size: 12px; line-height: 1.5; }

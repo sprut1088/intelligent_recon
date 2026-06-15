@@ -546,20 +546,28 @@ function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex
           <p>{selected.explanation}</p>
           <dl className="kv drawer-kv">
             <dt>Status</dt><dd><Tag tone={classForStatus(selected.reconciliation_status)}>{selected.reconciliation_status}</Tag></dd>
-            <dt>Rule applied</dt><dd>{selected.rule_applied || '-'}</dd>
+            <dt>Rule applied</dt><dd>
+              {ruleLabel(selected.rule_applied) || '-'}
+              {selected.rule_applied && <span className="rule-code">{selected.rule_applied}</span>}
+            </dd>
             <dt>Reason</dt><dd>{selected.reason_code || '-'}</dd>
             <dt>Invoice</dt><dd>{selected.invoice || '-'}</dd>
             <dt>Counterparty</dt><dd>{selected.counterparty || '-'}</dd>
-            <dt>Variance</dt><dd>{money(selected.variance)}</dd>
+            {selected.variance != null && <><dt>Variance</dt><dd>{money(selected.variance)}</dd></>}
           </dl>
           <Panel title="Why this decision?" subtitle={score.decision_basis || 'Evidence breakdown captured by the engine.'} className="nested-panel">
-            <div className="score-large"><span style={{ width: `${selected.match_confidence || 0}%` }} /></div>
+            <div className="score-labelled">
+              <p className="score-label">Overall match confidence</p>
+              <div className="score-large"><span style={{ width: `${score.engine_confidence ?? selected.match_confidence ?? 0}%` }} /></div>
+            </div>
             <div className="evidence-list">
               {components.map((c) => (
                 <div className="evidence" key={c.component}>
-                  <Tag tone={c.passed ? 'success' : 'warning'}>{c.passed ? 'Pass' : 'Check'}</Tag>
+                  <Tag tone={c.passed ? 'success' : (c.weight >= 30 ? 'danger' : 'warning')}>
+                    {c.passed ? 'Pass' : (c.weight >= 30 ? 'Fail' : 'Low')}
+                  </Tag>
                   <strong>{c.component}</strong>
-                  <span>{c.weight}%</span>
+                  <span>Wt.&nbsp;{c.weight}</span>
                   <p>{c.evidence}</p>
                 </div>
               ))}
@@ -571,7 +579,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex
               {suggestions.map((s, idx) => (
                 <div className="suggestion" key={idx}>
                   <strong>{s.action}</strong>
-                  <p>{s.reason || (s.confidence != null ? `${(s.confidence * 100).toFixed(1)}%` : '')}</p>
+                  <p>{s.confidence != null ? `${(s.confidence * 100).toFixed(1)}% confidence` : ''}</p>
                 </div>
               ))}
               {!suggestions.length && <p className="empty small">No suggestions available.</p>}
@@ -590,6 +598,22 @@ function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex
     </>
   );
 }
+
+const RULE_LABELS = {
+  TIER2C_NO_MATCH: 'AI reviewed — no match found',
+  TIER2C_LLM:      'AI reviewed — match suggested',
+  TIER2B_CLEAR:    'Embedding match — high confidence',
+  TIER2B_MAYBE:    'Embedding match — needs review',
+  AI_MAYBE_ZONE:   'Embedding match — needs review',
+  P1: 'Deterministic rule match',
+  P2: 'Deterministic rule match',
+  P3: 'Deterministic rule match',
+  P4: 'Deterministic rule match',
+  P5: 'Exception — manual review',
+  P6: 'Deterministic rule match',
+  P7: 'Deterministic rule match',
+};
+const ruleLabel = (code) => RULE_LABELS[code] ?? code;
 
 const PAGE_SIZE = 100;
 const MINOR_VARIANCE_TOLERANCE = 50;
