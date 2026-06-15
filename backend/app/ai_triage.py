@@ -82,13 +82,11 @@ def _encode(texts: List[str]) -> Any:
                 logger.info("OpenRouter embedding succeeded: returned %d vectors", len(result))
                 return result
             except Exception as exc:
-                logger.error(
-                    "OpenRouter embedding failed: %s: %s — check OPENROUTER_API_KEY, "
-                    "model availability and account data-policy settings at "
-                    "https://openrouter.ai/settings/privacy",
-                    type(exc).__name__, exc,
+                logger.warning(
+                    "OpenRouter embedding failed (model=%s) — %s: %s — falling back to local "
+                    "SentenceTransformer (all-MiniLM-L6-v2)",
+                    settings.embedding_model_openrouter, type(exc).__name__, exc,
                 )
-                raise
         else:
             logger.warning(
                 "EMBEDDING_PROVIDER=openrouter but OPENROUTER_API_KEY is not set "
