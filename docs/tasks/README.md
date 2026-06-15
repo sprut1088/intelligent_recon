@@ -1,6 +1,7 @@
 # Task Index
 
-Reference: [docs/AI_TRIAGE_PLAN.md](../AI_TRIAGE_PLAN.md)
+Reference: [docs/AI_TRIAGE_PLAN.md](../AI_TRIAGE_PLAN.md)  
+Reference: [docs/MATCH_EVIDENCE_UX_IMPROVEMENT_PLAN.md](../MATCH_EVIDENCE_UX_IMPROVEMENT_PLAN.md)
 
 ---
 
@@ -65,6 +66,47 @@ TASK-13 depends on TASK-09 for pagination state.
 
 ---
 
+## Dependency Map — Evidence Drawer UX (`feat/evidence-drawer-ux`)
+
+```
+TASK-14  Stage 1: clarity fixes (badges, confidence, codes, variance, repeated text)
+    │
+    ├──► TASK-17  Action-oriented suggested actions  ──────────────────────────────┐
+    │                                                                               │
+    └──► TASK-21  Confidence trend (independent once drawer is clean)              │
+                                                                                   ▼
+TASK-15  Backend: surface raw PSR/CAMT fields ──► TASK-16  Field diff ──► TASK-18  Split CTA
+                                                       │                       │
+                                                  TASK-22  Source links   TASK-19  Override reason capture
+                                                                               │
+                                                                    ┌──────────┴──────────┐
+                                                                    │                      │
+                                                               TASK-20  Similar cases  TASK-23  Filter nav
+                                                                                           │
+                                                                                       TASK-24  Keyboard shortcuts
+
+TASK-19 + TASK-23 ──► TASK-25  Bulk resolution
+```
+
+## Task Summary — Evidence Drawer UX (`feat/evidence-drawer-ux`)
+
+| Task | Title | Type | Depends on | Status |
+|---|---|---|---|---|
+| [TASK-14](TASK-14-evidence-drawer-stage1-clarity.md) | Stage 1: trust & clarity fixes | Frontend | — | 🔲 Not started |
+| [TASK-15](TASK-15-backend-surface-raw-fields.md) | Backend: surface raw PSR/CAMT fields | Backend | — | 🔲 Not started |
+| [TASK-16](TASK-16-evidence-drawer-field-diff.md) | Side-by-side field diff | Frontend | TASK-14, TASK-15 | 🔲 Not started |
+| [TASK-17](TASK-17-evidence-drawer-action-labels.md) | Action-oriented suggested actions | Frontend | TASK-14 | 🔲 Not started |
+| [TASK-18](TASK-18-evidence-drawer-split-cta.md) | Split resolve CTA | Frontend | TASK-16, TASK-17 | 🔲 Not started |
+| [TASK-19](TASK-19-override-reason-capture.md) | Override reason capture | Full-stack | TASK-18 | 🔲 Not started |
+| [TASK-20](TASK-20-evidence-drawer-similar-cases.md) | Similar resolved cases panel | Full-stack | TASK-19 | 🔲 Not started |
+| [TASK-21](TASK-21-evidence-drawer-confidence-trend.md) | Confidence trend indicator | Frontend | TASK-14 | 🔲 Not started |
+| [TASK-22](TASK-22-evidence-drawer-source-links.md) | Direct links to source records | Frontend | TASK-15 | 🔲 Not started |
+| [TASK-23](TASK-23-evidence-drawer-filter-navigation.md) | Filterable drawer navigation | Frontend | TASK-14…TASK-19 | 🔲 Not started |
+| [TASK-24](TASK-24-evidence-drawer-keyboard-shortcuts.md) | Keyboard shortcuts | Frontend | TASK-23 | 🔲 Not started |
+| [TASK-25](TASK-25-bulk-resolution.md) | Bulk resolution | Full-stack | TASK-19, TASK-23 | 🔲 Not started |
+
+---
+
 ## Recommended Pickup Order
 
 ### Solo developer — AI Triage
@@ -83,6 +125,20 @@ TASK-12  (independent, slightly larger)
 ```
 Dev A: TASK-08, TASK-09, TASK-13
 Dev B: TASK-10, TASK-11, TASK-12
+```
+
+### Solo developer — Evidence Drawer UX
+```
+Stage 1+2 (foundation):  TASK-14 + TASK-15 (parallel) → TASK-16 + TASK-17 (parallel) → TASK-18 → TASK-19
+Stage 3 (context):       TASK-20 + TASK-21 + TASK-22 (all parallel, after their deps)
+Stage 4 (efficiency):    TASK-23 → TASK-24
+Stage 5 (scale):         TASK-25 (only after TASK-19 + TASK-23)
+```
+
+### Two developers — Evidence Drawer UX
+```
+Dev A: TASK-14 → TASK-17 → TASK-18 → TASK-19 → TASK-23 → TASK-25
+Dev B: TASK-15 → TASK-16 → TASK-22 (then TASK-20, TASK-21, TASK-24 in parallel)
 ```
 
 ---
