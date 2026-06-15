@@ -555,17 +555,33 @@ function FieldDiff({ item }) {
   );
 }
 
-function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex = -1, onPrev, onNext }) {
+function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], selectedIndex = -1, onPrev, onNext }) {
   const [detail, setDetail] = useState(null);
   const [overrideMode, setOverrideMode] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
+  const [overrideNote, setOverrideNote] = useState('');
+  const [overrideLoading, setOverrideLoading] = useState(false);
   useEffect(() => {
-    if (!selected?.result_id) { setDetail(null); setOverrideMode(false); return; }
+    if (!selected?.result_id) { setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote(''); return; }
     setDetail(null);
     setOverrideMode(false);
+    setOverrideReason('');
+    setOverrideNote('');
     api.caseDetail(selected.result_id)
       .then(d => setDetail(d.case))
       .catch(() => {});
   }, [selected?.result_id]);
+  const submitOverride = async () => {
+    if (!overrideReason) return;
+    setOverrideLoading(true);
+    try {
+      await api.overrideResolve(selected.result_id, overrideReason, overrideNote);
+      onClose();
+      onRefresh?.();
+    } finally {
+      setOverrideLoading(false);
+    }
+  };
   if (!selected) return null;
   const item = detail ? { ...selected, ...detail } : selected;
   const score = item.feature_snapshot?.score_breakdown || {};
@@ -644,7 +660,35 @@ function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex
               </>
             ) : (
               <div className="override-panel">
-                <p className="override-hint">Select a reason to complete this override — coming shortly.</p>
+                <label className="override-label">Reason for override</label>
+                <select
+                  className="override-select"
+                  value={overrideReason}
+                  onChange={e => setOverrideReason(e.target.value)}
+                >
+                  <option value="">— Select a reason —</option>
+                  <option value="same_entity_diff_name">Same entity, different name format</option>
+                  <option value="known_alias">Known counterparty alias</option>
+                  <option value="data_entry_error">Data entry error in source system</option>
+                  <option value="timing_difference">Timing difference (split settlement)</option>
+                  <option value="other">Other</option>
+                </select>
+                {overrideReason === 'other' && (
+                  <textarea
+                    className="override-note"
+                    placeholder="Describe the reason..."
+                    value={overrideNote}
+                    onChange={e => setOverrideNote(e.target.value)}
+                    rows={3}
+                  />
+                )}
+                <button
+                  className="btn primary full"
+                  onClick={submitOverride}
+                  disabled={!overrideReason || (overrideReason === 'other' && !overrideNote.trim()) || overrideLoading}
+                >
+                  {overrideLoading ? 'Submitting…' : 'Submit Override'}
+                </button>
                 <button className="btn link" onClick={() => setOverrideMode(false)}>← Back</button>
               </div>
             )}
@@ -848,6 +892,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
         selected={selected}
         onClose={() => setSelected(null)}
         onResolve={setSelected}
+        onRefresh={() => refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: page * PAGE_SIZE })}
         rows={results.items || []}
         selectedIndex={(results.items || []).findIndex(r => r.result_id === selected?.result_id)}
         onPrev={() => { const idx = (results.items || []).findIndex(r => r.result_id === selected?.result_id); if (idx > 0) setSelected(results.items[idx - 1]); }}
