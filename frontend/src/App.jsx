@@ -615,17 +615,22 @@ function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex
               {!components.length && <p className="empty small">No field-level evidence stored.</p>}
             </div>
           </Panel>
+{suggestions.length > 0 && (
           <Panel title="Suggested actions" className="nested-panel">
             <div className="action-stack">
-              {suggestions.map((s, idx) => (
-                <div className="suggestion" key={idx}>
-                  <strong>{s.action}</strong>
-                  <p>{s.confidence != null ? `${(s.confidence * 100).toFixed(1)}% confidence` : ''}</p>
-                </div>
-              ))}
-              {!suggestions.length && <p className="empty small">No suggestions available.</p>}
+              {suggestions.map((s, idx) => {
+                const cfg = actionConfig(s.action);
+                return (
+                  <div className={`suggestion suggestion-${cfg.tone}`} key={idx}>
+                    <strong>{cfg.label}</strong>
+                    {cfg.desc && <p className="suggestion-desc">{cfg.desc}</p>}
+                    {s.confidence != null && <p className="suggestion-conf">{(s.confidence * 100).toFixed(1)}% confidence</p>}
+                  </div>
+                );
+              })}
             </div>
           </Panel>
+)}
         </div>
         {item.exception_flag === 'Y' && (
           <div className="drawer-footer">
@@ -639,6 +644,25 @@ function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex
     </>
   );
 }
+
+const ACTION_CONFIG = {
+  CONFIRM_AI_MATCH: {
+    label: 'Accept AI Match',
+    desc:  'Mark this PSR as matched to the suggested bank entry.',
+    tone:  'confirm',
+  },
+  ROUTE_TO_ANALYST: {
+    label: 'Escalate for Review',
+    desc:  'Send to analyst queue for manual verification.',
+    tone:  'analyst',
+  },
+  NO_MATCH: {
+    label: 'Mark as No Match',
+    desc:  'Record this PSR as unmatched; no bank entry corresponds.',
+    tone:  'nomatch',
+  },
+};
+const actionConfig = (code) => ACTION_CONFIG[code] ?? { label: code, desc: '', tone: 'neutral' };
 
 const RULE_LABELS = {
   TIER2C_NO_MATCH: 'AI reviewed — no match found',
