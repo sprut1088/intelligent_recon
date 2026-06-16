@@ -176,12 +176,17 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .evidence > span:not(.tag) { text-align: right; font-weight: 900; color: var(--muted); font-size: 11px; }
 .score-labelled { margin: 12px 0 0; }
 .score-labelled .score-large { margin: 4px 0 10px; }
+.score-bar-row { display: flex; align-items: center; gap: 10px; }
+.score-bar-row .score-large { flex: 1; margin: 4px 0 10px; }
+.score-pct { font-size: 15px; font-weight: 700; color: var(--text, #1e293b); white-space: nowrap; min-width: 36px; text-align: right; }
 .score-label { font-size: 11px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.06em; margin: 0 0 2px; }
 .rule-code { display: block; font-size: 11px; color: var(--muted); margin-top: 3px; font-family: monospace; }
 .field-diff { border: 1px solid var(--line); border-radius: 10px; overflow: hidden; margin: 18px 0 0; }
 .field-diff-header { display: grid; grid-template-columns: 100px 1fr 1fr; gap: 8px; padding: 6px 12px; background: #f8fafc; font-size: 0.72rem; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .field-diff-row { display: grid; grid-template-columns: 100px 1fr 1fr; gap: 8px; padding: 6px 12px; border-top: 1px solid var(--line); font-size: 0.84rem; }
 .field-diff-row.mismatch { background: #fffbeb; border-left: 3px solid #f59e0b; }
+.source-link { color: var(--primary); text-decoration: none; font-weight: 500; }
+.source-link:hover { text-decoration: underline; }
 .field-label { color: var(--muted); font-size: 0.78rem; }
 .field-val { color: #111827; word-break: break-word; }
 .suggestion strong { display: block; margin-bottom: 4px; }
@@ -201,7 +206,12 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .similar-rule { flex: 1; color: var(--muted); }
 .similar-date { color: var(--muted); white-space: nowrap; }
 .confidence-trend { font-size: 0.8rem; color: var(--muted, #6b7280); margin-top: 4px; }
+.confidence-field-summary { font-size: 0.8rem; color: var(--muted, #6b7280); margin-top: 4px; }
+.no-match-explanation { font-size: 0.85rem; color: var(--muted, #6b7280); line-height: 1.5; margin: 4px 0 0; }
+.evidence-score { font-size: 0.8rem; color: var(--muted, #6b7280); white-space: nowrap; }
 .confidence-trend.outlier { color: #b45309; font-weight: 500; }
+.no-match-footer { background: #fafafa; border-top: 1px solid var(--line); }
+.no-match-hint { font-size: 0.8rem; color: var(--muted, #6b7280); margin: 0 0 10px; }
 .btn.link { background: none; border: none; color: var(--primary); padding: 0; font-size: 13px; cursor: pointer; text-align: left; }
 .suggestion-confirm { border-left: 3px solid var(--success); }
 .suggestion-analyst { border-left: 3px solid var(--warning); }

@@ -81,7 +81,7 @@ def score_breakdown(feature_map: Dict, rule: str, confidence: int) -> Dict:
         "components": components,
         "matched_fields": matched_fields,
         "failed_fields": failed_fields,
-        "decision_basis": f"Rule {rule} produced {confidence}% engine confidence. Component score was {raw_score}%.",
+        "decision_basis": f"{len(matched_fields)} of {len(components)} fields matched (weighted score {raw_score}%). Confidence set to {confidence}% by {rule}.",
     }
 
 def build_case(idx:int, psr: Optional[PsrTransaction], bank: Optional[CamtTransaction], status: str, reason: str, match_type: str, confidence:int, rule:str, exception_flag:str, explanation:str, suggestions: Optional[List[Dict]]=None) -> ReconCase:

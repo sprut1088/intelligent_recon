@@ -119,6 +119,18 @@ export const api = {
       learning_eligible: false,
     }),
   }),
+  noMatchResolve: (caseId, resolutionType, reasonCode) => request(`/api/reconcile/cases/${caseId}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({
+      resolution_type: resolutionType,
+      reason_code: reasonCode,
+      selected_psr_ids: [],
+      selected_bank_ids: [],
+      fields_used: [],
+      fields_ignored: [],
+      learning_eligible: false,
+    }),
+  }),
   patterns: async () => (await request('/api/patterns')).items || [],
   createPattern: (payload) => request('/api/patterns', { method: 'POST', body: JSON.stringify(payload) }),
 
