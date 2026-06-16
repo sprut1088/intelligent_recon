@@ -311,8 +311,14 @@ def get_case(case_id: str) -> dict:
             psr_row = conn.execute("SELECT direction FROM psr_transactions WHERE id = ?", (psr_id,)).fetchone()
             if psr_row:
                 case_dict["psr_direction"] = psr_row["direction"]
+        # match_key = bank.ntry_id (PK) for every case that has a bank side.
+        # Always look up by ntry_id first; camt_id may be a non-unique sentinel
+        # (e.g. "NOTFOUND") from bank feeds that omit the EndToEndId field.
         if camt_id:
-            camt_row = conn.execute("SELECT direction, remittance, pmt_ref, invoice, counterparty FROM camt_transactions WHERE camt_id = ?", (camt_id,)).fetchone()
+            match_key = case_dict.get("match_key", "")
+            camt_row = conn.execute("SELECT direction, remittance, pmt_ref, invoice, counterparty FROM camt_transactions WHERE ntry_id = ?", (match_key,)).fetchone()
+            if not camt_row:
+                camt_row = conn.execute("SELECT direction, remittance, pmt_ref, invoice, counterparty FROM camt_transactions WHERE camt_id = ?", (camt_id,)).fetchone()
             if camt_row:
                 case_dict["camt_direction"] = camt_row["direction"]
                 case_dict["camt_remittance"] = camt_row["remittance"]
