@@ -526,16 +526,18 @@ function ResultTable({ rows, onSelect }) {
 function FieldDiff({ item }) {
   const fmt = (v) => (v == null || v === '') ? '\u2014' : String(v);
   const mismatch = (a, b) => a != null && a !== '' && b != null && b !== '' && String(a).trim() !== String(b).trim();
+  const isValidId = (id) => Boolean(id && id.trim() && !['NOT FOUND', 'N/A', 'NONE', 'NULL'].includes(id.trim().toUpperCase()));
   const hasPsr = Boolean(item.psr_id);
-  const hasCamt = Boolean(item.camt_id || item.bank_amount != null);
+  const hasCamtData = item.bank_amount != null;
+  const hasCamt = Boolean(item.camt_id || hasCamtData);
   const rows = [
-    { label: 'Amount',       psr: hasPsr  ? item.internal_amount  : null,  camt: hasCamt ? item.bank_amount        : null },
-    { label: 'Direction',    psr: hasPsr  ? item.psr_direction     : null,  camt: hasCamt ? item.camt_direction     : null },
-    { label: 'Date',         psr: hasPsr  ? item.value_date        : null,  camt: hasCamt ? item.booking_date       : null },
-    { label: 'Reference',    psr: hasPsr  ? item.reference         : null,  camt: hasCamt ? item.camt_pmt_ref       : null },
-    { label: 'Counterparty', psr: hasPsr  ? item.counterparty      : null,  camt: hasCamt ? item.camt_counterparty  : null },
-    { label: 'Invoice',      psr: hasPsr  ? item.invoice           : null,  camt: hasCamt ? item.camt_invoice       : null },
-    { label: 'Remittance',   psr: null,                                     camt: hasCamt ? item.camt_remittance    : null },
+    { label: 'Amount',       psr: hasPsr      ? item.internal_amount  : null,  camt: hasCamtData ? item.bank_amount        : null },
+    { label: 'Direction',    psr: hasPsr      ? item.psr_direction     : null,  camt: hasCamtData ? item.camt_direction     : null },
+    { label: 'Date',         psr: hasPsr      ? item.value_date        : null,  camt: hasCamtData ? item.booking_date       : null },
+    { label: 'Reference',    psr: hasPsr      ? item.reference         : null,  camt: hasCamtData ? item.camt_pmt_ref       : null },
+    { label: 'Counterparty', psr: hasPsr      ? item.counterparty      : null,  camt: hasCamtData ? item.camt_counterparty  : null },
+    { label: 'Invoice',      psr: hasPsr      ? item.invoice           : null,  camt: hasCamtData ? item.camt_invoice       : null },
+    { label: 'Remittance',   psr: null,                                         camt: hasCamtData ? item.camt_remittance    : null },
   ];
   return (
     <div className="field-diff">
@@ -543,6 +545,15 @@ function FieldDiff({ item }) {
         <span className="field-label"></span>
         <span>PSR (Internal)</span>
         <span>Bank (CAMT)</span>
+      </div>
+      <div className="field-diff-row field-diff-ids">
+        <span className="field-label">ID</span>
+        <span className="field-val">
+          {hasPsr && isValidId(item.psr_id) ? <a className="source-link" href={`#psr-${item.psr_id}`}>{item.psr_id}</a> : fmt(hasPsr ? item.psr_id : null)}
+        </span>
+        <span className="field-val">
+          {hasCamtData && isValidId(item.camt_id) ? <a className="source-link" href={`#camt-${item.camt_id}`}>{item.camt_id}</a> : fmt(hasCamtData ? item.camt_id : null)}
+        </span>
       </div>
       {rows.map(({ label, psr, camt }) => (
         <div key={label} className={`field-diff-row${mismatch(psr, camt) ? ' mismatch' : ''}`}>
