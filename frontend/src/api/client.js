@@ -87,6 +87,11 @@ export const api = {
     if (status) qs.set('status', status);
     return mapCaseList(await request(`/api/reconcile/cases?${qs.toString()}`));
   },
+  caseDetail: async (caseId) => {
+    const data = await request(`/api/reconcile/cases/${caseId}`);
+    return { ...data, case: mapCase(data.case || {}) };
+  },
+  similarCases: (caseId) => request(`/api/reconcile/cases/${caseId}/similar?limit=5`),
   exceptions: async ({ limit = 100, offset = 0 } = {}) =>
     mapCaseList(await request(`/api/exceptions/workflow?limit=${limit}&offset=${offset}`)),
   updateWorkflow: (caseId, payload) => request(`/api/exceptions/${caseId}/workflow`, { method: 'PATCH', body: JSON.stringify(payload) }),
@@ -102,6 +107,28 @@ export const api = {
       accepted_variance: payload.accepted_variance ?? null,
       comment: payload.user_comment || '',
       learning_eligible: payload.learning_eligible ?? true,
+    }),
+  }),
+  overrideResolve: (caseId, overrideReason, overrideNote) => request(`/api/reconcile/cases/${caseId}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({
+      resolution_type: 'OVERRIDE_AI',
+      reason_code: overrideReason,
+      override_reason: overrideReason,
+      override_note: overrideNote || '',
+      learning_eligible: false,
+    }),
+  }),
+  noMatchResolve: (caseId, resolutionType, reasonCode) => request(`/api/reconcile/cases/${caseId}/resolve`, {
+    method: 'POST',
+    body: JSON.stringify({
+      resolution_type: resolutionType,
+      reason_code: reasonCode,
+      selected_psr_ids: [],
+      selected_bank_ids: [],
+      fields_used: [],
+      fields_ignored: [],
+      learning_eligible: false,
     }),
   }),
   patterns: async () => (await request('/api/patterns')).items || [],

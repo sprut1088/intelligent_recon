@@ -523,21 +523,174 @@ function ResultTable({ rows, onSelect }) {
   );
 }
 
-function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex = -1, onPrev, onNext }) {
+function FieldDiff({ item }) {
+  const fmt = (v) => (v == null || v === '') ? '\u2014' : String(v);
+  const mismatch = (a, b) => a != null && a !== '' && b != null && b !== '' && String(a).trim() !== String(b).trim();
+  const isValidId = (id) => Boolean(id && id.trim() && !['NOT FOUND', 'N/A', 'NONE', 'NULL'].includes(id.trim().toUpperCase()));
+  const hasPsr = Boolean(item.psr_id);
+  const hasCamtData = item.bank_amount != null;
+  const hasCamt = Boolean(item.camt_id || hasCamtData);
+  const rows = [
+    { label: 'Amount',       psr: hasPsr      ? item.internal_amount  : null,  camt: hasCamtData ? item.bank_amount        : null },
+    { label: 'Direction',    psr: hasPsr      ? item.psr_direction     : null,  camt: hasCamtData ? item.camt_direction     : null },
+    { label: 'Date',         psr: hasPsr      ? item.value_date        : null,  camt: hasCamtData ? item.booking_date       : null },
+    { label: 'Reference',    psr: hasPsr      ? item.reference         : null,  camt: hasCamtData ? item.camt_pmt_ref       : null },
+    { label: 'Counterparty', psr: hasPsr      ? item.counterparty      : null,  camt: hasCamtData ? item.camt_counterparty  : null },
+    { label: 'Invoice',      psr: hasPsr      ? item.invoice           : null,  camt: hasCamtData ? item.camt_invoice       : null },
+    { label: 'Remittance',   psr: null,                                         camt: hasCamtData ? item.camt_remittance    : null },
+  ];
+  return (
+    <div className="field-diff">
+      <div className="field-diff-header">
+        <span className="field-label"></span>
+        <span>PSR (Internal)</span>
+        <span>Bank (CAMT)</span>
+      </div>
+      <div className="field-diff-row field-diff-ids">
+        <span className="field-label">ID</span>
+        <span className="field-val">
+          {hasPsr && isValidId(item.psr_id) ? <a className="source-link" href={`#psr-${item.psr_id}`}>{item.psr_id}</a> : fmt(hasPsr ? item.psr_id : null)}
+        </span>
+        <span className="field-val">
+          {hasCamtData && isValidId(item.camt_id) ? <a className="source-link" href={`#camt-${item.camt_id}`}>{item.camt_id}</a> : fmt(hasCamtData ? item.camt_id : null)}
+        </span>
+      </div>
+      {rows.map(({ label, psr, camt }) => (
+        <div key={label} className={`field-diff-row${mismatch(psr, camt) ? ' mismatch' : ''}`}>
+          <span className="field-label">{label}</span>
+          <span className="field-val">{fmt(psr)}</span>
+          <span className="field-val">{fmt(camt)}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], selectedIndex = -1, onPrev, onNext, onSelect, batchAvg = null }) {
+  const [detail, setDetail] = useState(null);
+  const [overrideMode, setOverrideMode] = useState(false);
+  const [overrideReason, setOverrideReason] = useState('');
+  const [overrideNote, setOverrideNote] = useState('');
+  const [overrideLoading, setOverrideLoading] = useState(false);
+  const [similarCases, setSimilarCases] = useState(null);
+  const [similarOpen, setSimilarOpen] = useState(false);
+  const [noMatchLoading, setNoMatchLoading] = useState(null);
+  const [drawerFilter, setDrawerFilter] = useState('all');
+  const [shortcutsHidden, setShortcutsHidden] = useState(() => localStorage.getItem('hideDrawerShortcuts') === '1');
+
+  const filteredRows = useMemo(() => {
+    switch (drawerFilter) {
+      case 'low': return rows.filter(r => r.match_confidence != null && r.match_confidence < 60);
+      case 'ai':  return rows.filter(r => r.rule_applied?.startsWith('TIER2'));
+      default:    return rows;
+    }
+  }, [rows, drawerFilter]);
+
+  const filteredIndex = filteredRows.findIndex(r => r.result_id === selected?.result_id);
+
+  const goTo = (delta) => {
+    const next = filteredRows[filteredIndex + delta];
+    if (next && onSelect) onSelect(next);
+    else if (delta === -1) onPrev?.();
+    else onNext?.();
+  };
+
+  useEffect(() => {
+    if (!selected?.result_id) {
+      setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote('');
+      setSimilarCases(null); setSimilarOpen(false);
+      setDrawerFilter('all');
+      return;
+    }
+    setDetail(null);
+    setOverrideMode(false);
+    setOverrideReason('');
+    setOverrideNote('');
+    setSimilarCases(null);
+    setSimilarOpen(false);
+    setNoMatchLoading(null);
+    api.caseDetail(selected.result_id).then(d => setDetail(d.case)).catch(() => {});
+    api.similarCases(selected.result_id).then(setSimilarCases).catch(() => setSimilarCases({ items: [], count: 0 }));
+  }, [selected?.result_id]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const MATCH_STATUSES_KB = ['Suggested Match - Analyst Review', 'Suggested Match - Learned Pattern', 'Exception - Amount Variance Review', 'Post to Short or Over Ledger'];
+    const handler = (e) => {
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); goTo(-1); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); goTo(1); }
+      if (e.key === 'Escape')     { onClose(); }
+      if ((e.key === 'r' || e.key === 'R') && !overrideMode) {
+        const item = detail ? { ...selected, ...detail } : selected;
+        if (MATCH_STATUSES_KB.includes(item.reconciliation_status)) { e.preventDefault(); onResolve(item); }
+      }
+      if ((e.key === 'o' || e.key === 'O') && !overrideMode) {
+        const item = detail ? { ...selected, ...detail } : selected;
+        if (MATCH_STATUSES_KB.includes(item.reconciliation_status)) { e.preventDefault(); setOverrideMode(true); }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [selected, detail, overrideMode, filteredIndex, filteredRows, onSelect, onPrev, onNext, onClose, onResolve]);
+
+  const submitNoMatch = async (resolutionType, reasonCode) => {
+    setNoMatchLoading(resolutionType);
+    try {
+      await api.noMatchResolve(selected.result_id, resolutionType, reasonCode);
+      onClose();
+      onRefresh?.();
+    } catch (e) {
+      alert(e.message);
+    } finally {
+      setNoMatchLoading(null);
+    }
+  };
+  const submitOverride = async () => {
+    if (!overrideReason) return;
+    setOverrideLoading(true);
+    try {
+      await api.overrideResolve(selected.result_id, overrideReason, overrideNote);
+      onClose();
+      onRefresh?.();
+    } finally {
+      setOverrideLoading(false);
+    }
+  };
   if (!selected) return null;
-  const score = selected.feature_snapshot?.score_breakdown || {};
+  const item = detail ? { ...selected, ...detail } : selected;
+  const score = item.feature_snapshot?.score_breakdown || {};
   const components = score.components || [];
-  const suggestions = selected.suggestions || [];
-  const aiSuggestion = suggestions.find(s => s.action === 'CONFIRM_AI_MATCH');
+  const suggestions = item.suggestions || [];
+  const hasMatch = item.bank_amount != null || item.camt_id;
   const total = rows.length;
   return (
     <>
       <div className="drawer-backdrop" onClick={onClose} />
       <aside className="drawer">
         <div className="drawer-nav">
-          <button className="btn ghost" disabled={selectedIndex <= 0} onClick={onPrev}>← Prev</button>
-          <span>{selectedIndex >= 0 ? `${selectedIndex + 1} / ${total}` : ''}</span>
-          <button className="btn ghost" disabled={selectedIndex < 0 || selectedIndex >= total - 1} onClick={onNext}>Next →</button>
+          <button className="btn ghost" disabled={filteredIndex <= 0} onClick={() => goTo(-1)}>← Prev</button>
+          <span className="drawer-nav-counter">
+            {filteredIndex >= 0 ? `${filteredIndex + 1} / ${filteredRows.length}` : `0 / ${filteredRows.length}`}
+            {drawerFilter !== 'all' && <span className="filter-badge">{drawerFilter === 'low' ? 'Low conf' : 'AI'}</span>}
+          </span>
+          <div className="drawer-filter-pills">
+            {['all', 'low', 'ai'].map(f => (
+              <button key={f} className={`filter-pill${drawerFilter === f ? ' active' : ''}`} onClick={() => {
+                setDrawerFilter(f);
+                const newFiltered = f === 'low' ? rows.filter(r => r.match_confidence != null && r.match_confidence < 60)
+                  : f === 'ai' ? rows.filter(r => r.rule_applied?.startsWith('TIER2')) : rows;
+                if (newFiltered.length > 0 && !newFiltered.find(r => r.result_id === selected?.result_id)) {
+                  onSelect?.(newFiltered[0]);
+                }
+              }}>
+                {f === 'all' ? 'All' : f === 'low' ? 'Low conf' : 'AI'}
+                <span className="pill-count">{(f === 'low' ? rows.filter(r => r.match_confidence != null && r.match_confidence < 60) : f === 'ai' ? rows.filter(r => r.rule_applied?.startsWith('TIER2')) : rows).length}</span>
+              </button>
+            ))}
+          </div>
+          <button className="btn ghost" disabled={filteredIndex < 0 || filteredIndex >= filteredRows.length - 1} onClick={() => goTo(1)}>Next →</button>
           <button className="btn ghost" onClick={onClose}>Close</button>
         </div>
         <div className="drawer-body">
@@ -545,51 +698,286 @@ function EvidenceDrawer({ selected, onClose, onResolve, rows = [], selectedIndex
           <h2>{selected.result_id}</h2>
           <p>{selected.explanation}</p>
           <dl className="kv drawer-kv">
-            <dt>Status</dt><dd><Tag tone={classForStatus(selected.reconciliation_status)}>{selected.reconciliation_status}</Tag></dd>
-            <dt>Rule applied</dt><dd>{selected.rule_applied || '-'}</dd>
-            <dt>Reason</dt><dd>{selected.reason_code || '-'}</dd>
-            <dt>Invoice</dt><dd>{selected.invoice || '-'}</dd>
-            <dt>Counterparty</dt><dd>{selected.counterparty || '-'}</dd>
-            <dt>Variance</dt><dd>{money(selected.variance)}</dd>
+            <dt>Status</dt><dd><Tag tone={classForStatus(item.reconciliation_status)}>{item.reconciliation_status}</Tag></dd>
+            <dt>Rule applied</dt><dd>
+              {ruleLabel(item.rule_applied) || '-'}
+              {item.rule_applied && <span className="rule-code">{item.rule_applied}</span>}
+            </dd>
+            <dt>Reason</dt><dd>{item.reason_code || '-'}</dd>
+            {item.variance != null && <><dt>Variance</dt><dd>{money(item.variance)}</dd></>}
           </dl>
-          <Panel title="Why this decision?" subtitle={score.decision_basis || 'Evidence breakdown captured by the engine.'} className="nested-panel">
-            <div className="score-large"><span style={{ width: `${selected.match_confidence || 0}%` }} /></div>
-            <div className="evidence-list">
-              {components.map((c) => (
-                <div className="evidence" key={c.component}>
-                  <Tag tone={c.passed ? 'success' : 'warning'}>{c.passed ? 'Pass' : 'Check'}</Tag>
-                  <strong>{c.component}</strong>
-                  <span>{c.weight}%</span>
-                  <p>{c.evidence}</p>
+          {hasMatch && <FieldDiff item={item} />}
+          <Panel title="Why this decision?" className="nested-panel">
+            {(() => {
+              const NO_COMPARISON_STATUSES = ['Uncleared / In-Transit Payment', 'Bank-only Item - Investigation'];
+              const isNoComparison = NO_COMPARISON_STATUSES.includes(item.reconciliation_status);
+              if (isNoComparison) {
+                return (
+                  <p className="no-match-explanation">
+                    All matching rules were applied — no {item.reconciliation_status === 'Bank-only Item - Investigation' ? 'PSR payment entry could be paired with this bank transaction' : 'bank transaction could be paired with this PSR entry'}.
+                    {item.explanation ? ` ${item.explanation}` : ' The item has been queued for monitoring on the next CAMT cycle.'}
+                  </p>
+                );
+              }
+              return (
+              <>
+              <div className="score-labelled">
+                <p className="score-label">{ruleLabel(score.rule_applied || item.rule_applied) || 'Rule decision confidence'}</p>
+                <div className="score-bar-row">
+                  <div className="score-large"><span style={{ width: `${score.engine_confidence ?? item.match_confidence ?? 0}%` }} /></div>
+                  <span className="score-pct">{score.engine_confidence ?? item.match_confidence ?? 0}%</span>
                 </div>
-              ))}
-              {!components.length && <p className="empty small">No field-level evidence stored.</p>}
-            </div>
+                <p className="confidence-field-summary">
+                  {(() => {
+                    const passed = components.filter(c => c.passed);
+                    const total = components.length;
+                    const fieldScore = total ? Math.round(passed.reduce((s, c) => s + c.weight, 0)) : null;
+                    const engineConf = score.engine_confidence ?? item.match_confidence ?? 0;
+                    const overridden = total > 0 && fieldScore !== null && fieldScore !== engineConf;
+                    if (total > 0) {
+                      return overridden
+                        ? `Field evidence: ${passed.length} / ${total} fields matched (${fieldScore}% weighted score — rule override to ${engineConf}% due to variance)`
+                        : `Field evidence: ${passed.length} / ${total} fields matched (${fieldScore}% weighted score)`;
+                    }
+                    return score.decision_basis || 'Evidence breakdown captured by the engine.';
+                  })()}
+                </p>
+                {batchAvg != null && item.match_confidence != null && (
+                  <p className={`confidence-trend${item.match_confidence < batchAvg - 20 ? ' outlier' : ''}`}>
+                    Batch avg: {batchAvg.toFixed(0)}% —{' '}
+                    {item.match_confidence < batchAvg - 20
+                      ? '⚠ Low outlier — significantly below batch average'
+                      : item.match_confidence < batchAvg
+                        ? 'this item is below average'
+                        : 'this item is above average'}
+                  </p>
+                )}
+              </div>
+              <div className="evidence-list">
+                {components.map((c) => (
+                  <div className="evidence" key={c.component}>
+                    <Tag tone={c.passed ? 'success' : (c.weight >= 30 ? 'danger' : 'warning')}>
+                      {c.passed ? 'Pass' : (c.weight >= 30 ? 'Fail' : 'Low')}
+                    </Tag>
+                    <strong>{c.component}</strong>
+                    <span className="evidence-score" title="Points scored / points available">{c.passed ? c.weight : 0}&nbsp;/&nbsp;{c.weight}</span>
+                    <p>{c.evidence}</p>
+                  </div>
+                ))}
+                {!components.length && <p className="empty small">No field-level evidence stored.</p>}
+              </div>
+              </>
+              );
+            })()}
           </Panel>
+{suggestions.length > 0 && (
           <Panel title="Suggested actions" className="nested-panel">
             <div className="action-stack">
-              {suggestions.map((s, idx) => (
-                <div className="suggestion" key={idx}>
-                  <strong>{s.action}</strong>
-                  <p>{s.reason || (s.confidence != null ? `${(s.confidence * 100).toFixed(1)}%` : '')}</p>
-                </div>
-              ))}
-              {!suggestions.length && <p className="empty small">No suggestions available.</p>}
+              {suggestions.map((s, idx) => {
+                const cfg = actionConfig(s.action);
+                return (
+                  <div className={`suggestion suggestion-${cfg.tone}`} key={idx}>
+                    <strong>{cfg.label}</strong>
+                    {cfg.desc && <p className="suggestion-desc">{cfg.desc}</p>}
+                  </div>
+                );
+              })}
             </div>
           </Panel>
+)}
+          {similarCases?.count > 0 && (
+            <div className="nested-panel similar-panel">
+              <button className="similar-header" onClick={() => setSimilarOpen(o => !o)}>
+                <span>{similarCases.count} similar resolved case{similarCases.count !== 1 ? 's' : ''}</span>
+                <span className="similar-chevron">{similarOpen ? '▲' : '▼'}</span>
+              </button>
+              {similarOpen && (
+                <div className="similar-list">
+                  {similarCases.items.map(s => (
+                    <div className="similar-item" key={s.case_id}>
+                      <span className="similar-rule">{ruleLabel(s.rule_applied)}</span>
+                      <Tag tone={classForStatus(s.reconciliation_status)}>{s.reconciliation_status}</Tag>
+                      <span className="similar-date">{s.updated_at?.slice(0, 10) || ''}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
-        {selected.exception_flag === 'Y' && (
-          <div className="drawer-footer">
-            {aiSuggestion && (
-              <button className="btn primary full" onClick={() => onResolve(selected, 'CONFIRM_AI_MATCH')}>Confirm AI match</button>
-            )}
-            <button className={`btn ${aiSuggestion ? 'ghost' : 'primary'} full`} onClick={() => onResolve(selected)}>Resolve and capture learning</button>
+        {item.exception_flag === 'Y' && (() => {
+          const MATCH_STATUSES = [
+            'Suggested Match - Analyst Review',
+            'Suggested Match - Learned Pattern',
+            'Exception - Amount Variance Review',
+            'Post to Short or Over Ledger',
+          ];
+          const NO_MATCH_STATUSES = [
+            'Uncleared / In-Transit Payment',
+            'Bank-only Item - Investigation',
+          ];
+          const isMatch = MATCH_STATUSES.includes(item.reconciliation_status);
+          const isNoMatch = NO_MATCH_STATUSES.includes(item.reconciliation_status);
+          const isBankOnly = item.reconciliation_status === 'Bank-only Item - Investigation';
+          const isLedgerPost = item.reconciliation_status === 'Post to Short or Over Ledger';
+
+          if (!isMatch && !isNoMatch && !overrideMode) return null;
+
+          if (isNoMatch) {
+            return (
+              <div className="drawer-footer no-match-footer">
+                <p className="no-match-hint">No bank match \u2014 choose how to action this item:</p>
+                <button
+                  className="btn secondary full"
+                  disabled={noMatchLoading != null}
+                  onClick={() => submitNoMatch('ROUTE_TO_EXCEPTION', 'NO_BANK_MATCH')}
+                >
+                  {noMatchLoading === 'ROUTE_TO_EXCEPTION' ? 'Routing\u2026' : 'Route to Exception Queue'}
+                </button>
+                {!isBankOnly && (
+                  <button
+                    className="btn ghost full"
+                    disabled={noMatchLoading != null}
+                    onClick={() => submitNoMatch('POST_TO_LEDGER', 'NO_ACCEPTABLE_CANDIDATES')}
+                  >
+                    {noMatchLoading === 'POST_TO_LEDGER' ? 'Posting\u2026' : 'Post to Short / Over Ledger'}
+                  </button>
+                )}
+              </div>
+            );
+          }
+
+          return (
+            <div className="drawer-footer">
+              {!overrideMode ? (
+                <>
+                  <button className="btn primary full" onClick={() => onResolve(item)}>
+                    {isLedgerPost ? 'Confirm Ledger Post' : 'Confirm Resolution'}
+                  </button>
+                  <button className="btn secondary full" onClick={() => setOverrideMode(true)}>Override AI</button>
+                </>
+              ) : (
+                <div className="override-panel">
+                  <label className="override-label">Reason for override</label>
+                  <select
+                    className="override-select"
+                    value={overrideReason}
+                    onChange={e => setOverrideReason(e.target.value)}
+                  >
+                    <option value="">— Select a reason —</option>
+                    <option value="same_entity_diff_name">Same entity, different name format</option>
+                    <option value="known_alias">Known counterparty alias</option>
+                    <option value="data_entry_error">Data entry error in source system</option>
+                    <option value="timing_difference">Timing difference (split settlement)</option>
+                    <option value="other">Other</option>
+                  </select>
+                  {overrideReason === 'other' && (
+                    <textarea
+                      className="override-note"
+                      placeholder="Describe the reason..."
+                      value={overrideNote}
+                      onChange={e => setOverrideNote(e.target.value)}
+                      rows={3}
+                    />
+                  )}
+                  <button
+                    className="btn primary full"
+                    onClick={submitOverride}
+                    disabled={!overrideReason || (overrideReason === 'other' && !overrideNote.trim()) || overrideLoading}
+                  >
+                    {overrideLoading ? 'Submitting\u2026' : 'Submit Override'}
+                  </button>
+                  <button className="btn link" onClick={() => setOverrideMode(false)}>\u2190 Back</button>
+                </div>
+              )}
+            </div>
+          );
+        })()}
+        {!shortcutsHidden && (
+          <div className="shortcut-legend">
+            <span>← → navigate &nbsp;·&nbsp; R confirm &nbsp;·&nbsp; O override &nbsp;·&nbsp; Esc close</span>
+            <button className="btn link small" onClick={() => { setShortcutsHidden(true); localStorage.setItem('hideDrawerShortcuts', '1'); }}>hide</button>
           </div>
         )}
       </aside>
     </>
   );
 }
+
+const ACTION_CONFIG = {
+  CONFIRM_AI_MATCH: {
+    label: 'Accept AI Match',
+    desc:  'Mark this PSR as matched to the suggested bank entry.',
+    tone:  'confirm',
+  },
+  CONFIRM_LEARNED_MATCH: {
+    label: 'Accept Learned Match',
+    desc:  'A learned pattern suggested this match — confirm to close.',
+    tone:  'confirm',
+  },
+  REVIEW_FUZZY_CANDIDATE: {
+    label: 'Review Fuzzy Match',
+    desc:  'Counterparty similarity was high but not exact — verify before confirming.',
+    tone:  'analyst',
+  },
+  POST_LEDGER_CANDIDATE: {
+    label: 'Post to Short / Over Ledger',
+    desc:  'Amount variance is within tolerance — recommend posting the difference to ledger.',
+    tone:  'analyst',
+  },
+  ROUTE_TO_REVIEW: {
+    label: 'Route for Variance Review',
+    desc:  'Amount variance exceeds tolerance — escalate for manual review.',
+    tone:  'analyst',
+  },
+  ROUTE_TO_EXCEPTION_QUEUE: {
+    label: 'Route to Exception Queue',
+    desc:  'No bank match found — monitor for next CAMT cycle.',
+    tone:  'nomatch',
+  },
+  INVESTIGATE_BANK_ONLY: {
+    label: 'Investigate Bank Entry',
+    desc:  'Bank entry received with no matching internal payment — investigate source.',
+    tone:  'nomatch',
+  },
+  ROUTE_TO_ANALYST: {
+    label: 'Escalate for Review',
+    desc:  'Send to analyst queue for manual verification.',
+    tone:  'analyst',
+  },
+  NO_MATCH: {
+    label: 'Mark as No Match',
+    desc:  'Record this PSR as unmatched; no bank entry corresponds.',
+    tone:  'nomatch',
+  },
+};
+const actionConfig = (code) => ACTION_CONFIG[code] ?? { label: code, desc: '', tone: 'neutral' };
+
+const RULE_LABELS = {
+  // Full engine rule codes
+  P1_EXACT_END_TO_END_ID:   'EndToEnd ID exact match',
+  P2_PMT_REF_AMOUNT:        'PMT reference + amount match',
+  P3_INVOICE_USTRD_AMOUNT:  'Invoice + amount match',
+  P4_COUNTERPARTY_FUZZY:    'Counterparty fuzzy + amount match',
+  P5_EXCEPTION_HANDLING:    'No match found',
+  P7_AMOUNT_VARIANCE:       'Amount variance rule',
+  P8_LEARNED_INVOICE_SUFFIX:'Learned: invoice suffix match',
+  // Short codes (used in kv display)
+  P1: 'EndToEnd ID exact match',
+  P2: 'PMT reference + amount match',
+  P3: 'Invoice + amount match',
+  P4: 'Counterparty fuzzy + amount match',
+  P5: 'No match found',
+  P6: 'One-to-many grouping match',
+  P7: 'Amount variance rule',
+  // AI triage codes
+  TIER2C_NO_MATCH: 'AI reviewed — no match found',
+  TIER2C_LLM:      'AI reviewed — match suggested',
+  TIER2B_CLEAR:    'Embedding match — high confidence',
+  TIER2B_MAYBE:    'Embedding match — needs review',
+  AI_MAYBE_ZONE:   'Embedding match — needs review',
+};
+const ruleLabel = (code) => RULE_LABELS[code] ?? code;
 
 const PAGE_SIZE = 100;
 const MINOR_VARIANCE_TOLERANCE = 50;
@@ -659,6 +1047,12 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
   };
 
   const runSearch = () => { setPage(0); refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: 0 }); };
+
+  const batchAvg = useMemo(() => {
+    const vals = (results.items || []).map(r => r.match_confidence).filter(v => v != null && v > 0);
+    if (vals.length < 3) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  }, [results.items]);
 
   return (
     <section className="screen">
@@ -749,10 +1143,13 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
         selected={selected}
         onClose={() => setSelected(null)}
         onResolve={setSelected}
+        onRefresh={() => refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: page * PAGE_SIZE })}
         rows={results.items || []}
         selectedIndex={(results.items || []).findIndex(r => r.result_id === selected?.result_id)}
         onPrev={() => { const idx = (results.items || []).findIndex(r => r.result_id === selected?.result_id); if (idx > 0) setSelected(results.items[idx - 1]); }}
         onNext={() => { const idx = (results.items || []).findIndex(r => r.result_id === selected?.result_id); if (idx < (results.items || []).length - 1) setSelected(results.items[idx + 1]); }}
+        onSelect={setSelected}
+        batchAvg={batchAvg}
       />
     </section>
   );

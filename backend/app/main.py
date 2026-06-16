@@ -303,7 +303,23 @@ def get_case(case_id: str) -> dict:
         if not row: raise HTTPException(status_code=404, detail="Case not found")
         events=rows_to_dicts(conn.execute("SELECT * FROM recon_user_action_event WHERE case_id=? ORDER BY event_timestamp DESC", (case_id,)).fetchall())
         resolutions=rows_to_dicts(conn.execute("SELECT * FROM recon_manual_resolution WHERE case_id=? ORDER BY resolved_at DESC", (case_id,)).fetchall())
-    return {"case":row_to_dict(row),"events":events,"manual_resolutions":resolutions}
+        case_dict = row_to_dict(row)
+        # Augment with raw transaction fields not stored on recon_cases
+        psr_id = case_dict.get("psr_id")
+        camt_id = case_dict.get("camt_id")
+        if psr_id:
+            psr_row = conn.execute("SELECT direction FROM psr_transactions WHERE id = ?", (psr_id,)).fetchone()
+            if psr_row:
+                case_dict["psr_direction"] = psr_row["direction"]
+        if camt_id:
+            camt_row = conn.execute("SELECT direction, remittance, pmt_ref, invoice, counterparty FROM camt_transactions WHERE camt_id = ?", (camt_id,)).fetchone()
+            if camt_row:
+                case_dict["camt_direction"] = camt_row["direction"]
+                case_dict["camt_remittance"] = camt_row["remittance"]
+                case_dict["camt_pmt_ref"] = camt_row["pmt_ref"]
+                case_dict["camt_invoice"] = camt_row["invoice"]
+                case_dict["camt_counterparty"] = camt_row["counterparty"]
+    return {"case": case_dict, "events": events, "manual_resolutions": resolutions}
 
 
 @app.get("/api/reconcile/cases/{case_id}/explanation")
@@ -321,6 +337,33 @@ def get_case_explanation(case_id: str) -> dict:
         "suggestions": case.get("suggestions") or [],
     }
 
+@app.get("/api/reconcile/cases/{case_id}/similar")
+def get_similar_cases(case_id: str, limit: int = Query(5, ge=1, le=20)) -> dict:
+    RESOLVED_STATUSES = (
+        "Matched & Settled (Auto-Close)",
+        "Resolved Manually",
+        "AI-Assisted Suggested Match",
+        "Post to Short or Over Ledger",
+    )
+    with get_conn() as conn:
+        current = conn.execute(
+            "SELECT rule_applied FROM recon_cases WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        if not current or not current["rule_applied"]:
+            return {"items": [], "count": 0}
+        placeholders = ",".join("?" * len(RESOLVED_STATUSES))
+        rows = rows_to_dicts(conn.execute(
+            f"""SELECT case_id, psr_id, rule_applied, reconciliation_status, updated_at
+                FROM recon_cases
+                WHERE case_id != ?
+                  AND rule_applied = ?
+                  AND reconciliation_status IN ({placeholders})
+                ORDER BY updated_at DESC
+                LIMIT ?""",
+            (case_id, current["rule_applied"], *RESOLVED_STATUSES, limit)
+        ).fetchall())
+    return {"items": rows, "count": len(rows)}
+
 @app.post("/api/reconcile/cases/{case_id}/resolve")
 def resolve_case(case_id: str, request: CaseResolveRequest) -> dict:
     with get_conn() as conn:
@@ -329,10 +372,17 @@ def resolve_case(case_id: str, request: CaseResolveRequest) -> dict:
         event_id=f"EVT-{uuid.uuid4().hex[:10].upper()}"; resolution_id=f"RES-{uuid.uuid4().hex[:10].upper()}"
         selected_psr=request.selected_psr_ids or ([case["psr_id"]] if case["psr_id"] else [])
         selected_bank=request.selected_bank_ids or ([case["camt_id"]] if case["camt_id"] else [])
-        payload={"case_id":case_id,"resolution_type":request.resolution_type,"reason_code":request.reason_code,"selected_psr_ids":selected_psr,"selected_bank_ids":selected_bank,"fields_used":request.fields_used,"fields_ignored":request.fields_ignored,"accepted_variance":request.accepted_variance,"comment":request.comment,"previous_engine_confidence":case["match_confidence"],"final_user_confidence":request.final_user_confidence}
+        # Override path: mark as not eligible for learning signal
+        is_override = bool(request.override_reason)
+        effective_learning_eligible = False if is_override else request.learning_eligible
+        effective_comment = request.comment
+        if is_override:
+            note_part = f" Note: {request.override_note}" if request.override_note else ""
+            effective_comment = f"Override reason: {request.override_reason}.{note_part}"
+        payload={"case_id":case_id,"resolution_type":request.resolution_type,"reason_code":request.reason_code,"selected_psr_ids":selected_psr,"selected_bank_ids":selected_bank,"fields_used":request.fields_used,"fields_ignored":request.fields_ignored,"accepted_variance":request.accepted_variance,"comment":effective_comment,"previous_engine_confidence":case["match_confidence"],"final_user_confidence":request.final_user_confidence,"override_reason":request.override_reason,"override_note":request.override_note}
         conn.execute("INSERT INTO recon_user_action_event (event_id, case_id, event_type, user_id, event_payload_json) VALUES (?, ?, 'exception_resolved', 'prototype_user', ?)", (event_id,case_id,json_dumps(payload)))
-        conn.execute("INSERT INTO recon_manual_resolution (resolution_id, case_id, original_exception_type, final_resolution_type, reason_code, psr_transaction_ids_json, bank_transaction_ids_json, amount_variance, date_variance_days, fields_used_json, fields_ignored_json, user_comment, resolved_by, learning_eligible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prototype_user', ?)", (resolution_id,case_id,case["reconciliation_status"],request.resolution_type,request.reason_code,json_dumps(selected_psr),json_dumps(selected_bank),request.accepted_variance if request.accepted_variance is not None else case["variance"],case["aging_days"],json_dumps(request.fields_used),json_dumps(request.fields_ignored),request.comment,1 if request.learning_eligible else 0))
-        conn.execute("UPDATE recon_cases SET reconciliation_status='Resolved Manually', reason_code=?, exception_flag='N', explanation=?, updated_at=CURRENT_TIMESTAMP WHERE case_id=?", (request.reason_code,f"Resolved by analyst as {request.resolution_type}. Learning signal captured.",case_id))
+        conn.execute("INSERT INTO recon_manual_resolution (resolution_id, case_id, original_exception_type, final_resolution_type, reason_code, psr_transaction_ids_json, bank_transaction_ids_json, amount_variance, date_variance_days, fields_used_json, fields_ignored_json, user_comment, resolved_by, learning_eligible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prototype_user', ?)", (resolution_id,case_id,case["reconciliation_status"],request.resolution_type,request.reason_code,json_dumps(selected_psr),json_dumps(selected_bank),request.accepted_variance if request.accepted_variance is not None else case["variance"],case["aging_days"],json_dumps(request.fields_used),json_dumps(request.fields_ignored),effective_comment,1 if effective_learning_eligible else 0))
+        conn.execute("UPDATE recon_cases SET reconciliation_status='Resolved Manually', reason_code=?, exception_flag='N', explanation=?, updated_at=CURRENT_TIMESTAMP WHERE case_id=?", (request.reason_code,f"Resolved by analyst as {request.resolution_type}. Learning signal {'excluded (override)' if is_override else 'captured'}.",case_id))
         mark_workflow_resolved(conn, case_id, updated_by="prototype_user", comment=f"Resolved as {request.resolution_type}")
         conn.commit()
     return {"case_id":case_id,"event_id":event_id,"resolution_id":resolution_id,"status":"resolved"}
