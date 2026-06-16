@@ -561,15 +561,22 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
   const [overrideReason, setOverrideReason] = useState('');
   const [overrideNote, setOverrideNote] = useState('');
   const [overrideLoading, setOverrideLoading] = useState(false);
+  const [similarCases, setSimilarCases] = useState(null);
+  const [similarOpen, setSimilarOpen] = useState(false);
   useEffect(() => {
-    if (!selected?.result_id) { setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote(''); return; }
+    if (!selected?.result_id) {
+      setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote('');
+      setSimilarCases(null); setSimilarOpen(false);
+      return;
+    }
     setDetail(null);
     setOverrideMode(false);
     setOverrideReason('');
     setOverrideNote('');
-    api.caseDetail(selected.result_id)
-      .then(d => setDetail(d.case))
-      .catch(() => {});
+    setSimilarCases(null);
+    setSimilarOpen(false);
+    api.caseDetail(selected.result_id).then(d => setDetail(d.case)).catch(() => {});
+    api.similarCases(selected.result_id).then(setSimilarCases).catch(() => setSimilarCases({ items: [], count: 0 }));
   }, [selected?.result_id]);
   const submitOverride = async () => {
     if (!overrideReason) return;
@@ -648,6 +655,25 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
             </div>
           </Panel>
 )}
+          {similarCases?.count > 0 && (
+            <div className="nested-panel similar-panel">
+              <button className="similar-header" onClick={() => setSimilarOpen(o => !o)}>
+                <span>{similarCases.count} similar resolved case{similarCases.count !== 1 ? 's' : ''}</span>
+                <span className="similar-chevron">{similarOpen ? '▲' : '▼'}</span>
+              </button>
+              {similarOpen && (
+                <div className="similar-list">
+                  {similarCases.items.map(s => (
+                    <div className="similar-item" key={s.case_id}>
+                      <span className="similar-rule">{ruleLabel(s.rule_applied)}</span>
+                      <Tag tone={classForStatus(s.reconciliation_status)}>{s.reconciliation_status}</Tag>
+                      <span className="similar-date">{s.updated_at?.slice(0, 10) || ''}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         {item.exception_flag === 'Y' && (
           <div className="drawer-footer">
