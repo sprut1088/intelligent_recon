@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api/client';
 
 const tabs = [
@@ -161,14 +161,17 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
   );
 }
 
-function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, onUpload, onValidate, onRunBatch, loading }) {
+function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, onUpload, onValidate, onRunBatch, onNavigate, loading }) {
   const [psrFile, setPsrFile] = useState(null);
   const [camtFile, setCamtFile] = useState(null);
   const [batchName, setBatchName] = useState('Treasury cash daily upload');
+  const qualityTableRef = useRef(null);
   const selectedBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
   const batchId = selectedBatch?.batch_id || selectedBatchId || '';
   const issues = quality?.issues || [];
   const files = submissions?.items || [];
+
+  const scrollToQualityTable = () => qualityTableRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' });
 
   return (
     <section className="screen">
@@ -212,15 +215,51 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
                 <button className="btn secondary" disabled={!batchId || loading} onClick={() => onValidate(batchId)}>Validate quality</button>
                 <button className="btn primary" disabled={!batchId || loading} onClick={() => onRunBatch(batchId)}>Run uploaded batch</button>
               </div>
+
+              {quality && (
+                <div style={{ marginTop: '1.25rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
+                  <div style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '0.6rem' }}>Data quality</div>
+                  <div className="metric-grid three" style={{ marginBottom: '0.4rem' }}>
+                    <div style={{ cursor: (quality.error_count || 0) > 0 ? 'pointer' : 'default' }} onClick={(quality.error_count || 0) > 0 ? scrollToQualityTable : undefined} title={(quality.error_count || 0) > 0 ? 'Click to see issue details below' : undefined}>
+                      <Metric label="Errors" value={quality.error_count || 0} hint={(quality.error_count || 0) > 0 ? '↓ See details' : 'None'} tone="danger" />
+                    </div>
+                    <div style={{ cursor: (quality.warning_count || 0) > 0 ? 'pointer' : 'default' }} onClick={(quality.warning_count || 0) > 0 ? scrollToQualityTable : undefined} title={(quality.warning_count || 0) > 0 ? 'Click to see issue details below' : undefined}>
+                      <Metric label="Warnings" value={quality.warning_count || 0} hint={(quality.warning_count || 0) > 0 ? '↓ See details' : 'None'} tone="warning" />
+                    </div>
+                    <Metric label="Files checked" value={(quality.files || []).length} hint="PSR + CAMT" tone="info" />
+                  </div>
+                </div>
+              )}
+
+              {batchRunResult && (
+                <div style={{ marginTop: '1.25rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
+                  <div style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '0.6rem' }}>Batch run results</div>
+                  <div className="metric-grid three" style={{ marginBottom: '0.75rem' }}>
+                    <div style={{ cursor: 'pointer' }} onClick={() => onNavigate('results')} title="Open Results Workbench">
+                      <Metric label="PSR transactions" value={batchRunResult.psr_count || 0} hint="→ Results Workbench" tone="info" />
+                    </div>
+                    <div style={{ cursor: 'pointer' }} onClick={() => onNavigate('results')} title="Open Results Workbench">
+                      <Metric label="CAMT entries" value={batchRunResult.camt_count || 0} hint="→ Results Workbench" tone="info" />
+                    </div>
+                    <div style={{ cursor: 'pointer' }} onClick={() => onNavigate('results')} title="Open Results Workbench">
+                      <Metric label="Cases created" value={batchRunResult.case_count || 0} hint="→ Results Workbench" tone="good" />
+                    </div>
+                  </div>
+                  <div className="button-row" style={{ marginTop: '0.5rem' }}>
+                    <button className="btn secondary small" onClick={() => onNavigate('results')}>View Results Workbench →</button>
+                    <button className="btn secondary small" onClick={() => onNavigate('exceptions')}>View Exceptions →</button>
+                  </div>
+                </div>
+              )}
             </>
           ) : <p className="empty small">Upload a PSR file to create a batch.</p>}
         </Panel>
       </div>
 
       <Panel title="Submissions queue" subtitle="Equivalent operational view for uploaded files, processing status, document state and usage.">
-        <div className="table-wrap">
+        <div className="table-wrap" style={{ maxHeight: '300px', overflowY: 'auto' }}>
           <table>
-            <thead><tr><th>File</th><th>Type</th><th>Batch</th><th>Upload status</th><th>Document status</th><th>Used in</th><th>Profile</th></tr></thead>
+            <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr><th>File</th><th>Type</th><th>Batch</th><th>Upload status</th><th>Document status</th><th>Used in</th><th>Profile</th></tr></thead>
             <tbody>
               {files.map((f) => (
                 <tr key={f.file_id}>
@@ -239,26 +278,22 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
         </div>
       </Panel>
 
-      <Panel title="Data quality report" subtitle="Header, trailer, duplicates, scaling, missing values and cross-feed controls.">
-        {quality ? (
-          <>
-            <div className="metric-grid three">
-              <Metric label="Errors" value={quality.error_count || 0} hint="Stop production auto-close" tone="danger" />
-              <Metric label="Warnings" value={quality.warning_count || 0} hint="Review before pilot" tone="warning" />
-              <Metric label="Files checked" value={(quality.files || []).length} hint="PSR and CAMT expected" tone="info" />
-            </div>
-            <div className="table-wrap compact">
+      {quality && (
+        <div ref={qualityTableRef}>
+          <Panel title="Data quality issue details" subtitle={`${issues.length} issue${issues.length !== 1 ? 's' : ''} found · ${quality.error_count || 0} error${(quality.error_count || 0) !== 1 ? 's' : ''}, ${quality.warning_count || 0} warning${(quality.warning_count || 0) !== 1 ? 's' : ''}`}>
+            <div className="table-wrap compact" style={{ maxHeight: '340px', overflowY: 'auto' }}>
               <table>
-                <thead><tr><th>Severity</th><th>Issue</th><th>Record</th><th>Message</th></tr></thead>
+                <thead style={{ position: 'sticky', top: 0, zIndex: 1 }}><tr><th>Severity</th><th>Issue</th><th>Record</th><th>Message</th></tr></thead>
                 <tbody>
                   {issues.map((i) => <tr key={i.issue_id}><td><Tag tone={classForStatus(i.severity)}>{i.severity}</Tag></td><td>{i.issue_code}</td><td>{i.record_id || '-'}</td><td>{i.message}</td></tr>)}
                   {!issues.length && <tr><td colSpan="4" className="empty">No quality issues found.</td></tr>}
                 </tbody>
               </table>
             </div>
-          </>
-        ) : <p className="empty small">Run validation to see data quality results.</p>}
-      </Panel>
+          </Panel>
+        </div>
+      )}
+
     </section>
   );
 }
@@ -1451,6 +1486,7 @@ export default function App() {
   const [batches, setBatches] = useState({ items: [] });
   const [selectedBatchId, setSelectedBatchId] = useState('');
   const [quality, setQuality] = useState(null);
+  const [batchRunResult, setBatchRunResult] = useState(null);
   const [exceptions, setExceptions] = useState({ items: [] });
   const [patterns, setPatterns] = useState([]);
   const [candidates, setCandidates] = useState([]);
@@ -1538,7 +1574,11 @@ export default function App() {
   };
 
   const runSelectedBatch = async (batchId) => {
-    await safe(() => api.runBatch(batchId), 'Uploaded batch reconciled');
+    let result;
+    await safe(async () => {
+      result = await api.runBatch(batchId);
+      setBatchRunResult(result);
+    }, 'Uploaded batch reconciled');
   };
 
   const runAiTriage = async () => {
@@ -1607,7 +1647,7 @@ export default function App() {
 
   const screen = useMemo(() => {
     if (active === 'workspace') return <Workspace workspace={workspace} summary={summary} onLoad={() => safe(api.loadSampleData, 'Sample PSR/CAMT loaded')} onRun={() => safe(api.runRecon, 'Reconciliation completed')} onSnapshot={() => safe(api.createSnapshot, 'Snapshot created')} onExport={exportCsv} loading={loading} />;
-    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} onUpload={uploadReconFile} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} loading={loading} />;
+    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} onUpload={uploadReconFile} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
     if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} loading={loading} />;
@@ -1617,7 +1657,7 @@ export default function App() {
     if (active === 'assistant') return <Assistant answer={assistantAnswer} onAsk={async (q) => setAssistantAnswer(await api.assistant(q))} />;
     if (active === 'governance') return <Governance events={events} workspace={workspace} onSnapshot={() => safe(api.createSnapshot, 'Snapshot created')} />;
     return null;
-  }, [active, workspace, summary, results, exceptions, patterns, candidates, events, batches, submissions, selectedBatchId, quality, preview, predictions, noCodeRules, workflowRules, dashboard, selected, assistantAnswer, loading]);
+  }, [active, workspace, summary, results, exceptions, patterns, candidates, events, batches, submissions, selectedBatchId, quality, batchRunResult, preview, predictions, noCodeRules, workflowRules, dashboard, selected, assistantAnswer, loading]);
 
   return (
     <div className="app-shell">
