@@ -101,8 +101,8 @@ TASK-19 + TASK-23 ──► TASK-25  Bulk resolution
 | [TASK-20](TASK-20-evidence-drawer-similar-cases.md) | Similar resolved cases panel | Full-stack | TASK-19 | ✅ Complete |
 | [TASK-21](TASK-21-evidence-drawer-confidence-trend.md) | Confidence trend indicator | Frontend | TASK-14 | ✅ Complete |
 | [TASK-22](TASK-22-evidence-drawer-source-links.md) | Direct links to source records | Frontend | TASK-15 | ✅ Complete |
-| [TASK-23](TASK-23-evidence-drawer-filter-navigation.md) | Filterable drawer navigation | Frontend | TASK-14…TASK-19 | 🔲 Not started |
-| [TASK-24](TASK-24-evidence-drawer-keyboard-shortcuts.md) | Keyboard shortcuts | Frontend | TASK-23 | 🔲 Not started |
+| [TASK-23](TASK-23-evidence-drawer-filter-navigation.md) | Filterable drawer navigation | Frontend | TASK-14–19 | ✅ Complete |
+| [TASK-24](TASK-24-evidence-drawer-keyboard-shortcuts.md) | Keyboard shortcuts | Frontend | TASK-23 | ✅ Complete |
 | [TASK-25](TASK-25-bulk-resolution.md) | Bulk resolution | Full-stack | TASK-19, TASK-23 | 🔲 Not started |
 
 ---

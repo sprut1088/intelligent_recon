@@ -205,6 +205,14 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .similar-item { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 .similar-rule { flex: 1; color: var(--muted); }
 .similar-date { color: var(--muted); white-space: nowrap; }
+.drawer-nav-counter { font-size: 0.82rem; display: flex; align-items: center; gap: 6px; }
+.filter-badge { background: var(--primary); color: #fff; font-size: 10px; font-weight: 700; padding: 1px 6px; border-radius: 999px; text-transform: uppercase; letter-spacing: 0.04em; }
+.drawer-filter-pills { display: flex; gap: 4px; }
+.filter-pill { padding: 2px 8px; border-radius: 999px; border: 1px solid var(--line); background: #f8fafc; font-size: 11px; cursor: pointer; display: flex; gap: 4px; align-items: center; color: var(--muted); }
+.filter-pill.active { background: var(--primary); color: #fff; border-color: var(--primary); }
+.filter-pill .pill-count { font-weight: 700; }
+.shortcut-legend { display: flex; justify-content: space-between; align-items: center; padding: 7px 20px; border-top: 1px solid var(--line); font-size: 11px; color: var(--muted); background: #fafafa; }
+.btn.link.small { font-size: 11px; }
 .confidence-trend { font-size: 0.8rem; color: var(--muted, #6b7280); margin-top: 4px; }
 .confidence-field-summary { font-size: 0.8rem; color: var(--muted, #6b7280); margin-top: 4px; }
 .no-match-explanation { font-size: 0.85rem; color: var(--muted, #6b7280); line-height: 1.5; margin: 4px 0 0; }
