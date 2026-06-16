@@ -192,6 +192,16 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .override-label { font-size: 12px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.05em; }
 .override-select { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; background: #fff; }
 .override-note { width: 100%; padding: 8px 10px; border: 1px solid var(--line); border-radius: 8px; font-size: 13px; resize: vertical; font-family: inherit; box-sizing: border-box; }
+.similar-panel { margin-top: 18px; }
+.similar-header { width: 100%; display: flex; justify-content: space-between; align-items: center; background: none; border: none; cursor: pointer; padding: 6px 0; font-size: 13px; font-weight: 700; color: var(--text, #1e293b); }
+.similar-header:hover { color: var(--primary); }
+.similar-chevron { font-size: 10px; color: var(--muted); }
+.similar-list { display: grid; gap: 8px; margin-top: 10px; }
+.similar-item { display: flex; align-items: center; gap: 10px; font-size: 12px; }
+.similar-rule { flex: 1; color: var(--muted); }
+.similar-date { color: var(--muted); white-space: nowrap; }
+.confidence-trend { font-size: 0.8rem; color: var(--muted, #6b7280); margin-top: 4px; }
+.confidence-trend.outlier { color: #b45309; font-weight: 500; }
 .btn.link { background: none; border: none; color: var(--primary); padding: 0; font-size: 13px; cursor: pointer; text-align: left; }
 .suggestion-confirm { border-left: 3px solid var(--success); }
 .suggestion-analyst { border-left: 3px solid var(--warning); }

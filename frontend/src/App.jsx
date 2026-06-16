@@ -555,21 +555,28 @@ function FieldDiff({ item }) {
   );
 }
 
-function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], selectedIndex = -1, onPrev, onNext }) {
+function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], selectedIndex = -1, onPrev, onNext, batchAvg = null }) {
   const [detail, setDetail] = useState(null);
   const [overrideMode, setOverrideMode] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
   const [overrideNote, setOverrideNote] = useState('');
   const [overrideLoading, setOverrideLoading] = useState(false);
+  const [similarCases, setSimilarCases] = useState(null);
+  const [similarOpen, setSimilarOpen] = useState(false);
   useEffect(() => {
-    if (!selected?.result_id) { setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote(''); return; }
+    if (!selected?.result_id) {
+      setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote('');
+      setSimilarCases(null); setSimilarOpen(false);
+      return;
+    }
     setDetail(null);
     setOverrideMode(false);
     setOverrideReason('');
     setOverrideNote('');
-    api.caseDetail(selected.result_id)
-      .then(d => setDetail(d.case))
-      .catch(() => {});
+    setSimilarCases(null);
+    setSimilarOpen(false);
+    api.caseDetail(selected.result_id).then(d => setDetail(d.case)).catch(() => {});
+    api.similarCases(selected.result_id).then(setSimilarCases).catch(() => setSimilarCases({ items: [], count: 0 }));
   }, [selected?.result_id]);
   const submitOverride = async () => {
     if (!overrideReason) return;
@@ -617,6 +624,16 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
             <div className="score-labelled">
               <p className="score-label">Overall match confidence</p>
               <div className="score-large"><span style={{ width: `${score.engine_confidence ?? item.match_confidence ?? 0}%` }} /></div>
+              {batchAvg != null && item.match_confidence != null && (
+                <p className={`confidence-trend${item.match_confidence < batchAvg - 20 ? ' outlier' : ''}`}>
+                  Batch avg: {batchAvg.toFixed(0)}% —{' '}
+                  {item.match_confidence < batchAvg - 20
+                    ? '⚠ Low outlier — significantly below batch average'
+                    : item.match_confidence < batchAvg
+                      ? 'this item is below average'
+                      : 'this item is above average'}
+                </p>
+              )}
             </div>
             <div className="evidence-list">
               {components.map((c) => (
@@ -648,6 +665,25 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
             </div>
           </Panel>
 )}
+          {similarCases?.count > 0 && (
+            <div className="nested-panel similar-panel">
+              <button className="similar-header" onClick={() => setSimilarOpen(o => !o)}>
+                <span>{similarCases.count} similar resolved case{similarCases.count !== 1 ? 's' : ''}</span>
+                <span className="similar-chevron">{similarOpen ? '▲' : '▼'}</span>
+              </button>
+              {similarOpen && (
+                <div className="similar-list">
+                  {similarCases.items.map(s => (
+                    <div className="similar-item" key={s.case_id}>
+                      <span className="similar-rule">{ruleLabel(s.rule_applied)}</span>
+                      <Tag tone={classForStatus(s.reconciliation_status)}>{s.reconciliation_status}</Tag>
+                      <span className="similar-date">{s.updated_at?.slice(0, 10) || ''}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
         {item.exception_flag === 'Y' && (
           <div className="drawer-footer">
@@ -803,6 +839,12 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
 
   const runSearch = () => { setPage(0); refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: 0 }); };
 
+  const batchAvg = useMemo(() => {
+    const vals = (results.items || []).map(r => r.match_confidence).filter(v => v != null && v > 0);
+    if (vals.length < 3) return null;
+    return vals.reduce((a, b) => a + b, 0) / vals.length;
+  }, [results.items]);
+
   return (
     <section className="screen">
       <div className="screen-title split">
@@ -897,6 +939,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
         selectedIndex={(results.items || []).findIndex(r => r.result_id === selected?.result_id)}
         onPrev={() => { const idx = (results.items || []).findIndex(r => r.result_id === selected?.result_id); if (idx > 0) setSelected(results.items[idx - 1]); }}
         onNext={() => { const idx = (results.items || []).findIndex(r => r.result_id === selected?.result_id); if (idx < (results.items || []).length - 1) setSelected(results.items[idx + 1]); }}
+        batchAvg={batchAvg}
       />
     </section>
   );

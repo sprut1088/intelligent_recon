@@ -337,6 +337,33 @@ def get_case_explanation(case_id: str) -> dict:
         "suggestions": case.get("suggestions") or [],
     }
 
+@app.get("/api/reconcile/cases/{case_id}/similar")
+def get_similar_cases(case_id: str, limit: int = Query(5, ge=1, le=20)) -> dict:
+    RESOLVED_STATUSES = (
+        "Matched & Settled (Auto-Close)",
+        "Resolved Manually",
+        "AI-Assisted Suggested Match",
+        "Post to Short or Over Ledger",
+    )
+    with get_conn() as conn:
+        current = conn.execute(
+            "SELECT rule_applied FROM recon_cases WHERE case_id = ?", (case_id,)
+        ).fetchone()
+        if not current or not current["rule_applied"]:
+            return {"items": [], "count": 0}
+        placeholders = ",".join("?" * len(RESOLVED_STATUSES))
+        rows = rows_to_dicts(conn.execute(
+            f"""SELECT case_id, psr_id, rule_applied, reconciliation_status, updated_at
+                FROM recon_cases
+                WHERE case_id != ?
+                  AND rule_applied = ?
+                  AND reconciliation_status IN ({placeholders})
+                ORDER BY updated_at DESC
+                LIMIT ?""",
+            (case_id, current["rule_applied"], *RESOLVED_STATUSES, limit)
+        ).fetchall())
+    return {"items": rows, "count": len(rows)}
+
 @app.post("/api/reconcile/cases/{case_id}/resolve")
 def resolve_case(case_id: str, request: CaseResolveRequest) -> dict:
     with get_conn() as conn:
