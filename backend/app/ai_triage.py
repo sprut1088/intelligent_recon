@@ -9,6 +9,7 @@ Tier 2c (LLM adjudication) is implemented in a separate function in this module.
 from __future__ import annotations
 
 import logging
+import re
 from typing import Any, Dict, List, Optional
 from .config import settings
 from .db import get_conn, json_dumps, rows_to_dicts
@@ -366,18 +367,36 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
         # PSR fields are identical across all candidates for the same PSR
         first = top_candidates[0]
 
+        psr_counterparty = (first.get('psr_counterparty') or '').strip()
+
+        def _remittance_name_hit(camt: Dict) -> bool:
+            """True if PSR counterparty name (≥4 chars) appears as a whole word in
+            the CAMT remittance text. Uses word-boundary regex to avoid short-token
+            false positives (e.g. 'ACB' inside 'ACBDE Corp')."""
+            if len(psr_counterparty) < 4:
+                return False
+            remittance = (camt.get('camt_remittance') or '').strip()
+            if not remittance:
+                return False
+            pattern = r'\b' + re.escape(psr_counterparty) + r'\b'
+            return bool(re.search(pattern, remittance, re.IGNORECASE))
+
         candidate_lines = [
             f"  {i}. ID:{c['camt_id']} | Dir:{c.get('camt_direction', '')} "
             f"| Amt:{c.get('camt_amount', '')} {c.get('camt_currency', '')} "
             f"| Date:{c.get('camt_booking_date', '')} "
             f"| Party:{c.get('camt_counterparty', '')} "
-            f"| Remittance:{c.get('camt_remittance', '')}"
+            f"| Remittance:{c.get('camt_remittance', '')} "
+            f"| RemittanceNameMatch:{'YES — PSR counterparty name found verbatim in remittance' if _remittance_name_hit(c) else 'NO'}"
             for i, c in enumerate(top_candidates, 1)
         ]
 
         prompt = (
             "You are a cash reconciliation analyst. One internal PSR payment record is unmatched.\n"
-            "Review the candidate bank (CAMT) entries below and identify the best match.\n\n"
+            "Review the candidate bank (CAMT) entries below and identify the best match.\n"
+            "IMPORTANT RULE: If RemittanceNameMatch is YES for a candidate, treat that as strong "
+            "evidence of a match — banks often use an intermediary legal name as the Party field "
+            "while the actual payer name appears in the remittance text.\n\n"
             f"PSR:\n"
             f"  ID: {psr_id} | Direction: {first.get('psr_direction', '')} "
             f"| Amount: {first.get('psr_amount', '')} {first.get('psr_currency', '')}\n"
