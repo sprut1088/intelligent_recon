@@ -157,7 +157,8 @@ def parse_camt_file(path: Path) -> List[CamtTransaction]:
         currency = amt_el.attrib.get("Ccy", "EUR") if amt_el is not None else "EUR"
         direction = normalise_direction(_first_text_by_local_name(entry, "CdtDbtInd"))
         booking_date = _first_text_by_local_name(entry, "Dt")
-        end_to_end_id = _first_text_by_local_name(entry, "EndToEndId")
+        e2e_raw = _first_text_by_local_name(entry, "EndToEndId")
+        end_to_end_id = e2e_raw if e2e_raw and e2e_raw.upper() not in ("NOTFOUND", "NOT FOUND", "N/A", "NOTAVAILABLE") else ""
         counterparty = _first_text_by_local_name(entry, "Nm")
         remittance = " ".join(clean_text(item.text) for item in _children_by_local_name(entry, "Ustrd") if item.text)
         pmt_ref = extract_pmt_ref(remittance)
