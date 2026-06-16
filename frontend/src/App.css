@@ -200,6 +200,8 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .similar-item { display: flex; align-items: center; gap: 10px; font-size: 12px; }
 .similar-rule { flex: 1; color: var(--muted); }
 .similar-date { color: var(--muted); white-space: nowrap; }
+.confidence-trend { font-size: 0.8rem; color: var(--muted, #6b7280); margin-top: 4px; }
+.confidence-trend.outlier { color: #b45309; font-weight: 500; }
 .btn.link { background: none; border: none; color: var(--primary); padding: 0; font-size: 13px; cursor: pointer; text-align: left; }
 .suggestion-confirm { border-left: 3px solid var(--success); }
 .suggestion-analyst { border-left: 3px solid var(--warning); }
