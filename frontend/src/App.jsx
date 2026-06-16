@@ -566,7 +566,7 @@ function FieldDiff({ item }) {
   );
 }
 
-function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], selectedIndex = -1, onPrev, onNext, batchAvg = null }) {
+function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], selectedIndex = -1, onPrev, onNext, onSelect, batchAvg = null }) {
   const [detail, setDetail] = useState(null);
   const [overrideMode, setOverrideMode] = useState(false);
   const [overrideReason, setOverrideReason] = useState('');
@@ -575,10 +575,31 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
   const [similarCases, setSimilarCases] = useState(null);
   const [similarOpen, setSimilarOpen] = useState(false);
   const [noMatchLoading, setNoMatchLoading] = useState(null);
+  const [drawerFilter, setDrawerFilter] = useState('all');
+  const [shortcutsHidden, setShortcutsHidden] = useState(() => localStorage.getItem('hideDrawerShortcuts') === '1');
+
+  const filteredRows = useMemo(() => {
+    switch (drawerFilter) {
+      case 'low': return rows.filter(r => r.match_confidence != null && r.match_confidence < 60);
+      case 'ai':  return rows.filter(r => r.rule_applied?.startsWith('TIER2'));
+      default:    return rows;
+    }
+  }, [rows, drawerFilter]);
+
+  const filteredIndex = filteredRows.findIndex(r => r.result_id === selected?.result_id);
+
+  const goTo = (delta) => {
+    const next = filteredRows[filteredIndex + delta];
+    if (next && onSelect) onSelect(next);
+    else if (delta === -1) onPrev?.();
+    else onNext?.();
+  };
+
   useEffect(() => {
     if (!selected?.result_id) {
       setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote('');
       setSimilarCases(null); setSimilarOpen(false);
+      setDrawerFilter('all');
       return;
     }
     setDetail(null);
@@ -591,6 +612,28 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
     api.caseDetail(selected.result_id).then(d => setDetail(d.case)).catch(() => {});
     api.similarCases(selected.result_id).then(setSimilarCases).catch(() => setSimilarCases({ items: [], count: 0 }));
   }, [selected?.result_id]);
+
+  useEffect(() => {
+    if (!selected) return;
+    const MATCH_STATUSES_KB = ['Suggested Match - Analyst Review', 'Suggested Match - Learned Pattern', 'Exception - Amount Variance Review', 'Post to Short or Over Ledger'];
+    const handler = (e) => {
+      const tag = document.activeElement?.tagName?.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
+      if (e.key === 'ArrowLeft')  { e.preventDefault(); goTo(-1); }
+      if (e.key === 'ArrowRight') { e.preventDefault(); goTo(1); }
+      if (e.key === 'Escape')     { onClose(); }
+      if ((e.key === 'r' || e.key === 'R') && !overrideMode) {
+        const item = detail ? { ...selected, ...detail } : selected;
+        if (MATCH_STATUSES_KB.includes(item.reconciliation_status)) { e.preventDefault(); onResolve(item); }
+      }
+      if ((e.key === 'o' || e.key === 'O') && !overrideMode) {
+        const item = detail ? { ...selected, ...detail } : selected;
+        if (MATCH_STATUSES_KB.includes(item.reconciliation_status)) { e.preventDefault(); setOverrideMode(true); }
+      }
+    };
+    window.addEventListener('keydown', handler);
+    return () => window.removeEventListener('keydown', handler);
+  }, [selected, detail, overrideMode, filteredIndex, filteredRows, onSelect, onPrev, onNext, onClose, onResolve]);
 
   const submitNoMatch = async (resolutionType, reasonCode) => {
     setNoMatchLoading(resolutionType);
@@ -627,9 +670,27 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
       <div className="drawer-backdrop" onClick={onClose} />
       <aside className="drawer">
         <div className="drawer-nav">
-          <button className="btn ghost" disabled={selectedIndex <= 0} onClick={onPrev}>← Prev</button>
-          <span>{selectedIndex >= 0 ? `${selectedIndex + 1} / ${total}` : ''}</span>
-          <button className="btn ghost" disabled={selectedIndex < 0 || selectedIndex >= total - 1} onClick={onNext}>Next →</button>
+          <button className="btn ghost" disabled={filteredIndex <= 0} onClick={() => goTo(-1)}>← Prev</button>
+          <span className="drawer-nav-counter">
+            {filteredIndex >= 0 ? `${filteredIndex + 1} / ${filteredRows.length}` : `0 / ${filteredRows.length}`}
+            {drawerFilter !== 'all' && <span className="filter-badge">{drawerFilter === 'low' ? 'Low conf' : 'AI'}</span>}
+          </span>
+          <div className="drawer-filter-pills">
+            {['all', 'low', 'ai'].map(f => (
+              <button key={f} className={`filter-pill${drawerFilter === f ? ' active' : ''}`} onClick={() => {
+                setDrawerFilter(f);
+                const newFiltered = f === 'low' ? rows.filter(r => r.match_confidence != null && r.match_confidence < 60)
+                  : f === 'ai' ? rows.filter(r => r.rule_applied?.startsWith('TIER2')) : rows;
+                if (newFiltered.length > 0 && !newFiltered.find(r => r.result_id === selected?.result_id)) {
+                  onSelect?.(newFiltered[0]);
+                }
+              }}>
+                {f === 'all' ? 'All' : f === 'low' ? 'Low conf' : 'AI'}
+                <span className="pill-count">{(f === 'low' ? rows.filter(r => r.match_confidence != null && r.match_confidence < 60) : f === 'ai' ? rows.filter(r => r.rule_applied?.startsWith('TIER2')) : rows).length}</span>
+              </button>
+            ))}
+          </div>
+          <button className="btn ghost" disabled={filteredIndex < 0 || filteredIndex >= filteredRows.length - 1} onClick={() => goTo(1)}>Next →</button>
           <button className="btn ghost" onClick={onClose}>Close</button>
         </div>
         <div className="drawer-body">
@@ -832,6 +893,12 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
             </div>
           );
         })()}
+        {!shortcutsHidden && (
+          <div className="shortcut-legend">
+            <span>← → navigate &nbsp;·&nbsp; R confirm &nbsp;·&nbsp; O override &nbsp;·&nbsp; Esc close</span>
+            <button className="btn link small" onClick={() => { setShortcutsHidden(true); localStorage.setItem('hideDrawerShortcuts', '1'); }}>hide</button>
+          </div>
+        )}
       </aside>
     </>
   );
@@ -1081,6 +1148,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
         selectedIndex={(results.items || []).findIndex(r => r.result_id === selected?.result_id)}
         onPrev={() => { const idx = (results.items || []).findIndex(r => r.result_id === selected?.result_id); if (idx > 0) setSelected(results.items[idx - 1]); }}
         onNext={() => { const idx = (results.items || []).findIndex(r => r.result_id === selected?.result_id); if (idx < (results.items || []).length - 1) setSelected(results.items[idx + 1]); }}
+        onSelect={setSelected}
         batchAvg={batchAvg}
       />
     </section>
