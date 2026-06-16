@@ -1053,7 +1053,62 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
   );
 }
 
-function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, loading }) {
+function AiTriageLoader() {
+  const steps = [
+    { label: 'Scanning unmatched PSR records', duration: 0 },
+    { label: 'Running embedding similarity (Tier 2b)', duration: 3000 },
+    { label: 'Sending candidates to LLM for adjudication (Tier 2c)', duration: 7000 },
+    { label: 'Updating cases and refreshing results', duration: 18000 },
+  ];
+  const [stepIdx, setStepIdx] = useState(0);
+  const [dots, setDots] = useState('');
+
+  useEffect(() => {
+    const timers = steps.slice(1).map((s, i) =>
+      setTimeout(() => setStepIdx(i + 1), s.duration)
+    );
+    const dotTimer = setInterval(() => setDots(d => d.length >= 3 ? '' : d + '.'), 500);
+    return () => { timers.forEach(clearTimeout); clearInterval(dotTimer); };
+  }, []);
+
+  return (
+    <div style={{
+      position: 'fixed', inset: 0, background: 'rgba(16,32,51,0.55)',
+      display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 200,
+    }}>
+      <div style={{
+        background: 'var(--panel)', borderRadius: '20px', padding: '2rem 2.5rem',
+        maxWidth: '420px', width: '100%', boxShadow: '0 24px 60px rgba(0,0,0,0.25)',
+        display: 'flex', flexDirection: 'column', gap: '1.25rem',
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
+          <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+            <path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/>
+          </svg>
+          <strong style={{ fontSize: '1rem', color: 'var(--ink)' }}>AI triage running{dots}</strong>
+        </div>
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+          {steps.map((s, i) => (
+            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', opacity: i > stepIdx ? 0.35 : 1 }}>
+              {i < stepIdx
+                ? <span style={{ color: 'var(--good)', fontSize: '1rem', lineHeight: 1 }}>✓</span>
+                : i === stepIdx
+                  ? <span style={{ width: '14px', height: '14px', border: '2.5px solid var(--primary)', borderTopColor: 'transparent', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
+                  : <span style={{ width: '14px', height: '14px', border: '2px solid var(--line)', borderRadius: '50%', display: 'inline-block' }} />
+              }
+              <span style={{ fontSize: '0.85rem', color: i === stepIdx ? 'var(--ink)' : 'var(--muted)', fontWeight: i === stepIdx ? 600 : 400 }}>{s.label}</span>
+            </div>
+          ))}
+        </div>
+        <p style={{ fontSize: '0.75rem', color: 'var(--muted)', margin: 0 }}>
+          LLM adjudication typically takes 10–30 seconds. Results will load automatically.
+        </p>
+      </div>
+    </div>
+  );
+}
+
+function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, loading, triageRunning }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -1090,7 +1145,8 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
   }, [results.items]);
 
   return (
-    <section className="screen">
+    <section className="screen" style={{ position: 'relative' }}>
+      {triageRunning && <AiTriageLoader />}
       <div className="screen-title split">
         <div>
           <div className="eyebrow">Results workbench</div>
@@ -1502,6 +1558,7 @@ export default function App() {
   const [modalItem, setModalItem] = useState(null);
   const [assistantAnswer, setAssistantAnswer] = useState(null);
   const [loading, setLoading] = useState(false);
+  const [triageRunning, setTriageRunning] = useState(false);
   const [toast, setToast] = useState('');
 
   const refresh = async () => {
@@ -1583,6 +1640,7 @@ export default function App() {
 
   const runAiTriage = async () => {
     let result;
+    setTriageRunning(true);
     await safe(
       async () => {
         result = await api.aiTriage();
@@ -1597,6 +1655,7 @@ export default function App() {
         return `AI triage complete — ${parts.length ? parts.join(', ') : '0 suggestions'}`;
       },
     );
+    setTriageRunning(false);
   };
 
   const tunePattern = async (patternId, draft) => {
@@ -1650,7 +1709,7 @@ export default function App() {
     if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} onUpload={uploadReconFile} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
-    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} loading={loading} />;
+    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} loading={loading} triageRunning={triageRunning} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;
