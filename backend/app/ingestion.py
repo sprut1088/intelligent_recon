@@ -153,10 +153,68 @@ def _batch_file_paths(batch_id: str) -> tuple[Path, Path]:
     return Path(psr["stored_path"]), Path(camt["stored_path"])
 
 
+_CANDIDATE_DIVISORS = (1.0, 100.0)
+
+
+def _sniff_psr_divisor(psr_path: Path, camt_transactions: list) -> float:
+    """Auto-detect the PSR amount divisor.
+
+    Parses PSR with divisor=1 to obtain raw integers, then scores each
+    candidate divisor (1 and 100) by checking how many of the first 50
+    PSR transactions have an amount that matches a CAMT transaction amount
+    (looked up by reference or invoice key).  The divisor with the highest
+    score wins; ties favour the global default.
+    """
+    if not camt_transactions:
+        logger.info("PSR divisor sniff skipped: no CAMT transactions, using default %s", settings.psr_amount_divisor)
+        return settings.psr_amount_divisor
+
+    # Parse PSR with raw (divisor=1) to get unscaled integers.
+    _, raw_txns = parse_psr_file(psr_path, amount_divisor=1.0)
+    if not raw_txns:
+        return settings.psr_amount_divisor
+
+    # Build reference/invoice → CAMT amount lookup.
+    camt_by_key: Dict[str, float] = {}
+    for txn in camt_transactions:
+        for key in (txn.pmt_ref, txn.end_to_end_id, txn.invoice):
+            k = (key or "").strip().upper()
+            if k:
+                camt_by_key[k] = txn.amount
+
+    if not camt_by_key:
+        logger.info("PSR divisor sniff skipped: no CAMT reference keys, using default %s", settings.psr_amount_divisor)
+        return settings.psr_amount_divisor
+
+    scores: Dict[float, int] = {d: 0 for d in _CANDIDATE_DIVISORS}
+    for txn in raw_txns[:50]:
+        camt_amt: Optional[float] = None
+        for key in (txn.reference, txn.invoice):
+            k = (key or "").strip().upper()
+            if k in camt_by_key:
+                camt_amt = camt_by_key[k]
+                break
+        if camt_amt is None:
+            continue
+        for divisor in _CANDIDATE_DIVISORS:
+            scaled = txn.amount / divisor
+            tolerance = max(0.01, abs(camt_amt) * 0.001)
+            if abs(scaled - camt_amt) <= tolerance:
+                scores[divisor] += 1
+
+    best = max(_CANDIDATE_DIVISORS, key=lambda d: (scores[d], d == settings.psr_amount_divisor))
+    logger.info("PSR divisor sniff: scores=%s → auto-selected %s", scores, best)
+    return best
+
+
 def run_uploaded_batch(batch_id: str, amount_divisor: Optional[float] = None, reset_transactions: bool = True) -> Dict:
     psr_path, camt_path = _batch_file_paths(batch_id)
-    header, psr_transactions = parse_psr_file(psr_path, amount_divisor=amount_divisor)
     camt_transactions = parse_camt_file(camt_path)
+
+    if amount_divisor is None:
+        amount_divisor = _sniff_psr_divisor(psr_path, camt_transactions)
+
+    header, psr_transactions = parse_psr_file(psr_path, amount_divisor=amount_divisor)
 
     with get_conn() as conn:
         if reset_transactions:

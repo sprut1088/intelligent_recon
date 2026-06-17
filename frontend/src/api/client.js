@@ -76,8 +76,8 @@ export const api = {
   },
   validateBatch: (batchId) => request(`/api/data-quality/batches/${batchId}/validate`, { method: 'POST' }),
   quality: (batchId) => request(`/api/data-quality/batches/${batchId}`),
-  runBatch: (batchId) => request(`/api/files/batches/${batchId}/run`, { method: 'POST', body: JSON.stringify({ reset: true }) }),
-  loadSampleData: () => request('/api/load-sample', { method: 'POST', body: JSON.stringify({ reset: true }) }),
+  runBatch: (batchId, amountDivisor = null) => request(`/api/files/batches/${batchId}/run`, { method: 'POST', body: JSON.stringify({ reset: true, ...(amountDivisor != null ? { amount_divisor: amountDivisor } : {}) }) }),
+  loadSampleData: (amountDivisor = null) => request('/api/load-sample', { method: 'POST', body: JSON.stringify({ reset: true, ...(amountDivisor != null ? { amount_divisor: amountDivisor } : {}) }) }),
   runRecon: () => request('/api/reconcile/run', { method: 'POST' }),
   aiTriage: () => request('/api/reconcile/ai-triage', { method: 'POST' }),
   summary: async () => mapSummary(await request('/api/reconcile/summary')),
@@ -146,4 +146,5 @@ export const api = {
   seedLearning: () => request('/api/learning/demo-signals', { method: 'POST' }),
   events: async () => (await request('/api/events?limit=50')).items || [],
   assistant: (question) => request(`/api/assistant/query?question=${encodeURIComponent(question)}`),
+  assistantBriefing: () => request('/api/assistant/briefing'),
 };

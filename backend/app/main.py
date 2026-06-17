@@ -441,25 +441,204 @@ def update_exception_workflow_route(case_id: str, request: WorkflowUpdateRequest
     except ValueError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
 
+def _build_assistant_context() -> dict:
+    """Gather a rich snapshot of live DB state for LLM/briefing consumption."""
+    s = summary()
+    total = s["total_cases"]
+    kpi = s["kpi"]
+    auto = int(kpi.get("auto_matched_count") or 0)
+    ex = int(kpi.get("exception_count") or 0)
+    variance = float(kpi.get("absolute_variance") or 0)
+    avg_conf = float(kpi.get("average_confidence") or 0)
+    match_rate = round((auto / total) * 100, 1) if total else 0
+    learnt = s.get("learning_candidate_count", 0)
+
+    with get_conn() as conn:
+        # Top 5 open exceptions by absolute variance descending
+        top_breaks = rows_to_dicts(conn.execute(
+            """SELECT psr_id, camt_id, counterparty, internal_amount, bank_amount,
+                      ABS(COALESCE(variance,0)) AS abs_var, reconciliation_status, rule_applied
+               FROM recon_cases
+               WHERE exception_flag='Y'
+               ORDER BY abs_var DESC LIMIT 5"""
+        ).fetchall())
+        # AI triage counts
+        ai_suggested = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM recon_cases WHERE reconciliation_status='AI-Assisted Suggested Match'"
+        ).fetchone()["cnt"]
+        ai_review = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM recon_cases WHERE reconciliation_status='AI - Analyst Adjudication Required'"
+        ).fetchone()["cnt"]
+        # Top rule by exception volume
+        top_rule_row = conn.execute(
+            """SELECT rule_applied, COUNT(*) AS cnt FROM recon_cases
+               WHERE exception_flag='Y' GROUP BY rule_applied ORDER BY cnt DESC LIMIT 1"""
+        ).fetchone()
+        top_rule = dict(top_rule_row) if top_rule_row else {}
+        # In-transit count
+        in_transit = conn.execute(
+            "SELECT COUNT(*) AS cnt FROM recon_cases WHERE reconciliation_status LIKE '%In-Transit%' OR reconciliation_status LIKE '%Uncleared%'"
+        ).fetchone()["cnt"]
+
+    return {
+        "total_cases": total,
+        "auto_closed": auto,
+        "exceptions": ex,
+        "match_rate_pct": match_rate,
+        "average_confidence": round(avg_conf, 1),
+        "absolute_variance_eur": round(variance, 2),
+        "in_transit": in_transit,
+        "learning_candidates": learnt,
+        "ai_suggested": int(ai_suggested),
+        "ai_review": int(ai_review),
+        "top_breaks": top_breaks,
+        "top_exception_rule": top_rule,
+        "by_status": s.get("by_status", []),
+        "by_rule": s.get("by_rule", []),
+    }
+
+
+def _context_to_text(ctx: dict) -> str:
+    lines = [
+        f"Total reconciliation cases: {ctx['total_cases']}",
+        f"Auto-closed (matched): {ctx['auto_closed']} ({ctx['match_rate_pct']}% match rate)",
+        f"Exceptions requiring action: {ctx['exceptions']}",
+        f"In-transit / uncleared PSR items: {ctx['in_transit']}",
+        f"Absolute variance: EUR {ctx['absolute_variance_eur']:,.2f}",
+        f"Average match confidence: {ctx['average_confidence']}%",
+        f"AI-suggested matches awaiting confirmation: {ctx['ai_suggested']}",
+        f"AI records requiring analyst adjudication: {ctx['ai_review']}",
+        f"Learned pattern candidates in governance inbox: {ctx['learning_candidates']}",
+    ]
+    if ctx.get("top_exception_rule"):
+        lines.append(f"Most common exception rule: {ctx['top_exception_rule'].get('rule_applied')} ({ctx['top_exception_rule'].get('cnt')} cases)")
+    if ctx.get("top_breaks"):
+        lines.append("Top open breaks by amount:")
+        for b in ctx["top_breaks"]:
+            cp = b.get("counterparty") or b.get("psr_id") or "unknown"
+            lines.append(f"  - {cp}: EUR {b.get('abs_var', 0):,.2f} | {b.get('reconciliation_status', '')}")
+    return "\n".join(lines)
+
+
+@app.get("/api/assistant/briefing")
+def assistant_briefing() -> dict:
+    """
+    Auto-generated analyst briefing cards for the Copilot page.
+    Returns a list of insight objects with title, body, severity and optional action.
+    Uses LLM if OPENROUTER_API_KEY is set, otherwise falls back to rule-based insights.
+    """
+    import os
+    ctx = _build_assistant_context()
+    api_key = os.getenv("OPENROUTER_API_KEY", "")
+
+    if api_key:
+        import json as _json
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+        system = (
+            "You are an expert reconciliation operations assistant. "
+            "Given a snapshot of the current reconciliation run, generate exactly 4 concise analyst briefing cards. "
+            "Each card should highlight something actionable or noteworthy. "
+            "Return valid JSON: an array of 4 objects each with keys: "
+            "title (≤6 words), body (1-2 sentences), severity (info|warning|critical), "
+            "action_label (≤4 words or null), action_tab (one of: results|exceptions|learning|governance or null)."
+        )
+        user = f"Current reconciliation state:\n{_context_to_text(ctx)}"
+        try:
+            resp = client.chat.completions.create(
+                model="openai/gpt-4o-mini",
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                response_format={"type": "json_object"},
+                temperature=0.3,
+                max_tokens=600,
+            )
+            raw = _json.loads(resp.choices[0].message.content)
+            # Accept both {"insights": [...]} and a bare array
+            insights = raw if isinstance(raw, list) else raw.get("insights") or raw.get("cards") or list(raw.values())[0]
+            return {"insights": insights, "context": ctx, "source": "llm"}
+        except Exception as exc:
+            logger.warning("Briefing LLM call failed: %s — using rule-based fallback", exc)
+
+    # Rule-based fallback
+    insights = []
+    if ctx["ai_suggested"] > 0:
+        insights.append({"title": "AI matches need confirmation", "body": f"{ctx['ai_suggested']} AI-suggested match{'es' if ctx['ai_suggested'] != 1 else ''} are awaiting analyst confirmation in Results Workbench.", "severity": "warning", "action_label": "Review now", "action_tab": "results"})
+    if ctx["ai_review"] > 0:
+        insights.append({"title": "AI adjudication required", "body": f"{ctx['ai_review']} record{'s' if ctx['ai_review'] != 1 else ''} in the 'maybe' zone need analyst review before they can be closed.", "severity": "warning", "action_label": "Go to Results", "action_tab": "results"})
+    if ctx["exceptions"] > 0:
+        top = ctx["top_breaks"][0] if ctx["top_breaks"] else {}
+        cp = top.get("counterparty") or "unknown counterparty"
+        amt = top.get("abs_var", 0)
+        insights.append({"title": "Open exception breaks", "body": f"{ctx['exceptions']} exception cases open. Largest break: EUR {amt:,.2f} · {cp}.", "severity": "critical" if ctx["exceptions"] > 10 else "warning", "action_label": "View exceptions", "action_tab": "exceptions"})
+    if ctx["learning_candidates"] > 0:
+        insights.append({"title": "Patterns ready for approval", "body": f"{ctx['learning_candidates']} learned pattern candidate{'s' if ctx['learning_candidates'] != 1 else ''} are awaiting governance approval in Learning Lab.", "severity": "info", "action_label": "Open Learning Lab", "action_tab": "learning"})
+    if ctx["in_transit"] > 0:
+        insights.append({"title": "In-transit items monitoring", "body": f"{ctx['in_transit']} PSR record{'s' if ctx['in_transit'] != 1 else ''} are uncleared or in-transit. Consider running AI triage to find matches.", "severity": "info", "action_label": "Run AI triage", "action_tab": "results"})
+    if not insights:
+        insights.append({"title": "Reconciliation healthy", "body": f"All {ctx['total_cases']} cases processed. Match rate {ctx['match_rate_pct']}% · no outstanding exceptions.", "severity": "info", "action_label": None, "action_tab": None})
+    return {"insights": insights[:4], "context": ctx, "source": "rules"}
+
+
 @app.get("/api/assistant/query")
 def assistant_query(question: str) -> dict:
-    q=(question or "").lower()
-    s=summary()
-    total=s["total_cases"]; auto=s["kpi"].get("auto_matched_count") or 0; ex=s["kpi"].get("exception_count") or 0
-    match_rate=round((auto/total)*100,2) if total else 0
-    variance=s["kpi"].get("absolute_variance") or 0
-    learnt=s.get("learning_candidate_count",0)
+    """
+    Free-text assistant query. Uses LLM (gpt-4o-mini via OpenRouter) if API key is
+    set, otherwise falls back to keyword-based rule matching.
+    Returns {question, answer, actions, source}.
+    """
+    import os
+    ctx = _build_assistant_context()
+    api_key = os.getenv("OPENROUTER_API_KEY", "")
+
+    if api_key:
+        import json as _json
+        from openai import OpenAI
+        client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+        system = (
+            "You are Recon Copilot, an expert reconciliation operations assistant embedded in a cash reconciliation system. "
+            "Answer the analyst's question based only on the provided reconciliation data snapshot. "
+            "Be concise (2-4 sentences). Use specific numbers from the data. "
+            "Also return 0-2 suggested follow-up actions as JSON. "
+            "Return valid JSON with keys: answer (string), "
+            "actions (array of {label: string ≤4 words, tab: one of results|exceptions|learning|governance})."
+        )
+        user = f"Reconciliation data snapshot:\n{_context_to_text(ctx)}\n\nAnalyst question: {question}"
+        try:
+            resp = client.chat.completions.create(
+                model="openai/gpt-4o-mini",
+                messages=[{"role": "system", "content": system}, {"role": "user", "content": user}],
+                response_format={"type": "json_object"},
+                temperature=0.2,
+                max_tokens=400,
+            )
+            raw = _json.loads(resp.choices[0].message.content)
+            return {"question": question, "answer": raw.get("answer", ""), "actions": raw.get("actions", []), "source": "llm", "context": ctx}
+        except Exception as exc:
+            logger.warning("Assistant LLM call failed: %s — using rule-based fallback", exc)
+
+    # Rule-based fallback
+    q = (question or "").lower()
+    total = ctx["total_cases"]; auto = ctx["auto_closed"]; ex = ctx["exceptions"]
+    match_rate = ctx["match_rate_pct"]; variance = ctx["absolute_variance_eur"]; learnt = ctx["learning_candidates"]
+    actions = []
     if "exception" in q:
-        answer=f"There are {ex} exception cases currently routed for ledger allocation, in-transit monitoring, or manual review."
+        answer = f"There are {ex} exception cases currently open. The most common exception rule is {ctx['top_exception_rule'].get('rule_applied', 'unknown')} with {ctx['top_exception_rule'].get('cnt', 0)} cases."
+        actions = [{"label": "View exceptions", "tab": "exceptions"}]
     elif "auto" in q or "match rate" in q:
-        answer=f"{auto} cases are auto-closed, giving an auto-close match rate of {match_rate}%."
+        answer = f"{auto} of {total} cases are auto-closed, giving a match rate of {match_rate}%."
+        actions = [{"label": "View results", "tab": "results"}]
     elif "variance" in q:
-        answer=f"The current absolute variance across reconciliation cases is EUR {variance:,.2f}."
+        answer = f"The current absolute variance is EUR {variance:,.2f} across all reconciliation cases."
+        actions = [{"label": "View exceptions", "tab": "exceptions"}]
     elif "learning" in q or "pattern" in q:
-        answer=f"There are {learnt} learned-pattern candidates in the governance inbox. Approved learned patterns run in suggestion mode first."
+        answer = f"There are {learnt} learned-pattern candidates awaiting approval in the governance inbox."
+        actions = [{"label": "Open Learning Lab", "tab": "learning"}]
+    elif "ai" in q or "triage" in q:
+        answer = f"{ctx['ai_suggested']} AI-suggested matches and {ctx['ai_review']} records requiring adjudication are currently in the system."
+        actions = [{"label": "View AI results", "tab": "results"}]
     else:
-        answer=f"Current run contains {total} cases, {auto} auto-closed matches, {ex} exceptions, and an average confidence of {s['kpi'].get('average_confidence',0):.2f}%."
-    return {"question": question, "answer": answer, "summary": s}
+        answer = f"Current run: {total} cases, {auto} auto-closed ({match_rate}% match rate), {ex} exceptions, EUR {variance:,.2f} total variance."
+    return {"question": question, "answer": answer, "actions": actions, "source": "rules", "context": ctx}
 
 @app.get("/api/patterns")
 def list_patterns() -> dict:
