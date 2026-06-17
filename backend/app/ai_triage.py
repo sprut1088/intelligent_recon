@@ -352,6 +352,7 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
 
     For each unique PSR in maybe_candidates, sends one LLM call with
     that PSR + its Top 5 CAMT candidates. Updates recon_cases in-place.
+    Executes calls concurrently using a ThreadPoolExecutor.
 
     Returns list of LLM decision dicts. Silently skips if OPENROUTER_API_KEY
     is not set.
@@ -359,6 +360,7 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
     import os
     import json
     import logging
+    import concurrent.futures
 
     logger = logging.getLogger(__name__)
 
@@ -384,16 +386,11 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
 
     decisions = []
 
-    for psr_id, top_candidates in by_psr.items():
-        # PSR fields are identical across all candidates for the same PSR
+    def _process_psr(psr_id: str, top_candidates: List[Dict]) -> Optional[Dict]:
         first = top_candidates[0]
-
         psr_counterparty = (first.get('psr_counterparty') or '').strip()
 
         def _remittance_name_hit(camt: Dict) -> bool:
-            """True if PSR counterparty name (≥4 chars) appears as a whole word in
-            the CAMT remittance text. Uses word-boundary regex to avoid short-token
-            false positives (e.g. 'ACB' inside 'ACBDE Corp')."""
             if len(psr_counterparty) < 4:
                 return False
             remittance = (camt.get('camt_remittance') or '').strip()
@@ -446,12 +443,23 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
                 max_tokens=300,
             )
             result = json.loads(response.choices[0].message.content)
+            return result
         except Exception as exc:
             logger.error("Tier 2c LLM call failed for PSR %s: %s", psr_id, exc)
-            continue
+            return None
 
-        decisions.append(result)
+    # Execute LLM calls concurrently
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        future_to_psr = {
+            executor.submit(_process_psr, psr_id, top_candidates): psr_id 
+            for psr_id, top_candidates in by_psr.items()
+        }
+        for future in concurrent.futures.as_completed(future_to_psr):
+            result = future.result()
+            if result:
+                decisions.append(result)
 
+    for result in decisions:
         # Update the recon_case in DB
         if result.get("suggested_action") == "NO_MATCH":
             new_status = "Uncleared / In-Transit Payment"

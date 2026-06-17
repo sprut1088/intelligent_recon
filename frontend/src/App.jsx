@@ -165,6 +165,7 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
   const [psrFile, setPsrFile] = useState(null);
   const [camtFile, setCamtFile] = useState(null);
   const [batchName, setBatchName] = useState('Treasury cash daily upload');
+  const [amountDivisor, setAmountDivisor] = useState('auto');
   const qualityTableRef = useRef(null);
   const selectedBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
   const batchId = selectedBatch?.batch_id || selectedBatchId || '';
@@ -211,9 +212,17 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
                 <dt>PSR file</dt><dd>{selectedBatch.psr_file_id || '-'}</dd>
                 <dt>CAMT file</dt><dd>{selectedBatch.camt_file_id || '-'}</dd>
               </dl>
+              <div className="form-grid" style={{ marginBottom: '0.75rem' }}>
+                <label title="Divide raw PSR integer amounts by this value. Auto detects by comparing PSR references to CAMT amounts.">PSR amount divisor</label>
+                <select value={amountDivisor} onChange={(e) => setAmountDivisor(e.target.value)}>
+                  <option value="auto">Auto-detect</option>
+                  <option value="1">1 — amounts already match CAMT scale</option>
+                  <option value="100">100 — amounts in minor units (cents)</option>
+                </select>
+              </div>
               <div className="button-row">
                 <button className="btn secondary" disabled={!batchId || loading} onClick={() => onValidate(batchId)}>Validate quality</button>
-                <button className="btn primary" disabled={!batchId || loading} onClick={() => onRunBatch(batchId)}>Run uploaded batch</button>
+                <button className="btn primary" disabled={!batchId || loading} onClick={() => onRunBatch(batchId, amountDivisor === 'auto' ? null : Number(amountDivisor))}>Run uploaded batch</button>
               </div>
 
               {quality && (
@@ -650,7 +659,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
 
   useEffect(() => {
     if (!selected) return;
-    const MATCH_STATUSES_KB = ['Suggested Match - Analyst Review', 'Suggested Match - Learned Pattern', 'Exception - Amount Variance Review', 'Post to Short or Over Ledger'];
+    const MATCH_STATUSES_KB = ['Suggested Match - Analyst Review', 'Suggested Match - Learned Pattern', 'Exception - Amount Variance Review', 'Post to Short or Over Ledger', 'AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required'];
     const handler = (e) => {
       const tag = document.activeElement?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
@@ -855,8 +864,59 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           const isNoMatch = NO_MATCH_STATUSES.includes(item.reconciliation_status);
           const isBankOnly = item.reconciliation_status === 'Bank-only Item - Investigation';
           const isLedgerPost = item.reconciliation_status === 'Post to Short or Over Ledger';
+          const isAiSuggested = item.reconciliation_status === 'AI-Assisted Suggested Match';
+          const isAiReview = item.reconciliation_status === 'AI - Analyst Adjudication Required';
 
-          if (!isMatch && !isNoMatch && !overrideMode) return null;
+          if (!isMatch && !isNoMatch && !isAiSuggested && !isAiReview && !overrideMode) return null;
+
+          if (isAiSuggested || isAiReview) {
+            if (overrideMode) {
+              return (
+                <div className="drawer-footer">
+                  <div className="override-panel">
+                    <label className="override-label">Reason for override</label>
+                    <select
+                      className="override-select"
+                      value={overrideReason}
+                      onChange={e => setOverrideReason(e.target.value)}
+                    >
+                      <option value="">— Select a reason —</option>
+                      <option value="same_entity_diff_name">Same entity, different name format</option>
+                      <option value="known_alias">Known counterparty alias</option>
+                      <option value="data_entry_error">Data entry error in source system</option>
+                      <option value="timing_difference">Timing difference (split settlement)</option>
+                      <option value="other">Other</option>
+                    </select>
+                    {overrideReason === 'other' && (
+                      <textarea
+                        className="override-note"
+                        placeholder="Describe the reason..."
+                        value={overrideNote}
+                        onChange={e => setOverrideNote(e.target.value)}
+                        rows={3}
+                      />
+                    )}
+                    <button
+                      className="btn primary full"
+                      onClick={submitOverride}
+                      disabled={!overrideReason || (overrideReason === 'other' && !overrideNote.trim()) || overrideLoading}
+                    >
+                      {overrideLoading ? 'Submitting\u2026' : 'Submit Override'}
+                    </button>
+                    <button className="btn link" onClick={() => setOverrideMode(false)}>\u2190 Back</button>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <div className="drawer-footer">
+                <button className="btn primary full" onClick={() => onResolve(item)}>
+                  {isAiSuggested ? 'Confirm AI Match' : 'Confirm Match'}
+                </button>
+                <button className="btn secondary full" onClick={() => setOverrideMode(true)}>Override AI</button>
+              </div>
+            );
+          }
 
           if (isNoMatch) {
             return (
@@ -1035,12 +1095,15 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
     .reduce((acc, s) => acc + (s.count || 0), 0);
   const exceptionCount = summary.raw?.kpi?.exception_count ?? 0;
   const aiSuggestedCount = statusCount(s => s === 'AI-Assisted Suggested Match');
+  const aiReviewCount = statusCount(s => s === 'AI - Analyst Adjudication Required');
+  const inTransitCount = statusCount(s => s.includes('In-Transit') || s.includes('Uncleared'));
   const chips = [
     { label: 'Total',        value: total,            filter: '' },
     { label: 'Matched',      value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close')), filter: 'Matched & Settled (Auto-Close)' },
     { label: 'AI Suggested', value: aiSuggestedCount, filter: 'AI-Assisted Suggested Match' },
-    { label: 'Exceptions',   value: exceptionCount - aiSuggestedCount,   filter: 'exceptions' },
-    { label: 'In-Transit',   value: statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')), filter: 'Uncleared / In-Transit Payment' },
+    { label: 'AI Review',    value: aiReviewCount,    filter: 'AI - Analyst Adjudication Required' },
+    { label: 'Exceptions',   value: Math.max(0, exceptionCount - aiSuggestedCount - aiReviewCount - inTransitCount), filter: 'exceptions' },
+    { label: 'In-Transit',   value: inTransitCount,   filter: 'Uncleared / In-Transit Payment' },
   ];
   return (
     <div className="summary-bar">
@@ -1108,7 +1171,7 @@ function AiTriageLoader() {
   );
 }
 
-function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, loading, triageRunning }) {
+function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, onResolve, loading, triageRunning }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -1233,7 +1296,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
       <EvidenceDrawer
         selected={selected}
         onClose={() => setSelected(null)}
-        onResolve={setSelected}
+        onResolve={onResolve || setSelected}
         onRefresh={() => refreshResults({ search, exceptionOnly, status: selectedStatus, limit: PAGE_SIZE, offset: page * PAGE_SIZE })}
         rows={results.items || []}
         selectedIndex={(results.items || []).findIndex(r => r.result_id === selected?.result_id)}
@@ -1747,12 +1810,12 @@ export default function App() {
     }, 'Data quality validation completed');
   };
 
-  const runSelectedBatch = async (batchId) => {
+  const runSelectedBatch = async (batchId, amountDivisor = null) => {
     let result;
     await safe(async () => {
-      result = await api.runBatch(batchId);
+      result = await api.runBatch(batchId, amountDivisor);
       setBatchRunResult(result);
-    }, 'Uploaded batch reconciled');
+    }, () => `Uploaded batch reconciled (divisor: ${result?.amount_divisor ?? 'default'})`);
   };
 
   const runAiTriage = async () => {
@@ -1826,7 +1889,7 @@ export default function App() {
     if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} onUpload={uploadReconFile} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
-    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} loading={loading} triageRunning={triageRunning} />;
+    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;
