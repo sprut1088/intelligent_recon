@@ -161,7 +161,7 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
   );
 }
 
-function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, onUpload, onValidate, onRunBatch, onNavigate, loading }) {
+function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, validatedBatchId, onUpload, onValidate, onRunBatch, onNavigate, loading }) {
   const [psrFile, setPsrFile] = useState(null);
   const [camtFile, setCamtFile] = useState(null);
   const [batchName, setBatchName] = useState('Treasury cash daily upload');
@@ -222,7 +222,7 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
               </div>
               <div className="button-row">
                 <button className="btn secondary" disabled={!batchId || loading} onClick={() => onValidate(batchId)}>Validate quality</button>
-                <button className="btn primary" disabled={!batchId || loading} onClick={() => onRunBatch(batchId, amountDivisor === 'auto' ? null : Number(amountDivisor))}>Run uploaded batch</button>
+                <button className="btn primary" disabled={!batchId || loading || validatedBatchId !== batchId} onClick={() => onRunBatch(batchId, amountDivisor === 'auto' ? null : Number(amountDivisor))}>Run uploaded batch</button>
               </div>
 
               {quality && (
@@ -530,6 +530,31 @@ function ResultTable({ rows, onSelect }) {
 
   const sp = { sortCol, sortDir, onSort };
 
+  const computeAge = (r) => {
+    // Age is only meaningful for open/unresolved records.
+    const closedStatuses = ['Matched & Settled (Auto-Close)', 'Resolved Manually'];
+    if (closedStatuses.includes(r.reconciliation_status)) return null;
+    // For matched records where the backend already computed a settlement lag, trust it.
+    if (r.aging_days > 0) return { days: r.aging_days, bucket: r.aging_bucket };
+    // For unmatched records aging_days is 0 because one date is missing.
+    // Compute "days since the oldest available date" so the client can see how stale the item is.
+    // Bank-only: use booking_date (bank entry exists, no PSR).
+    // In-Transit / exceptions: use value_date (PSR exists, no bank match yet).
+    const dateStr = r.value_date || r.booking_date;
+    if (!dateStr) return null;
+    const days = Math.floor((Date.now() - new Date(dateStr.slice(0, 10)).getTime()) / 86400000);
+    if (days < 0) return null;
+    const bucket = days <= 1 ? '0-1 Days' : days <= 2 ? '2 Days' : days <= 5 ? '3-5 Days' : '6+ Days';
+    return { days, bucket };
+  };
+
+  const agingTone = (bucket) => {
+    if (!bucket) return 'neutral';
+    if (bucket.startsWith('6+')) return 'danger';
+    if (bucket.startsWith('3-5') || bucket.startsWith('2')) return 'warning';
+    return 'info';
+  };
+
   return (
     <div className="table-wrap results-table">
       <table>
@@ -542,24 +567,31 @@ function ResultTable({ rows, onSelect }) {
             <th>Counterparty</th>
             <SortTh col="variance" label="Variance" {...sp} />
             <SortTh col="reconciliation_status" label="Status" {...sp} />
-            <SortTh col="rule_applied" label="Rule" {...sp} />
+            <SortTh col="aging_days" label="Age" {...sp} />
             <SortTh col="match_confidence" label="Confidence" {...sp} />
           </tr>
         </thead>
         <tbody>
-          {sorted.map((r) => (
-            <tr key={r.result_id} onClick={() => onSelect?.(r)} className="clickable">
-              <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} /><br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
-              <td>{money(r.internal_amount)}</td>
-              <td>{money(r.bank_amount)}</td>
-              <td>{r.reference || '-'}</td>
-              <td>{r.counterparty || '-'}</td>
-              <td className={varianceTone(r.variance)}>{r.variance != null ? money(r.variance) : '-'}</td>
-              <td><Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag></td>
-              <td>{r.rule_applied || '-'}</td>
-              <td><div className="mini-score"><span style={{ width: `${r.match_confidence || 0}%` }} />{r.match_confidence}%</div></td>
-            </tr>
-          ))}
+          {sorted.map((r) => {
+            const age = computeAge(r);
+            return (
+              <tr key={r.result_id} onClick={() => onSelect?.(r)} className="clickable">
+                <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} /><br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
+                <td>{money(r.internal_amount)}</td>
+                <td>{money(r.bank_amount)}</td>
+                <td>{r.reference || '-'}</td>
+                <td>{r.counterparty || '-'}</td>
+                <td className={varianceTone(r.variance)}>{r.variance != null ? money(r.variance) : '-'}</td>
+                <td><Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag></td>
+                <td>
+                  {age
+                    ? <Tag tone={agingTone(age.bucket)} title={age.bucket}>{age.days}d</Tag>
+                    : <span className="muted">-</span>}
+                </td>
+                <td><div className="mini-score"><span style={{ width: `${r.match_confidence || 0}%` }} />{r.match_confidence}%</div></td>
+              </tr>
+            );
+          })}
           {!sorted.length && <tr><td colSpan="9" className="empty">No records to display.</td></tr>}
         </tbody>
       </table>
@@ -1728,6 +1760,7 @@ export default function App() {
   const [selectedBatchId, setSelectedBatchId] = useState('');
   const [quality, setQuality] = useState(null);
   const [batchRunResult, setBatchRunResult] = useState(null);
+  const [validatedBatchId, setValidatedBatchId] = useState(null);
   const [exceptions, setExceptions] = useState({ items: [] });
   const [patterns, setPatterns] = useState([]);
   const [candidates, setCandidates] = useState([]);
@@ -1804,6 +1837,8 @@ export default function App() {
       const response = await api.uploadFile(file, fileType, batchId, batchName);
       setSelectedBatchId(response.batch.batch_id);
       setQuality(null);
+      setBatchRunResult(null);
+      setValidatedBatchId(null);
     }, `${fileType} file uploaded`);
   };
 
@@ -1811,6 +1846,7 @@ export default function App() {
     await safe(async () => {
       const report = await api.validateBatch(batchId);
       setQuality(report);
+      setValidatedBatchId(batchId);
     }, 'Data quality validation completed');
   };
 
@@ -1819,6 +1855,8 @@ export default function App() {
     await safe(async () => {
       result = await api.runBatch(batchId, amountDivisor);
       setBatchRunResult(result);
+      setQuality(null);
+      setValidatedBatchId(null);
     }, () => `Uploaded batch reconciled (divisor: ${result?.amount_divisor ?? 'default'})`);
   };
 
@@ -1890,7 +1928,7 @@ export default function App() {
 
   const screen = useMemo(() => {
     if (active === 'workspace') return <Workspace workspace={workspace} summary={summary} onLoad={() => safe(api.loadSampleData, 'Sample PSR/CAMT loaded')} onRun={() => safe(api.runRecon, 'Reconciliation completed')} onSnapshot={() => safe(api.createSnapshot, 'Snapshot created')} onExport={exportCsv} loading={loading} />;
-    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} onUpload={uploadReconFile} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
+    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
     if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} />;
