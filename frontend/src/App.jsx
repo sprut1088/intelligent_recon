@@ -1415,7 +1415,6 @@ function Learning({ candidates, events, onSeed, onDiscover, onApprove }) {
           <p>Human-in-the-loop learning observes analyst behaviour and promotes candidate rules through approval gates.</p>
         </div>
         <div className="button-row">
-          <button className="btn secondary" onClick={onSeed}>Seed demo learning</button>
           <button className="btn primary" onClick={onDiscover}>Discover patterns</button>
         </div>
       </div>
