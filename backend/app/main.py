@@ -286,7 +286,7 @@ def workspace_export_results():
 def list_cases(status: Optional[str]=None, exception_only: bool=False, search: Optional[str]=None, limit:int=Query(100,ge=1,le=1000), offset:int=Query(0,ge=0)) -> dict:
     clauses=[]; params=[]
     if status: clauses.append("reconciliation_status = ?"); params.append(status)
-    if exception_only: clauses.append("exception_flag = 'Y'")
+    if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation')")
     if search:
         clauses.append("(case_id LIKE ? OR psr_id LIKE ? OR camt_id LIKE ? OR reference LIKE ? OR invoice LIKE ? OR counterparty LIKE ?)")
         term=f"%{search}%"; params.extend([term]*6)

@@ -399,45 +399,64 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
             pattern = r'\b' + re.escape(psr_counterparty) + r'\b'
             return bool(re.search(pattern, remittance, re.IGNORECASE))
 
-        candidate_lines = [
-            f"  {i}. ID:{c['camt_id']} | Dir:{c.get('camt_direction', '')} "
-            f"| Amt:{c.get('camt_amount', '')} {c.get('camt_currency', '')} "
-            f"| Date:{c.get('camt_booking_date', '')} "
-            f"| Party:{c.get('camt_counterparty', '')} "
-            f"| Remittance:{c.get('camt_remittance', '')} "
-            f"| RemittanceNameMatch:{'YES — PSR counterparty name found verbatim in remittance' if _remittance_name_hit(c) else 'NO'}"
-            for i, c in enumerate(top_candidates, 1)
-        ]
+        candidate_lines = []
+        for i, c in enumerate(top_candidates, 1):
+            remittance_match = (
+                "YES — PSR counterparty name found verbatim in remittance"
+                if _remittance_name_hit(c) else "NO"
+            )
+            candidate_lines.append(
+                f"{i}. ID: {c['camt_id']}\n"
+                f"   - Direction: {c.get('camt_direction', '')}\n"
+                f"   - Amount: {c.get('camt_amount', '')} {c.get('camt_currency', '')}\n"
+                f"   - Date: {c.get('camt_booking_date', '')}\n"
+                f"   - Party: {c.get('camt_counterparty', '')}\n"
+                f"   - Remittance: {c.get('camt_remittance', '')}\n"
+                f"   - RemittanceNameMatch: {remittance_match}"
+            )
 
-        prompt = (
-            "You are a cash reconciliation analyst. One internal PSR payment record is unmatched.\n"
-            "Review the candidate bank (CAMT) entries below and identify the best match.\n"
-            "IMPORTANT RULE: If RemittanceNameMatch is YES for a candidate, treat that as strong "
-            "evidence of a match — banks often use an intermediary legal name as the Party field "
-            "while the actual payer name appears in the remittance text.\n\n"
-            f"PSR:\n"
-            f"  ID: {psr_id} | Direction: {first.get('psr_direction', '')} "
-            f"| Amount: {first.get('psr_amount', '')} {first.get('psr_currency', '')}\n"
-            f"  Date: {first.get('psr_execution_date', '')} | Reference: {first.get('psr_reference', '')}\n"
-            f"  Invoice: {first.get('psr_invoice', '')} | Counterparty: {first.get('psr_counterparty', '')}\n\n"
-            "CAMT Candidates (pre-filtered by amount/date/direction):\n"
-            + "\n".join(candidate_lines)
-            + "\n\nReturn valid JSON matching this schema exactly:\n"
+        system_prompt = (
+            "You are an expert cash reconciliation analyst.\n"
+            "Your goal is to match an internal PSR payment ledger record to the correct bank CAMT log.\n"
+            "The candidate bank logs have already been pre-filtered for matching amounts, dates, and directions.\n\n"
+            "DECISION RULES:\n"
+            "1. If 'RemittanceNameMatch' is YES, treat it as strong evidence of a match — banks often "
+            "use an intermediary name as the Party field while the actual payer appears in the remittance text.\n"
+            "2. If multiple candidates are equally strong matches and you cannot definitively distinguish them, "
+            "do NOT guess. Set matched_camt_id to null and suggested_action to ROUTE_TO_ANALYST.\n"
+            "3. CONFIDENCE THRESHOLDS:\n"
+            "   - CONFIRM_AI_MATCH: Use only if confidence is >= 85%.\n"
+            "   - ROUTE_TO_ANALYST: Use if confidence is 50-84% (suspect a match but need human review).\n"
+            "   - NO_MATCH: Use if no candidate is credible (confidence < 50%).\n\n"
+            "You MUST reply with valid JSON matching this schema exactly:\n"
             '{\n'
             '  "psr_id": "string",\n'
             '  "matched_camt_id": "string or null",\n'
-            '  "confidence_pct": "number between 0 and 100",\n'
-            '  "reason": "one sentence explaining the match or why no match exists",\n'
-            '  "suggested_action": "CONFIRM_AI_MATCH or ROUTE_TO_ANALYST or NO_MATCH"\n'
-            "}\n"
-            "If no candidate is a credible match, set matched_camt_id to null and "
-            "suggested_action to NO_MATCH."
+            '  "confidence_pct": 0,\n'
+            '  "reason": "One clear sentence explaining the rationale.",\n'
+            '  "suggested_action": "CONFIRM_AI_MATCH|ROUTE_TO_ANALYST|NO_MATCH"\n'
+            "}"
+        )
+
+        user_prompt = (
+            f"Target PSR:\n"
+            f"- ID: {psr_id}\n"
+            f"- Amount: {first.get('psr_amount')} {first.get('psr_currency')} ({first.get('psr_direction')})\n"
+            f"- Date: {first.get('psr_execution_date')}\n"
+            f"- Reference: {first.get('psr_reference')}\n"
+            f"- Invoice: {first.get('psr_invoice')}\n"
+            f"- Counterparty: {first.get('psr_counterparty')}\n\n"
+            "Top CAMT Candidates:\n"
+            + "\n".join(candidate_lines)
         )
 
         try:
             response = client.chat.completions.create(
                 model="openai/gpt-4o-mini",
-                messages=[{"role": "user", "content": prompt}],
+                messages=[
+                    {"role": "system", "content": system_prompt},
+                    {"role": "user", "content": user_prompt},
+                ],
                 response_format={"type": "json_object"},
                 temperature=0,
                 max_tokens=300,
