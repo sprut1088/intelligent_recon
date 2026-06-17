@@ -220,25 +220,46 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
     if not psr_rows or not unmatched_camt:
         return []
 
+    # Pre-compute all embeddings in a single batch to avoid N+1 API calls
+    unique_texts = set()
+    psr_texts = {}
+    for psr in psr_rows:
+        txt = _psr_text(psr)
+        if txt:
+            psr_texts[psr["id"]] = txt
+            unique_texts.add(txt)
+            
+    camt_texts = {}
+    for camt in unmatched_camt:
+        txt = _camt_text(camt)
+        if txt:
+            camt_texts[camt["camt_id"]] = txt
+            unique_texts.add(txt)
+
+    unique_texts_list = list(unique_texts)
+    text_to_vec = {}
+    if unique_texts_list:
+        embeddings = _encode(unique_texts_list)
+        for txt, vec in zip(unique_texts_list, embeddings):
+            text_to_vec[txt] = vec
+
     candidates = []
 
     for psr in psr_rows:
+        psr_txt = psr_texts.get(psr["id"])
+        if not psr_txt or psr_txt not in text_to_vec:
+            continue
+
         # Step 1: deterministic pre-filter
         eligible_camt = [c for c in unmatched_camt if _passes_prefilter(psr, c)]
-        if not eligible_camt:
+        
+        # Step 2: only compare against CAMT candidates that have text
+        eligible_camt_with_text = [c for c in eligible_camt if camt_texts.get(c["camt_id"])]
+        if not eligible_camt_with_text:
             continue
 
-        # Step 2: embed text fields only
-        psr_txt = _psr_text(psr)
-        camt_texts = [_camt_text(c) for c in eligible_camt]
-
-        if not psr_txt:
-            continue
-
-        all_texts = [psr_txt] + camt_texts
-        embeddings = _encode(all_texts)
-        psr_vec = embeddings[0]
-        camt_vecs = embeddings[1:]
+        psr_vec = text_to_vec[psr_txt]
+        camt_vecs = np.array([text_to_vec[camt_texts[c["camt_id"]]] for c in eligible_camt_with_text])
 
         # Cosine similarity (vectors are normalised, so dot product = cosine)
         scores = np.dot(camt_vecs, psr_vec)
@@ -249,7 +270,7 @@ def run_tier2b(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]:
             score = float(scores[idx])
             if score < 0.60:
                 break  # sorted descending — nothing below will qualify
-            camt = eligible_camt[idx]
+            camt = eligible_camt_with_text[idx]
             zone = "clear" if score >= 0.85 else "maybe"
             candidates.append({
                 "psr_id": psr["id"],
