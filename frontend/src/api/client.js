@@ -48,6 +48,28 @@ function mapSummary(payload) {
   };
 }
 
+// Reverse-engineering helper used by the Auto Pattern Recon screen
+export async function autoPatternRecon({ camtFile, flatFile, useLlm = true }) {
+  const formData = new FormData();
+  formData.append('camt_file', camtFile);
+  formData.append('flat_file', flatFile);
+
+  const path = useLlm
+    ? '/api/reverse-engineer/reconcile-llm'
+    : '/api/reverse-engineer/reconcile';
+
+  const response = await fetch(`${API_BASE}${path}`, {
+    method: 'POST',
+    body: formData,
+  });
+
+  if (!response.ok) {
+    const body = await response.json().catch(() => ({}));
+    throw new Error(body.detail || `Request failed: ${response.status}`);
+  }
+  return response.json();
+}
+
 export const api = {
   health: () => request('/health'),
 
@@ -146,4 +168,20 @@ export const api = {
   seedLearning: () => request('/api/learning/demo-signals', { method: 'POST' }),
   events: async () => (await request('/api/events?limit=50')).items || [],
   assistant: (question) => request(`/api/assistant/query?question=${encodeURIComponent(question)}`),
+
+  // Reverse-engineer API exposed on the shared client
+  reverseEngineer: {
+    reconcile: (formData) =>
+      autoPatternRecon({
+        camtFile: formData.get('camt_file'),
+        flatFile: formData.get('flat_file'),
+        useLlm: false,
+      }),
+    reconcileLlm: (formData) =>
+      autoPatternRecon({
+        camtFile: formData.get('camt_file'),
+        flatFile: formData.get('flat_file'),
+        useLlm: true,
+      }),
+  },
 };

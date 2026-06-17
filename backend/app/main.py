@@ -16,6 +16,8 @@ from .workflow import get_exception_workflow, list_exception_workflow, mark_work
 from .workspace import create_snapshot, export_reconciliation_results, get_dashboard_model, get_data_preview, get_no_code_rules, get_workspace_overview, get_workflow_rules, list_submissions, predict_match_fields
 from .schemas import CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
 from .ai_triage import build_ai_snapshot, run_tier2b, run_tier2c
+from .reverse_engineer_api import FormatAnalyzer, ReconcileResponse
+from .reverse_engineer_llm import LlmReverseEngineerService, LlmReconcileResponse
 
 # Module-level logger — format applied in startup() after uvicorn finishes its own logging setup
 logger = logging.getLogger(__name__)
@@ -121,6 +123,55 @@ def run_reconcile() -> dict:
     return rerun_reconciliation_only()
 
 
+@app.post("/api/reverse-engineer/reconcile", response_model=ReconcileResponse)
+async def reverse_engineer_reconcile(
+    camt_file: UploadFile = File(...),
+    flat_file: UploadFile = File(...),
+) -> ReconcileResponse:
+    """
+    Reverse-engineer an unknown flat payment file using a CAMT.053 XML reference.
+    Heuristic (non-LLM) engine.
+    """
+    camt_bytes = await camt_file.read()
+    flat_bytes = await flat_file.read()
+
+    if not camt_bytes:
+        raise HTTPException(status_code=500, detail="Empty camt_file")
+    if not flat_bytes:
+        raise HTTPException(status_code=500, detail="Empty flat_file")
+
+    analyzer = FormatAnalyzer(max_sample=10)
+    try:
+        return analyzer.analyze(camt_bytes, flat_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@app.post("/api/reverse-engineer/reconcile-llm", response_model=LlmReconcileResponse)
+async def reverse_engineer_reconcile_llm(
+    camt_file: UploadFile = File(...),
+    flat_file: UploadFile = File(...),
+) -> LlmReconcileResponse:
+    """
+    Reverse-engineer an unknown flat payment file using a CAMT.053 XML reference,
+    but delegate pattern discovery to an external LLM.
+    """
+    camt_bytes = await camt_file.read()
+    flat_bytes = await flat_file.read()
+
+    if not camt_bytes:
+        raise HTTPException(status_code=400, detail="Empty camt_file")
+    if not flat_bytes:
+        raise HTTPException(status_code=400, detail="Empty flat_file")
+
+    service = LlmReverseEngineerService(max_sample=10)
+    try:
+        return service.analyze_with_llm(camt_bytes, flat_bytes)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except RuntimeError as exc:
+        # LLM configuration or API issues
+        raise HTTPException(status_code=500, detail=str(exc)) from exc
 
 _ZONE_CFG = {
     "clear": {
@@ -546,4 +597,3 @@ def approve_pattern(candidate_id: str, request: CandidateApprovalRequest) -> dic
     except ValueError as exc: raise HTTPException(status_code=404, detail=str(exc)) from exc
     rerun_reconciliation_only()
     return result
-
