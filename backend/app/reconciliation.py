@@ -144,10 +144,11 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     p4_threshold = float(pattern_rule_value(config, "P4", "threshold", 0.85))
     p7_minor_tolerance = float(pattern_rule_value(config, "P7", "minor_tolerance", settings.minor_variance_tolerance))
     by_e2e={b.end_to_end_id:b for b in camt_transactions if b.end_to_end_id}
-    by_ref_amt={}; by_inv_amt={}; by_amt={}
+    by_ref_amt={}; by_inv_amt={}; by_inv={}; by_amt={}
     for b in camt_transactions:
         if b.pmt_ref: by_ref_amt.setdefault((b.pmt_ref,b.amount),[]).append(b)
         if b.invoice: by_inv_amt.setdefault((b.invoice,b.amount),[]).append(b)
+        if b.invoice: by_inv.setdefault(b.invoice,[]).append(b)
         by_amt.setdefault(b.amount,[]).append(b)
     learned = active_learned_patterns(pattern_registry_rows)
     for psr in psr_transactions:
@@ -170,6 +171,10 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
         inv = next((b for b in by_inv_amt.get((psr.invoice,psr.amount),[]) if b.ntry_id not in used), None)
         if pattern_is_active(config, "P3") and inv:
             used.add(inv.ntry_id); cases.append(build_case(idx, psr, inv, "Matched & Settled (Auto-Close)", "INVOICE_AMOUNT_MATCH", "1_TO_1", 92, "P3_INVOICE_USTRD_AMOUNT", "N", "Invoice extracted from CAMT remittance matched PSR invoice and amount.")); idx+=1; continue
+        inv_near = next((b for b in by_inv.get(psr.invoice or "", []) if b.ntry_id not in used and abs((amount_variance(psr.amount, b.amount) or 0)) <= p7_minor_tolerance), None) if psr.invoice else None
+        if pattern_is_active(config, "P3") and pattern_is_active(config, "P7") and inv_near:
+            var = amount_variance(psr.amount, inv_near.amount) or 0
+            used.add(inv_near.ntry_id); cases.append(build_case(idx, psr, inv_near, "Post to Short or Over Ledger", "INVOICE_MATCH_AMOUNT_VARIANCE_MINOR", "1_TO_1", 86, "P3_P7_INVOICE_MINOR_VARIANCE", "Y", f"Invoice matched but amount variance {var} is within configured minor tolerance. Post to short/over ledger.", [{"action":"POST_LEDGER_CANDIDATE","confidence":0.86,"variance":var}])); idx+=1; continue
         learned_match = learned_invoice_suffix_match(psr, camt_transactions, used, learned)
         if learned_match:
             lb, s = learned_match; used.add(lb.ntry_id); cases.append(build_case(idx, psr, lb, "Suggested Match - Learned Pattern", "LEARNED_INVOICE_SUFFIX", "1_TO_1", 90, "P8_LEARNED_INVOICE_SUFFIX", "Y", "Approved learned pattern suggested this match. Analyst confirmation is required.", [{"action":"CONFIRM_LEARNED_MATCH", **s}])); idx+=1; continue
