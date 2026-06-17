@@ -1080,12 +1080,15 @@ const MINOR_VARIANCE_TOLERANCE = 50;
 const STATUS_OPTIONS = [
   '',
   'Matched & Settled (Auto-Close)',
+  'Resolved Manually',
   'Uncleared / In-Transit Payment',
+  'Bank-only Item - Investigation',
   'AI-Assisted Suggested Match',
   'AI - Analyst Adjudication Required',
-  'Post to Short or Over Ledger',
   'Suggested Match - Analyst Review',
-  'Bank-only Item - Investigation',
+  'Suggested Match - Learned Pattern',
+  'Exception - Amount Variance Review',
+  'Post to Short or Over Ledger',
 ];
 
 function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
@@ -1097,13 +1100,15 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
   const aiSuggestedCount = statusCount(s => s === 'AI-Assisted Suggested Match');
   const aiReviewCount = statusCount(s => s === 'AI - Analyst Adjudication Required');
   const inTransitCount = statusCount(s => s.includes('In-Transit') || s.includes('Uncleared'));
+  const bankOnlyCount = statusCount(s => s === 'Bank-only Item - Investigation');
   const chips = [
     { label: 'Total',        value: total,            filter: '' },
     { label: 'Matched',      value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close')), filter: 'Matched & Settled (Auto-Close)' },
     { label: 'AI Suggested', value: aiSuggestedCount, filter: 'AI-Assisted Suggested Match' },
     { label: 'AI Review',    value: aiReviewCount,    filter: 'AI - Analyst Adjudication Required' },
-    { label: 'Exceptions',   value: Math.max(0, exceptionCount - aiSuggestedCount - aiReviewCount - inTransitCount), filter: 'exceptions' },
+    { label: 'Exceptions',   value: Math.max(0, exceptionCount - aiSuggestedCount - aiReviewCount - inTransitCount - bankOnlyCount), filter: 'exceptions' },
     { label: 'In-Transit',   value: inTransitCount,   filter: 'Uncleared / In-Transit Payment' },
+    { label: 'Bank Only',    value: bankOnlyCount,    filter: 'Bank-only Item - Investigation' },
   ];
   return (
     <div className="summary-bar">
