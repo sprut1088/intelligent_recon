@@ -146,4 +146,5 @@ export const api = {
   seedLearning: () => request('/api/learning/demo-signals', { method: 'POST' }),
   events: async () => (await request('/api/events?limit=50')).items || [],
   assistant: (question) => request(`/api/assistant/query?question=${encodeURIComponent(question)}`),
+  assistantBriefing: () => request('/api/assistant/briefing'),
 };

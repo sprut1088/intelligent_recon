@@ -1458,14 +1458,51 @@ function Learning({ candidates, events, onSeed, onDiscover, onApprove }) {
   );
 }
 
-function Assistant({ onAsk, answer }) {
-  const [question, setQuestion] = useState('Which exceptions should I prioritise today?');
+function Assistant({ onNavigate }) {
+  const [thread, setThread] = useState([]);
+  const [question, setQuestion] = useState('');
+  const [loading, setLoading] = useState(false);
+  const [briefing, setBriefing] = useState(null);
+  const [briefingLoading, setBriefingLoading] = useState(true);
+  const bottomRef = useRef(null);
+
   const prompts = [
-    'Show auto-close match rate',
-    'Which rules caused the most exceptions?',
+    'Which exceptions should I prioritise?',
+    'What is the current match rate?',
     'What is the total variance?',
-    'How many learning patterns exist?',
+    'Are there AI matches to review?',
   ];
+
+  useEffect(() => {
+    setBriefingLoading(true);
+    api.assistantBriefing()
+      .then(setBriefing)
+      .catch(() => setBriefing(null))
+      .finally(() => setBriefingLoading(false));
+  }, []);
+
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [thread]);
+
+  const ask = async (q) => {
+    if (!q.trim()) return;
+    const userMsg = { role: 'user', text: q };
+    setThread((t) => [...t, userMsg]);
+    setQuestion('');
+    setLoading(true);
+    try {
+      const res = await api.assistant(q);
+      setThread((t) => [...t, { role: 'assistant', text: res.answer, actions: res.actions || [], source: res.source }]);
+    } catch {
+      setThread((t) => [...t, { role: 'assistant', text: 'Sorry, something went wrong. Please try again.', actions: [], source: 'error' }]);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  const severityClass = { info: 'neutral', warning: 'warning', critical: 'danger' };
+
   return (
     <section className="screen">
       <div className="screen-title">
@@ -1475,16 +1512,97 @@ function Assistant({ onAsk, answer }) {
           <p>Ask reconciliation questions and trigger guided investigation from summary, workflow and learning state.</p>
         </div>
       </div>
-      <Panel title="Ask the assistant">
-        <div className="assistant-box">
-          <input value={question} onChange={(e) => setQuestion(e.target.value)} />
-          <button className="btn primary" onClick={() => onAsk(question)}>Ask</button>
-        </div>
-        <div className="prompt-row">
-          {prompts.map((q) => <button className="btn ghost" key={q} onClick={() => { setQuestion(q); onAsk(q); }}>{q}</button>)}
-        </div>
-        {answer && <div className="assistant-answer"><strong>Assistant</strong><p>{answer.answer}</p></div>}
+
+      {/* Analyst Briefing */}
+      <Panel title="Analyst briefing">
+        {briefingLoading && (
+          <div className="briefing-grid">
+            {[1,2,3,4].map((i) => (
+              <div key={i} className="briefing-card skeleton-card">
+                <div className="skeleton skeleton-title" />
+                <div className="skeleton skeleton-line" />
+                <div className="skeleton skeleton-line short" />
+                <div className="skeleton skeleton-btn" />
+              </div>
+            ))}
+          </div>
+        )}
+        {!briefingLoading && !briefing && <p className="empty small">Briefing unavailable.</p>}
+        {!briefingLoading && briefing && (
+          <div className="briefing-grid">
+            {(briefing.insights || []).map((ins, i) => (
+              <div key={i} className={`briefing-card ${severityClass[ins.severity] || 'neutral'}`}>
+                <div className="briefing-card-title">{ins.title}</div>
+                <p className="briefing-card-body">{ins.body}</p>
+                {ins.action_label && ins.action_tab && (
+                  <button className="btn ghost small" onClick={() => onNavigate(ins.action_tab)}>
+                    {ins.action_label} →
+                  </button>
+                )}
+              </div>
+            ))}
+          </div>
+        )}
       </Panel>
+
+      {/* Chat */}
+      <div className="chat-panel">
+        <div className="chat-panel-header">
+          <div className="chat-panel-title">
+            <span className="chat-icon">✦</span>
+            Ask the assistant
+          </div>
+          <span className="chat-panel-hint">Answers are grounded in live reconciliation data</span>
+        </div>
+
+        <div className="chat-thread">
+          {thread.length === 0 && (
+            <div className="chat-empty">
+              <p>Ask a question or pick a suggestion below to get started.</p>
+            </div>
+          )}
+          {thread.map((msg, i) => (
+            <div key={i} className={`chat-bubble ${msg.role}`}>
+              <div className="chat-bubble-label">{msg.role === 'user' ? 'You' : 'Copilot'}</div>
+              <p>{msg.text}</p>
+              {msg.actions && msg.actions.length > 0 && (
+                <div className="chat-actions">
+                  {msg.actions.map((a, j) => (
+                    <button key={j} className="btn ghost small" onClick={() => onNavigate(a.tab)}>
+                      {a.label} →
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          ))}
+          {loading && (
+            <div className="chat-bubble assistant">
+              <div className="chat-bubble-label">Copilot</div>
+              <p className="thinking">Thinking…</p>
+            </div>
+          )}
+          <div ref={bottomRef} />
+        </div>
+
+        <div className="chat-panel-footer">
+          <div className="chat-prompts">
+            {prompts.map((q) => (
+              <button className="chat-prompt-chip" key={q} onClick={() => ask(q)} disabled={loading}>{q}</button>
+            ))}
+          </div>
+          <div className="chat-input-bar">
+            <input
+              value={question}
+              placeholder="Ask anything about the reconciliation run…"
+              onChange={(e) => setQuestion(e.target.value)}
+              onKeyDown={(e) => e.key === 'Enter' && !loading && ask(question)}
+              disabled={loading}
+            />
+            <button className="btn primary" onClick={() => ask(question)} disabled={loading || !question.trim()}>Ask</button>
+          </div>
+        </div>
+      </div>
     </section>
   );
 }
@@ -1556,7 +1674,6 @@ export default function App() {
   const [dashboard, setDashboard] = useState(null);
   const [selected, setSelected] = useState(null);
   const [modalItem, setModalItem] = useState(null);
-  const [assistantAnswer, setAssistantAnswer] = useState(null);
   const [loading, setLoading] = useState(false);
   const [triageRunning, setTriageRunning] = useState(false);
   const [toast, setToast] = useState('');
@@ -1713,10 +1830,10 @@ export default function App() {
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;
-    if (active === 'assistant') return <Assistant answer={assistantAnswer} onAsk={async (q) => setAssistantAnswer(await api.assistant(q))} />;
+    if (active === 'assistant') return <Assistant onNavigate={(tab) => setActive(tab)} />;
     if (active === 'governance') return <Governance events={events} workspace={workspace} onSnapshot={() => safe(api.createSnapshot, 'Snapshot created')} />;
     return null;
-  }, [active, workspace, summary, results, exceptions, patterns, candidates, events, batches, submissions, selectedBatchId, quality, batchRunResult, preview, predictions, noCodeRules, workflowRules, dashboard, selected, assistantAnswer, loading]);
+  }, [active, workspace, summary, results, exceptions, patterns, candidates, events, batches, submissions, selectedBatchId, quality, batchRunResult, preview, predictions, noCodeRules, workflowRules, dashboard, selected, loading]);
 
   return (
     <div className="app-shell">
