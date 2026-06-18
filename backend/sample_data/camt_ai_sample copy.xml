@@ -1,0 +1,77 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02">
+    <BkToCstmrStmt>
+        <Stmt>
+            <Ntry>
+                <NtryRef>NTRY-001Inst</NtryRef>
+                <Amt Ccy="EUR">2500</Amt>
+                <CdtDbtInd>CRDT</CdtDbtInd>
+                <BookgDt>
+                    <Dt>2026-06-10</Dt>
+                </BookgDt>
+                <NtryDtls>
+                    <TxDtls>
+                        <Refs>
+                            <InstrId>IN-2027-0001</InstrId >
+                        </Refs>
+                        <RltdPties>
+                            <Dbtr>
+                                <Nm>Delicious Bakers Ltd</Nm>
+                            </Dbtr>
+                        </RltdPties>
+                        <RmtInf>
+                            <Ustrd></Ustrd>
+                        </RmtInf>
+                    </TxDtls>
+                </NtryDtls>
+            </Ntry>
+            <Ntry>
+                <NtryRef>NTRY-001</NtryRef>
+                <Amt Ccy="EUR">2500</Amt>
+                <CdtDbtInd>CRDT</CdtDbtInd>
+                <BookgDt>
+                    <Dt>2026-06-10</Dt>
+                </BookgDt>
+                <NtryDtls>
+                    <TxDtls>
+                        <Refs>
+                            <EndToEndId>TX-2027-0001</EndToEndId>
+                        </Refs>
+                        <RltdPties>
+                            <Dbtr>
+                                <Nm>Artisan Bakers Ltd</Nm>
+                            </Dbtr>
+                        </RltdPties>
+                        <RmtInf>
+                            <Ustrd>PMT-REF-30001 INV-2027-9001</Ustrd>
+                        </RmtInf>
+                    </TxDtls>
+                </NtryDtls>
+            </Ntry>
+            <Ntry>
+                <NtryRef>NTRY-027</NtryRef>
+                <Amt Ccy="EUR">3600</Amt>
+                <CdtDbtInd>CRDT</CdtDbtInd>
+                <BookgDt>
+                    <Dt>2026-06-11</Dt>
+                </BookgDt>
+                <NtryDtls>
+                    <TxDtls>
+                        <Refs>
+                            <EndToEndId>NOTFOUND</EndToEndId>
+                        </Refs>
+                        <RltdPties>
+                            <Dbtr>
+                                <Nm>Ashfield Traders</Nm>
+                            </Dbtr>
+                        </RltdPties>
+                        <RmtInf>
+                            <Ustrd>PMT-REF-30027 BANK-BATCH-A</Ustrd>
+                        </RmtInf>
+                    </TxDtls>
+                </NtryDtls>
+            </Ntry>
+            
+        </Stmt>
+    </BkToCstmrStmt>
+</Document>

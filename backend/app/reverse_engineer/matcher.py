@@ -170,23 +170,35 @@ class MatchingEngine:
 
     def _line_exact_reference_hits(
         self, tx: CamtTransaction, line: str
-    ) -> List[str]:
-        hits: List[str] = []
-        refs = [
-            tx.references.end_to_end_id,
-            tx.references.instr_id,
-            tx.references.tx_id,
-            tx.references.acct_svcr_ref,
-            tx.references.uetr,
-            tx.references.pmt_inf_id,
-            tx.references.mndt_id,
-        ] + tx.references.other_refs
+    ) -> List[Tuple[str, str]]:
+        """
+        Return (field_name, value) pairs for all CAMT reference fields whose value
+        appears exactly in the PSR line.
 
-        for ref in refs:
+        We keep substring semantics here to avoid dropping true matches and apply
+        a narrow guard on EndToEndId in the specific-flag logic instead.
+        """
+        hits: List[Tuple[str, str]] = []
+
+        ref_fields: List[Tuple[str, str | None]] = [
+            ("EndToEndId", tx.references.end_to_end_id),
+            ("InstrId", tx.references.instr_id),
+            ("TxId", tx.references.tx_id),
+            ("AcctSvcrRef", tx.references.acct_svcr_ref),
+            ("UETR", tx.references.uetr),
+            ("PmtInfId", tx.references.pmt_inf_id),
+            ("MndtId", tx.references.mndt_id),
+        ]
+
+        # Preserve any additional reference-like values as synthetic fields.
+        for idx, val in enumerate(tx.references.other_refs or []):
+            ref_fields.append((f"OtherRef{idx + 1}", val))
+
+        for field_name, ref in ref_fields:
             if not ref:
                 continue
             if ref in line:
-                hits.append(ref)
+                hits.append((field_name, ref))
         return hits
 
     def _build_matching_signals(
@@ -201,11 +213,30 @@ class MatchingEngine:
 
         # 1) Exact reference matches
         exact_hits = self._line_exact_reference_hits(tx, line)
-        sig.exact_reference_matches = exact_hits
+        # Flat list of values (for existing scoring behaviour)
+        sig.exact_reference_matches = [v for (_field, v) in exact_hits]
+
+        # Dynamic map: reference field name -> list of matched values
+        field_map: Dict[str, List[str]] = {}
+        for field_name, ref in exact_hits:
+            field_map.setdefault(field_name, []).append(ref)
+        sig.exact_ref_matches_by_field = field_map
 
         # 2) Specific refs
-        if tx.references.end_to_end_id and tx.references.end_to_end_id in line:
-            sig.end_to_end_match = True
+        # EndToEndId: avoid obvious noisy "end to end id etc" style descriptions
+        if tx.references.end_to_end_id:
+            e2e = tx.references.end_to_end_id
+            if e2e in line:
+                lower_line = line.lower()
+                lower_e2e = e2e.lower()
+                idx = lower_line.find(lower_e2e)
+                trailing = lower_line[idx + len(lower_e2e) : idx + len(lower_e2e) + 16]
+                # Heuristic list of noisy suffixes directly following the phrase
+                noisy_suffixes = [" id", " id ", " id:", " id-", " etc", " etc ", " etc.", " ref"]
+                sig.end_to_end_match = not any(s in trailing for s in noisy_suffixes)
+            else:
+                sig.end_to_end_match = False
+
         if tx.references.acct_svcr_ref and tx.references.acct_svcr_ref in line:
             sig.acct_svcr_ref_match = True
         if tx.references.uetr and tx.references.uetr in line:
@@ -237,7 +268,7 @@ class MatchingEngine:
         sig.counterparty_match_score = best_cp
 
         # 7) Ustrd token overlap (using tokenizer)
-        sig.ustrd_token_overlap = _token_overlap_score(tokenized_tx.tokens, line)
+        sig.ustrd_token_overlap = _token_overlap_score(tokenized_tx.ustrdtokens, line)
 
         return sig
 
@@ -434,7 +465,6 @@ class MatchingEngine:
                 )
             )
 
-        # USTRD token overlap
         components.append(
             PairComponentEvidence(
                 component="ustrd_tokens",
@@ -445,10 +475,10 @@ class MatchingEngine:
                     if sig.ustrd_token_overlap > 0
                     else "No significant remittance token overlap."
                 ),
-                raw_value_psr="; ".join(tokenized_tx.tokens.keys()),
+                raw_value_psr="; ".join(tokenized_tx.ustrdtokens.keys()),
                 raw_value_camt=line_str,
             )
-        )
+        ) 
 
         return PairScore(
             transaction=tx,
@@ -465,17 +495,38 @@ class MatchingEngine:
         top_n_per_tx: int = 3,
     ) -> Dict[str, List[PairScore]]:
         """
-        For each CAMT transaction, evaluate all flat-file lines, rank
+        For each CAMT transaction, evaluate flat-file lines, rank
         candidates, and keep top N.
+
+        IMPORTANT:
+        - We enforce an "exact reference first" strategy:
+          * If any PSR line contains an exact structured reference for a CAMT tx
+            (EndToEndId, InstrId, TxId, AcctSvcrRef, UETR, PmtInfId, MndtId, or other_refs),
+            we restrict candidates for that tx to ONLY those exact-hit lines.
+          * Only if there are no exact-reference hits at all do we fall back
+            to the full composite / fuzzy scoring across all lines.
         """
         tokenized = self.tokenizer.tokenize_many(transactions)
         line_list = list(flat_lines)
 
         results: Dict[str, List[PairScore]] = {}
         for t in tokenized:
-            tx_id = t.tx.primary_id()
+            tx = t.tx
+            tx_id = tx.primary_id()
             scores: List[PairScore] = []
+
+            # 1) First pass: find lines with any exact-reference hit for this tx
+            exact_hit_lines: List[FlatLine] = []
             for line in line_list:
+                if self._line_exact_reference_hits(tx, line.raw):
+                    exact_hit_lines.append(line)
+
+            # 2) Decide candidate set:
+            #    - If we have exact hits, only score those lines.
+            #    - Otherwise, score all lines (composite/fuzzy fallback).
+            candidate_lines = exact_hit_lines if exact_hit_lines else line_list
+
+            for line in candidate_lines:
                 ps = self.score_pair(t, line)
                 scores.append(ps)
 

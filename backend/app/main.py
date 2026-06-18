@@ -17,7 +17,9 @@ from .workspace import create_snapshot, export_reconciliation_results, get_dashb
 from .schemas import CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
 from .ai_triage import build_ai_snapshot, run_tier2b, run_tier2c
 from .reverse_engineer_api import FormatAnalyzer, ReconcileResponse
-from .reverse_engineer_llm import LlmReverseEngineerService, LlmReconcileResponse
+from .reverse_engineer_llm import LlmReverseEngineerService, LlmReconcileResponse, LlmMatchedPair
+from .reverse_engineer_schemas import ReconPatternsResponse, ReconPatternRow, RegexSummary
+from .pattern_recon_v2 import pattern_recon_v2
 
 # Module-level logger — format applied in startup() after uvicorn finishes its own logging setup
 logger = logging.getLogger(__name__)
@@ -140,7 +142,7 @@ async def reverse_engineer_reconcile(
     if not flat_bytes:
         raise HTTPException(status_code=500, detail="Empty flat_file")
 
-    analyzer = FormatAnalyzer(max_sample=10)
+    analyzer = FormatAnalyzer(max_sample=70)
     try:
         return analyzer.analyze(camt_bytes, flat_bytes)
     except ValueError as exc:
@@ -172,6 +174,29 @@ async def reverse_engineer_reconcile_llm(
     except RuntimeError as exc:
         # LLM configuration or API issues
         raise HTTPException(status_code=500, detail=str(exc)) from exc
+
+
+@app.post("/api/reverse-engineer/patternreconv2", response_model=ReconPatternsResponse)
+async def reverse_engineer_patternreconv2(
+    camt_file: UploadFile = File(...),
+    flat_file: UploadFile = File(...),
+    regex_pattern: str = Form(...),
+) -> ReconPatternsResponse:
+    """
+    Reconciliation pattern discovery v2.
+
+    regex_pattern is mandatory and is used by the v2 pattern engine
+    (pattern_recon_v2), which:
+      - parses CAMT & flat file,
+      - uses the regex to interpret PSR lines via LlmReverseEngineerService,
+      - builds MASTER_LEVEL_1 patterns (including PMT_REF_PLUS_AMOUNT).
+    """
+    # Just delegate to the v2 implementation, passing through the same parameters.
+    return await pattern_recon_v2(
+        camt_file=camt_file,
+        flat_file=flat_file,
+        regex_pattern=regex_pattern,
+    )
 
 _ZONE_CFG = {
     "clear": {

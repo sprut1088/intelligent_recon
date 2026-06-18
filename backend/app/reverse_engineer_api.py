@@ -5,11 +5,30 @@ import re
 import statistics
 import xml.etree.ElementTree as ET
 from typing import Any, Dict, List, Optional
+from datetime import datetime
+import copy
 
 from fastapi import APIRouter, File, HTTPException, UploadFile
 from pydantic import BaseModel
 
+from .reverse_engineer_schemas import (
+    RegexSummary,
+    ReconPatternRow,
+    ReconPatternVersion,
+    ReconPatternVersionUpdate,
+    ReconPatternVersionCloneRequest,
+    ReconPatternVersionListResponse,
+)
+
 router = APIRouter(prefix="/api/reverse-engineer", tags=["reverse-engineer"])
+
+# ---------------------------------------------------------------------------
+# In-memory store for versioned recon patterns
+# NOTE: This is intentionally non-persistent and will be reset on restart.
+# ---------------------------------------------------------------------------
+
+_RECON_PATTERN_VERSIONS: Dict[str, ReconPatternVersion] = {}
+_RECON_PATTERN_VERSION_COUNTER: int = 1
 
 
 class MatchedPair(BaseModel):
@@ -411,7 +430,12 @@ async def reconcile_files(
     camt_file: UploadFile = File(...),
     flat_file: UploadFile = File(...),
 ) -> ReconcileResponse:
-    """Reverse-engineer flat file format using a CAMT.053 XML reference."""
+    """Reverse-engineer flat file format using a CAMT.053 XML reference.
+
+    Behaviour:
+      - Uses a small CAMT sample (default 10) to infer the regex pattern.
+      - Applies that regex across all PSR/flat-file data lines when computing matches.
+    """
     camt_bytes = await camt_file.read()
     flat_bytes = await flat_file.read()
     if not camt_bytes:
@@ -419,9 +443,171 @@ async def reconcile_files(
     if not flat_bytes:
         raise HTTPException(status_code=400, detail="Empty flat_file")
 
+    # Keep a small CAMT sample only for regex identification; all flat-file
+    # data lines are still used when deriving match results / recon patterns.
     analyzer = FormatAnalyzer(max_sample=10)
     try:
         return analyzer.analyze(camt_bytes, flat_bytes)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+
+# ---------------------------------------------------------------------------
+# Recon pattern versioning endpoints (in-memory only)
+# ---------------------------------------------------------------------------
+
+
+@router.get(
+    "/recon-pattern-versions",
+    response_model=ReconPatternVersionListResponse,
+)
+async def list_recon_pattern_versions() -> ReconPatternVersionListResponse:
+    """
+    List all stored recon pattern versions from the in-memory store.
+    """
+    return ReconPatternVersionListResponse(items=list(_RECON_PATTERN_VERSIONS.values()))
+
+
+class CreateReconPatternVersionRequest(BaseModel):
+    """
+    Request payload for creating a new recon pattern version from scratch.
+
+    This is typically created from a current ReconPatternsResponse on the client.
+    """
+
+    name: str
+    regex_summary: RegexSummary
+    recon_patterns: List[ReconPatternRow]
+
+
+@router.post(
+    "/recon-pattern-versions",
+    response_model=ReconPatternVersion,
+    status_code=201,
+)
+async def create_recon_pattern_version(
+    payload: CreateReconPatternVersionRequest,
+) -> ReconPatternVersion:
+    """
+    Create an initial recon pattern version from the given pattern set.
+
+    Stored only in-memory; IDs are simple monotonic strings.
+    """
+    global _RECON_PATTERN_VERSION_COUNTER
+
+    pattern_id = f"rpv-{_RECON_PATTERN_VERSION_COUNTER}"
+    _RECON_PATTERN_VERSION_COUNTER += 1
+
+    now = datetime.utcnow()
+
+    version = ReconPatternVersion(
+        id=pattern_id,
+        version=1,
+        name=payload.name,
+        created_at=now,
+        updated_at=now,
+        regex_summary=payload.regex_summary,
+        recon_patterns=payload.recon_patterns,
+    )
+
+    _RECON_PATTERN_VERSIONS[pattern_id] = version
+    return version
+
+
+@router.get(
+    "/recon-pattern-versions/{pattern_version_id}",
+    response_model=ReconPatternVersion,
+)
+async def get_recon_pattern_version(
+    pattern_version_id: str,
+) -> ReconPatternVersion:
+    """
+    Retrieve a single recon pattern version by ID.
+    """
+    version = _RECON_PATTERN_VERSIONS.get(pattern_version_id)
+    if version is None:
+        raise HTTPException(status_code=404, detail="Recon pattern version not found")
+    return version
+
+
+@router.patch(
+    "/recon-pattern-versions/{pattern_version_id}",
+    response_model=ReconPatternVersion,
+)
+async def update_recon_pattern_version(
+    pattern_version_id: str,
+    payload: ReconPatternVersionUpdate,
+) -> ReconPatternVersion:
+    """
+    Update an existing recon pattern version in-place.
+
+    Only fields provided in the payload are applied.
+    """
+    existing = _RECON_PATTERN_VERSIONS.get(pattern_version_id)
+    if existing is None:
+        raise HTTPException(status_code=404, detail="Recon pattern version not found")
+
+    updated_data = existing.dict()
+
+    if payload.name is not None:
+        updated_data["name"] = payload.name
+    if payload.regex_summary is not None:
+        updated_data["regex_summary"] = payload.regex_summary
+    if payload.recon_patterns is not None:
+        updated_data["recon_patterns"] = payload.recon_patterns
+
+    updated_data["updated_at"] = datetime.utcnow()
+
+    updated_version = ReconPatternVersion(**updated_data)
+    _RECON_PATTERN_VERSIONS[pattern_version_id] = updated_version
+    return updated_version
+
+
+@router.post(
+    "/recon-pattern-versions/{pattern_version_id}/clone",
+    response_model=ReconPatternVersion,
+    status_code=201,
+)
+async def clone_recon_pattern_version(
+    pattern_version_id: str,
+    payload: ReconPatternVersionCloneRequest,
+) -> ReconPatternVersion:
+    """
+    Clone an existing recon pattern version into a new version.
+
+    The new version will have its own ID and (original.version + 1) as version
+    number by default. Optional overrides from the payload are applied.
+    """
+    global _RECON_PATTERN_VERSION_COUNTER
+
+    original = _RECON_PATTERN_VERSIONS.get(pattern_version_id)
+    if original is None:
+        raise HTTPException(status_code=404, detail="Recon pattern version not found")
+
+    pattern_id = f"rpv-{_RECON_PATTERN_VERSION_COUNTER}"
+    _RECON_PATTERN_VERSION_COUNTER += 1
+
+    now = datetime.utcnow()
+
+    # Deep copy underlying structures to avoid sharing mutable lists
+    new_regex_summary = copy.deepcopy(
+        payload.regex_summary if payload.regex_summary is not None else original.regex_summary
+    )
+    new_recon_patterns = copy.deepcopy(
+        payload.recon_patterns if payload.recon_patterns is not None else original.recon_patterns
+    )
+
+    new_name = payload.name or f"{original.name} v{original.version + 1}"
+
+    cloned = ReconPatternVersion(
+        id=pattern_id,
+        version=original.version + 1,
+        name=new_name,
+        created_at=now,
+        updated_at=now,
+        regex_summary=new_regex_summary,
+        recon_patterns=new_recon_patterns,
+    )
+
+    _RECON_PATTERN_VERSIONS[pattern_id] = cloned
+    return cloned

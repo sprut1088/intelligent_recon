@@ -171,17 +171,68 @@ export const api = {
 
   // Reverse-engineer API exposed on the shared client
   reverseEngineer: {
-    reconcile: (formData) =>
-      autoPatternRecon({
-        camtFile: formData.get('camt_file'),
-        flatFile: formData.get('flat_file'),
-        useLlm: false,
-      }),
+    // Identify regex pattern → reconcile-llm
     reconcileLlm: (formData) =>
       autoPatternRecon({
         camtFile: formData.get('camt_file'),
         flatFile: formData.get('flat_file'),
-        useLlm: true,
+      }),
+
+    // Identify recon patterns → patternreconv2
+    reconPatterns: async (formData) => {
+      const response = await fetch(`${API_BASE}/api/reverse-engineer/patternreconv2`, {
+        method: 'POST',
+        body: formData,
+      });
+
+      if (!response.ok) {
+        const body = await response.json().catch(() => ({}));
+        throw new Error(body.detail || `Request failed: ${response.status}`);
+      }
+
+      return response.json();
+    },
+
+    /**
+     * Create an initial versioned recon pattern set from the current pattern response.
+     * payload: { name, regex_summary, recon_patterns }
+     */
+    createPatternVersion: async (payload) =>
+      request('/api/reverse-engineer/recon-pattern-versions', {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      }),
+
+    /**
+     * List all stored recon pattern versions.
+     */
+    listPatternVersions: async () =>
+      (await request('/api/reverse-engineer/recon-pattern-versions')).items || [],
+
+    /**
+     * Fetch details for a single recon pattern version by ID.
+     */
+    getPatternVersion: (id) =>
+      request(`/api/reverse-engineer/recon-pattern-versions/${encodeURIComponent(id)}`),
+
+    /**
+     * Update an existing recon pattern version in-place.
+     * update: { name?, regex_summary?, recon_patterns? }
+     */
+    updatePatternVersion: (id, update) =>
+      request(`/api/reverse-engineer/recon-pattern-versions/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        body: JSON.stringify(update),
+      }),
+
+    /**
+     * Clone an existing recon pattern version into a new version.
+     * payload: { name?, regex_summary?, recon_patterns? }
+     */
+    clonePatternVersion: (id, payload = {}) =>
+      request(`/api/reverse-engineer/recon-pattern-versions/${encodeURIComponent(id)}/clone`, {
+        method: 'POST',
+        body: JSON.stringify(payload),
       }),
   },
 };

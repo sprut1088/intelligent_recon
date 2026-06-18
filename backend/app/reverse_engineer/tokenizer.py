@@ -30,12 +30,20 @@ class TokenizedTransaction:
     """
     tx: CamtTransaction
     tokens: Dict[str, float] = field(default_factory=dict)  # token -> weight
+    ustrdtokens: Dict[str, float] = field(default_factory=dict)  # token -> weight
+
 
     def add_token(self, token: str, weight: float) -> None:
         token_norm = token.strip()
         if not token_norm:
             return
         self.tokens[token_norm] = self.tokens.get(token_norm, 0.0) + weight
+
+    def add_ustrd_token(self, token: str, weight: float) -> None:
+        token_norm = token.strip()
+        if not token_norm:
+            return
+        self.ustrdtokens[token_norm] = self.ustrdtokens.get(token_norm, 0.0) + weight
 
 
 class CamtTokenizer:
@@ -81,14 +89,17 @@ class CamtTokenizer:
             # Direct invoice-like refs
             for m in INVOICE_PATTERN.finditer(text):
                 t.add_token(m.group(0), self.weights.invoice_ref)
+                t.add_ustrd_token(m.group(0), self.weights.invoice_ref)
 
             # Generic alphanumeric identifiers
             for m in ALNUM_ID_PATTERN.finditer(text):
                 t.add_token(m.group(0), self.weights.alnum_id)
+                t.add_ustrd_token(m.group(0), self.weights.alnum_id)
 
             # Individual words
             for w in WORD_PATTERN.findall(text):
                 t.add_token(w, self.weights.generic)
+                t.add_ustrd_token(w, self.weights.generic)
 
         # Company / counterparty names
         for name in (tx.counterparties.debtor_name, tx.counterparties.creditor_name):

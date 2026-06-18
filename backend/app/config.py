@@ -34,5 +34,7 @@ class Settings:
     embedding_model_openrouter: str = os.getenv(
         "EMBEDDING_MODEL_OPENROUTER", "google/gemini-embedding-2-preview"
     )
+    llm_model: str = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
+    llm_max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "300"))
 
 settings = Settings()
