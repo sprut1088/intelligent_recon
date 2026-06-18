@@ -28,11 +28,5 @@ class Settings:
     assisted_confidence: int = int(os.getenv("ASSISTED_CONFIDENCE", "80"))
     learning_min_support: int = int(os.getenv("LEARNING_MIN_SUPPORT", "3"))
     in_transit_days: int = int(os.getenv("IN_TRANSIT_DAYS", "3"))
-    # Embedding provider: "local" (SentenceTransformer, no key needed) or
-    # "openrouter" (API call, requires OPENROUTER_API_KEY).
-    embedding_provider: str = os.getenv("EMBEDDING_PROVIDER", "local")
-    embedding_model_openrouter: str = os.getenv(
-        "EMBEDDING_MODEL_OPENROUTER", "google/gemini-embedding-2-preview"
-    )
 
 settings = Settings()
