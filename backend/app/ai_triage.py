@@ -323,23 +323,38 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
 
     Sends one call per PSR with its Top 5 CAMT candidates (ranked by domain
     score). Updates recon_cases in-place. Concurrent via ThreadPoolExecutor.
-    Skips silently if OPENROUTER_API_KEY is not set.
+    Skips silently if neither OPENROUTER_API_KEY nor ANTHROPIC_API_KEY is set
+    (depending on LLM_PROVIDER setting).
 
     Returns list of LLM decision dicts.
     """
     import os
     import json
     import concurrent.futures
+    from .config import settings
 
-    api_key = os.getenv("OPENROUTER_API_KEY")
-    if not api_key:
-        logger.warning("OPENROUTER_API_KEY not set — Tier 2c LLM adjudication skipped.")
-        return []
+    provider = settings.llm_provider  # "openrouter" or "anthropic"
+    model    = settings.llm_model
+    max_tok  = settings.llm_max_tokens
 
-    from openai import OpenAI
+    if provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            logger.warning("ANTHROPIC_API_KEY not set — Tier 2c LLM adjudication skipped.")
+            return []
+        import anthropic as _anthropic
+        _anthropic_client = _anthropic.Anthropic(api_key=api_key)
+        _openai_client = None
+    else:  # openrouter (default)
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            logger.warning("OPENROUTER_API_KEY not set — Tier 2c LLM adjudication skipped.")
+            return []
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+        _anthropic_client = None
+
     from collections import defaultdict
-
-    client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
 
     # Group by PSR, keep Top 5 sorted by domain score descending
     by_psr: Dict[str, List[Dict]] = defaultdict(list)
@@ -412,22 +427,33 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
         )
 
         try:
-            response = client.chat.completions.create(
-                model="openai/gpt-4o-mini",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": user_prompt},
-                ],
-                response_format={"type": "json_object"},
-                temperature=0,
-                max_tokens=120,
-            )
-            result = json.loads(response.choices[0].message.content)
+            if provider == "anthropic":
+                response = _anthropic_client.messages.create(
+                    model=model,
+                    system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    temperature=0,
+                    max_tokens=max_tok,
+                )
+                raw_content = response.content[0].text
+            else:
+                response = _openai_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0,
+                    max_tokens=max_tok,
+                )
+                raw_content = response.choices[0].message.content
+            result = json.loads(raw_content)
             result["_candidates"] = top_candidates[:3]
             return result
         except json.JSONDecodeError:
             # Strip markdown fences if the model wraps output despite instructions
-            raw = response.choices[0].message.content.strip()
+            raw = raw_content.strip()
             raw = re.sub(r'^```(?:json)?\s*', '', raw)
             raw = re.sub(r'\s*```$', '', raw)
             try:

@@ -1222,7 +1222,7 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
   const baseExceptions   = Math.max(0, exceptionCount - statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) - bankOnlyCount);
   const chips = [
     { label: 'Total',      value: total,          filter: '' },
-    { label: 'Matched',    value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close')), filter: 'Matched & Settled (Auto-Close)' },
+    { label: 'Matched',    value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close') || s === 'Resolved Manually'), filter: 'matched' },
     { label: 'Exceptions', value: baseExceptions,  filter: 'exceptions' },
     { label: 'In-Transit', value: inTransitCount,  filter: 'in_transit' },
     { label: 'Bank Only',  value: bankOnlyCount,   filter: 'Bank-only Item - Investigation' },
@@ -2047,8 +2047,10 @@ export default function App() {
       fields_ignored: ['exact_invoice_format', 'exact_pmt_ref'],
       user_comment: comment,
       learning_eligible: true,
-    }), 'Manual resolution captured as learning signal');
+    }), 'Manually reviewed — resolution & learning signal recorded');
     setModalItem(null);
+    setSelected(null);
+    await refreshResults();
   };
 
   const exportCsv = () => {

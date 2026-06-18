@@ -240,6 +240,29 @@ def run_ai_triage() -> dict:
         len(by_psr), inserted, len(llm_decisions),
     )
 
+    # When AI claims a CAMT (CONFIRM or ROUTE_TO_ANALYST), the corresponding
+    # Bank-only row for that CAMT is now redundant — the CAMT is no longer
+    # unmatched. Delete those Bank-only rows so the count reflects reality.
+    # NO_MATCH decisions are excluded: if AI found no PSR for the CAMT,
+    # the Bank-only row should stay.
+    claimed_camt_ids = [
+        d["matched_camt_id"]
+        for d in llm_decisions
+        if d.get("suggested_action") in ("CONFIRM_AI_MATCH", "ROUTE_TO_ANALYST")
+        and d.get("matched_camt_id")
+    ]
+    if claimed_camt_ids:
+        with get_conn() as conn:
+            placeholders = ",".join("?" * len(claimed_camt_ids))
+            conn.execute(
+                f"""DELETE FROM recon_cases
+                    WHERE camt_id IN ({placeholders})
+                      AND reconciliation_status = 'Bank-only Item - Investigation'""",
+                claimed_camt_ids,
+            )
+            conn.commit()
+        logger.info("Removed %d Bank-only rows whose CAMT is now AI-claimed", len(claimed_camt_ids))
+
     return {
         "status": "ok",
         "candidates_count": len(candidates),
@@ -258,7 +281,7 @@ def summary() -> dict:
         pattern_rows=rows_to_dicts(conn.execute("SELECT rule_applied, COUNT(*) AS count FROM recon_cases GROUP BY rule_applied ORDER BY count DESC").fetchall())
         manual_resolution_count=conn.execute("SELECT COUNT(*) AS cnt FROM recon_manual_resolution").fetchone()["cnt"]
         learning_candidate_count=conn.execute("SELECT COUNT(*) AS cnt FROM recon_pattern_candidate").fetchone()["cnt"]
-        kpi=row_to_dict(conn.execute("SELECT COALESCE(SUM(COALESCE(internal_amount,0)),0) AS internal_amount, COALESCE(SUM(COALESCE(bank_amount,0)),0) AS bank_amount, COALESCE(SUM(ABS(COALESCE(variance,0))),0) AS absolute_variance, COALESCE(AVG(match_confidence),0) AS average_confidence, SUM(CASE WHEN exception_flag='Y' THEN 1 ELSE 0 END) AS exception_count, SUM(CASE WHEN reconciliation_status LIKE 'Matched%' THEN 1 ELSE 0 END) AS auto_matched_count FROM recon_cases").fetchone())
+        kpi=row_to_dict(conn.execute("SELECT COALESCE(SUM(COALESCE(internal_amount,0)),0) AS internal_amount, COALESCE(SUM(COALESCE(bank_amount,0)),0) AS bank_amount, COALESCE(SUM(ABS(COALESCE(variance,0))),0) AS absolute_variance, COALESCE(AVG(match_confidence),0) AS average_confidence, SUM(CASE WHEN exception_flag='Y' THEN 1 ELSE 0 END) AS exception_count, SUM(CASE WHEN reconciliation_status LIKE 'Matched%' OR reconciliation_status = 'Resolved Manually' THEN 1 ELSE 0 END) AS auto_matched_count FROM recon_cases").fetchone())
     return {"total_cases":total,"psr_count":psr_count,"camt_count":camt_count,"manual_resolution_count":manual_resolution_count,"learning_candidate_count":learning_candidate_count,"kpi":kpi,"by_status":status_rows,"by_reason":reason_rows,"by_rule":pattern_rows}
 
 
@@ -305,6 +328,8 @@ def list_cases(status: Optional[str]=None, exception_only: bool=False, search: O
         clauses.append("reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
     elif status == 'in_transit':
         clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
+    elif status == 'matched':
+        clauses.append("reconciliation_status IN ('Matched & Settled (Auto-Close)', 'Resolved Manually')")
     elif status: clauses.append("reconciliation_status = ?"); params.append(status)
     if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI Confirmed \u2014 No Match')")
     if search:

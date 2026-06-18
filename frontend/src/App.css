@@ -245,7 +245,7 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .chip-row { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 10px; }
 .chip { border: 1px solid var(--line); background: #f8fbff; color: #475569; border-radius: 999px; padding: 8px 11px; font-weight: 850; }
 .chip.active { background: var(--success-soft); border-color: #a8e5c8; color: #087447; }
-.modal-backdrop { position: fixed; inset: 0; background: rgba(16,24,39,.58); display: grid; place-items: center; z-index: 30; padding: 20px; }
+.modal-backdrop { position: fixed; inset: 0; background: rgba(16,24,39,.58); display: grid; place-items: center; z-index: 200; padding: 20px; }
 .modal { width: min(650px, 96vw); background: #fff; border-radius: 24px; padding: 26px; box-shadow: 0 35px 100px rgba(0,0,0,.32); }
 .modal.large { width: min(820px, 96vw); }
 .modal-actions { justify-content: flex-end; margin-top: 18px; }
