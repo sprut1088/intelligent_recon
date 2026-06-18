@@ -479,11 +479,23 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
                 decisions.append(result)
 
     for result in decisions:
+        # Use psr_id from the LLM result — do NOT rely on any outer loop variable
+        # (the `for psr_id in by_psr` loop above leaves a stale reference to the
+        # last iterated key, which would silently cause every UPDATE to target the
+        # wrong row).
+        psr_id_for_update = result.get("psr_id")
+        if not psr_id_for_update:
+            logger.warning("Tier 2c result missing psr_id, skipping DB update: %s", result)
+            continue
+
         # Update the recon_case in DB
         if result.get("suggested_action") == "NO_MATCH":
             new_status = "Uncleared / In-Transit Payment"
             rule = "TIER2C_NO_MATCH"
-        else:
+        elif result.get("suggested_action") == "ROUTE_TO_ANALYST":
+            new_status = "AI - Analyst Adjudication Required"
+            rule = "TIER2C_LLM"
+        else:  # CONFIRM_AI_MATCH
             new_status = "AI-Assisted Suggested Match"
             rule = "TIER2C_LLM"
 
@@ -538,7 +550,7 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
                        WHERE psr_id=?
                          AND reconciliation_status='AI - Analyst Adjudication Required'""",
                     (new_status, conf, rule, reason_text,
-                     llm_suggestions, llm_snapshot, psr_id)
+                     llm_suggestions, llm_snapshot, psr_id_for_update)
                 )
             else:
                 conn.execute(
@@ -550,7 +562,7 @@ def run_tier2c(maybe_candidates: List[Dict]) -> List[Dict]:
                        WHERE psr_id=?
                          AND reconciliation_status='AI - Analyst Adjudication Required'""",
                     (new_status, conf, rule, reason_text, matched_camt,
-                     llm_suggestions, llm_snapshot, psr_id)
+                     llm_suggestions, llm_snapshot, psr_id_for_update)
                 )
             conn.commit()
 
