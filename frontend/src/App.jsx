@@ -25,6 +25,7 @@ function classForStatus(value = '') {
   const v = String(value).toLowerCase();
   if (v.startsWith('ai-assisted')) return 'ai';
   if (v.startsWith('ai -') || v.startsWith('ai –')) return 'ai-maybe';
+  if (v.includes('ai confirmed')) return 'ai-nomatch';
   if (v.includes('matched') || v.includes('active') || v.includes('processed') || v.includes('ok') || v.includes('complete')) return 'success';
   if (v.includes('variance') || v.includes('ledger') || v.includes('warning') || v.includes('review') || v.includes('candidate')) return 'warning';
   if (v.includes('transit') || v.includes('new') || v.includes('manual')) return 'info';
@@ -161,10 +162,10 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
   );
 }
 
-function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, validatedBatchId, onUpload, onValidate, onRunBatch, onNavigate, loading }) {
+function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, validatedBatchId, onUpload, onUploadBatch, onValidate, onRunBatch, onNavigate, loading }) {
   const [psrFile, setPsrFile] = useState(null);
   const [camtFile, setCamtFile] = useState(null);
-  const [batchName, setBatchName] = useState('Treasury cash daily upload');
+  const [batchName, setBatchName] = useState('');
   const [amountDivisor, setAmountDivisor] = useState('auto');
   const qualityTableRef = useRef(null);
   const selectedBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
@@ -188,18 +189,23 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
         <Panel title="Create upload batch" subtitle="Manual upload for the prototype; the same API can be connected to SFTP or bank feed later.">
           <div className="form-grid">
             <label>Batch name</label>
-            <input value={batchName} onChange={(e) => setBatchName(e.target.value)} />
+            <input
+              value={batchName}
+              placeholder="e.g. Treasury cash daily upload"
+              onChange={(e) => setBatchName(e.target.value)}
+            />
             <label>PSR payment settlement file</label>
             <input type="file" accept=".txt,.dat,.psr,text/plain" onChange={(e) => setPsrFile(e.target.files?.[0] || null)} />
-            <button className="btn secondary" disabled={!psrFile || loading} onClick={() => onUpload('PSR', psrFile, '', batchName)}>Upload PSR to new batch</button>
-            <label>Existing batch</label>
-            <select value={batchId} onChange={(e) => setSelectedBatchId(e.target.value)}>
-              <option value="">Select batch</option>
-              {(batches.items || []).map((b) => <option key={b.batch_id} value={b.batch_id}>{b.batch_name} · {b.status}</option>)}
-            </select>
             <label>CAMT.053 bank statement</label>
             <input type="file" accept=".xml,application/xml,text/xml" onChange={(e) => setCamtFile(e.target.files?.[0] || null)} />
-            <button className="btn secondary" disabled={!camtFile || !batchId || loading} onClick={() => onUpload('CAMT', camtFile, batchId, '')}>Upload CAMT to selected batch</button>
+            <button
+              className="btn primary"
+              style={{ gridColumn: '1 / -1', marginTop: '0.25rem' }}
+              disabled={!psrFile || !camtFile || !batchName.trim() || loading}
+              onClick={() => onUploadBatch(psrFile, camtFile, batchName.trim())}
+            >
+              Upload batch
+            </button>
           </div>
         </Panel>
 
@@ -494,7 +500,7 @@ const varianceTone = (v) => {
 };
 
 function AiPill({ rule }) {
-  if (!rule || (!rule.startsWith('TIER2B') && !rule.startsWith('TIER2C'))) return null;
+  if (!rule || !rule.startsWith('TIER2C') && !rule.startsWith('AI_DOMAIN') && !rule.startsWith('AI_PENDING')) return null;
   const isNoMatch = rule === 'TIER2C_NO_MATCH';
   return <span className={`ai-pill ${isNoMatch ? 'muted' : 'accent'}`} title={rule}>AI</span>;
 }
@@ -786,7 +792,53 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           <Panel title="Why this decision?" className="nested-panel">
             {(() => {
               const NO_COMPARISON_STATUSES = ['Uncleared / In-Transit Payment', 'Bank-only Item - Investigation'];
+              const isAiConfirmedNoMatch = item.reconciliation_status === 'AI Confirmed — No Match';
               const isNoComparison = NO_COMPARISON_STATUSES.includes(item.reconciliation_status);
+              if (isAiConfirmedNoMatch) {
+                const candidatesReviewed = item.feature_snapshot?.candidates_reviewed || [];
+                return (
+                  <>
+                    <p className="no-match-explanation">
+                      AI reviewed all available candidates and found no credible match.
+                      {item.explanation ? ` ${item.explanation}` : ''}
+                    </p>
+                    <p className="no-match-explanation" style={{ marginTop: '0.5rem', color: 'var(--muted, #64748b)', fontStyle: 'italic' }}>
+                      If the bank posting is delayed, this payment may be matched in the next CAMT statement cycle. If it remains unmatched, route to the exception queue for investigation.
+                    </p>
+                    <div style={{ marginTop: '1rem', background: 'var(--bg, #f8fafc)', border: '1px solid var(--line, #e2e8f0)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
+                      <p style={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted, #64748b)', marginBottom: '0.35rem' }}>PSR (Internal)</p>
+                      <div style={{ color: '#334155', fontWeight: 600 }}>{item.counterparty || '—'}</div>
+                      <div style={{ marginTop: '0.15rem', color: '#475569' }}>
+                        {item.internal_amount != null && <span>{item.currency || ''} {Number(item.internal_amount).toLocaleString('en-EU', {minimumFractionDigits:2})}</span>}
+                        {item.value_date && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)' }}>{item.value_date}</span>}
+                        {item.reference && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)', fontFamily: 'monospace', fontSize: '0.72rem' }}>{item.reference}</span>}
+                      </div>
+                      {item.invoice && <div style={{ marginTop: '0.1rem', color: 'var(--muted)', fontSize: '0.72rem' }}>Invoice: {item.invoice}</div>}
+                    </div>
+                    {candidatesReviewed.length > 0 && (
+                      <div style={{ marginTop: '0.75rem' }}>
+                        <p style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted, #64748b)', marginBottom: '0.5rem' }}>Candidates reviewed ({candidatesReviewed.length})</p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                          {candidatesReviewed.map((c, i) => (
+                            <div key={i} style={{ background: 'var(--bg, #f8fafc)', border: '1px solid var(--line, #e2e8f0)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem' }}>
+                                <span style={{ fontWeight: 600, fontFamily: 'monospace', color: '#475569' }}>{c.camt_id}</span>
+                                <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>domain score {c.domain_score != null ? (c.domain_score * 100).toFixed(0) : '—'}%</span>
+                              </div>
+                              <div style={{ marginTop: '0.2rem', color: '#334155' }}>
+                                {c.counterparty || <em style={{color:'var(--muted)'}}>no counterparty</em>}
+                                {c.amount != null && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)' }}>{c.currency} {Number(c.amount).toLocaleString('en-EU', {minimumFractionDigits:2})}</span>}
+                                {c.date && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)' }}>{c.date}</span>}
+                              </div>
+                              {c.remittance && <div style={{ marginTop: '0.15rem', color: 'var(--muted)', fontStyle: 'italic', fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.remittance}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              }
               if (isNoComparison) {
                 return (
                   <p className="no-match-explanation">
@@ -846,7 +898,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
               );
             })()}
           </Panel>
-{suggestions.length > 0 && (
+{suggestions.length > 0 && item.reconciliation_status !== 'AI Confirmed — No Match' && (
           <Panel title="Suggested actions" className="nested-panel">
             <div className="action-stack">
               {suggestions.map((s, idx) => {
@@ -898,8 +950,9 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           const isLedgerPost = item.reconciliation_status === 'Post to Short or Over Ledger';
           const isAiSuggested = item.reconciliation_status === 'AI-Assisted Suggested Match';
           const isAiReview = item.reconciliation_status === 'AI - Analyst Adjudication Required';
+          const isAiNoMatch = item.reconciliation_status === 'AI Confirmed — No Match';
 
-          if (!isMatch && !isNoMatch && !isAiSuggested && !isAiReview && !overrideMode) return null;
+          if (!isMatch && !isNoMatch && !isAiSuggested && !isAiReview && !isAiNoMatch && !overrideMode) return null;
 
           if (isAiSuggested || isAiReview) {
             if (overrideMode) {
@@ -946,6 +999,21 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
                   {isAiSuggested ? 'Confirm AI Match' : 'Confirm Match'}
                 </button>
                 <button className="btn secondary full" onClick={() => setOverrideMode(true)}>Override AI</button>
+              </div>
+            );
+          }
+
+          if (isAiNoMatch) {
+            return (
+              <div className="drawer-footer no-match-footer">
+                <p className="no-match-hint">Route to exception queue — AI found no match; monitor for next CAMT cycle:</p>
+                <button
+                  className="btn secondary full"
+                  disabled={noMatchLoading != null}
+                  onClick={() => submitNoMatch('ROUTE_TO_EXCEPTION', 'NO_BANK_MATCH')}
+                >
+                  {noMatchLoading === 'ROUTE_TO_EXCEPTION' ? 'Routing…' : 'Route to Exception Queue'}
+                </button>
               </div>
             );
           }
@@ -1098,11 +1166,12 @@ const RULE_LABELS = {
   P6: 'One-to-many grouping match',
   P7: 'Amount variance rule',
   // AI triage codes
-  TIER2C_NO_MATCH: 'AI reviewed — no match found',
-  TIER2C_LLM:      'AI reviewed — match suggested',
-  TIER2B_CLEAR:    'Embedding match — high confidence',
-  TIER2B_MAYBE:    'Embedding match — needs review',
-  AI_MAYBE_ZONE:   'Embedding match — needs review',
+  AI_DOMAIN_SCORED:     'AI candidate identified — awaiting adjudication',
+  AI_PENDING_LLM:       'AI candidate identified — awaiting adjudication',
+  TIER2C_LLM:           'AI reviewed — match suggested',
+  TIER2C_NO_MATCH:      'AI reviewed — no match found',
+  TIER2C_ROUTE_ANALYST: 'AI reviewed — analyst review required',
+  TIER2C_CONFIRM:       'AI reviewed — match confirmed',
 };
 const ruleLabel = (code) => RULE_LABELS[code] ?? code;
 
@@ -1117,6 +1186,7 @@ const STATUS_OPTIONS = [
   'Bank-only Item - Investigation',
   'AI-Assisted Suggested Match',
   'AI - Analyst Adjudication Required',
+  'AI Confirmed — No Match',
   'Suggested Match - Analyst Review',
   'Suggested Match - Learned Pattern',
   'Exception - Amount Variance Review',
@@ -1130,25 +1200,57 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
     .reduce((acc, s) => acc + (s.count || 0), 0);
   const exceptionCount = summary.raw?.kpi?.exception_count ?? 0;
   const aiSuggestedCount = statusCount(s => s === 'AI-Assisted Suggested Match');
-  const aiReviewCount = statusCount(s => s === 'AI - Analyst Adjudication Required');
-  const inTransitCount = statusCount(s => s.includes('In-Transit') || s.includes('Uncleared'));
-  const bankOnlyCount = statusCount(s => s === 'Bank-only Item - Investigation');
+  const aiReviewCount    = statusCount(s => s === 'AI - Analyst Adjudication Required');
+  const aiNoMatchCount   = statusCount(s => s === 'AI Confirmed — No Match');
+  const aiProcessedCount = aiSuggestedCount + aiReviewCount + aiNoMatchCount;
+  const inTransitCount   = statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) + aiNoMatchCount;
+  const bankOnlyCount    = statusCount(s => s === 'Bank-only Item - Investigation');
+  // Exceptions = all exception_flag='Y' rows minus In-Transit (non-AI) and Bank-only;
+  // AI Suggested + AI Review ARE included as they need analyst action.
+  const baseExceptions   = Math.max(0, exceptionCount - statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) - bankOnlyCount);
   const chips = [
-    { label: 'Total',        value: total,            filter: '' },
-    { label: 'Matched',      value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close')), filter: 'Matched & Settled (Auto-Close)' },
-    { label: 'AI Suggested', value: aiSuggestedCount, filter: 'AI-Assisted Suggested Match' },
-    { label: 'AI Review',    value: aiReviewCount,    filter: 'AI - Analyst Adjudication Required' },
-    { label: 'Exceptions',   value: Math.max(0, exceptionCount - aiSuggestedCount - aiReviewCount - inTransitCount - bankOnlyCount), filter: 'exceptions' },
-    { label: 'In-Transit',   value: inTransitCount,   filter: 'Uncleared / In-Transit Payment' },
-    { label: 'Bank Only',    value: bankOnlyCount,    filter: 'Bank-only Item - Investigation' },
+    { label: 'Total',      value: total,          filter: '' },
+    { label: 'Matched',    value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close')), filter: 'Matched & Settled (Auto-Close)' },
+    { label: 'Exceptions', value: baseExceptions,  filter: 'exceptions' },
+    { label: 'In-Transit', value: inTransitCount,  filter: 'in_transit' },
+    { label: 'Bank Only',  value: bankOnlyCount,   filter: 'Bank-only Item - Investigation' },
   ];
+  const aiActive = activeFilter === 'ai_processed';
   return (
-    <div className="summary-bar">
-      {chips.map(c => (
-        <button key={c.label} className={`chip${activeFilter === c.filter ? ' active' : ''}`} onClick={() => onFilter(c.filter)}>
-          <strong>{c.value}</strong><span>{c.label}</span>
-        </button>
-      ))}
+    <div className="summary-bar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+      <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
+        {chips.map(c => (
+          <button key={c.label} className={`chip${activeFilter === c.filter ? ' active' : ''}`} onClick={() => onFilter(c.filter)}>
+            <strong>{c.value}</strong><span>{c.label}</span>
+          </button>
+        ))}
+      </div>
+      <button
+        onClick={() => onFilter(aiActive ? '' : 'ai_processed')}
+        style={{
+          display: 'flex', alignItems: 'center', gap: '0.4rem',
+          padding: '0.35rem 0.85rem',
+          borderRadius: '20px',
+          border: aiActive ? '1.5px solid #7c3aed' : '1.5px solid #c4b5fd',
+          background: aiActive ? '#7c3aed' : '#ede9fe',
+          color: aiActive ? '#fff' : '#5b21b6',
+          fontWeight: 600, fontSize: '0.82rem', cursor: 'pointer',
+          boxShadow: aiActive ? '0 2px 8px rgba(124,58,237,0.25)' : 'none',
+          transition: 'all .15s',
+          whiteSpace: 'nowrap',
+        }}
+        title="Filter to all AI-processed records"
+      >
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
+          <polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/>
+        </svg>
+        AI Processed
+        <span style={{
+          background: aiActive ? 'rgba(255,255,255,0.25)' : '#c4b5fd',
+          color: aiActive ? '#fff' : '#5b21b6',
+          borderRadius: '10px', padding: '0 6px', fontSize: '0.72rem', fontWeight: 700,
+        }}>{aiProcessedCount}</span>
+      </button>
     </div>
   );
 }
@@ -1230,6 +1332,12 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
     } else if (filter === 'exceptions') {
       setExceptionOnly(true); setSelectedStatus('');
       refreshResults({ exceptionOnly: true, status: '', limit: PAGE_SIZE, offset: 0 });
+    } else if (filter === 'ai_processed') {
+      setSelectedStatus('ai_processed'); setExceptionOnly(false);
+      refreshResults({ status: 'ai_processed', exceptionOnly: false, limit: PAGE_SIZE, offset: 0 });
+    } else if (filter === 'in_transit') {
+      setSelectedStatus('in_transit'); setExceptionOnly(false);
+      refreshResults({ status: 'in_transit', exceptionOnly: false, limit: PAGE_SIZE, offset: 0 });
     } else {
       setSelectedStatus(filter); setExceptionOnly(false);
       refreshResults({ status: filter, exceptionOnly: false, limit: PAGE_SIZE, offset: 0 });
@@ -1842,6 +1950,18 @@ export default function App() {
     }, `${fileType} file uploaded`);
   };
 
+  const uploadBatch = async (psrFile, camtFile, batchName) => {
+    await safe(async () => {
+      const psrResp = await api.uploadFile(psrFile, 'PSR', '', batchName);
+      const newBatchId = psrResp.batch.batch_id;
+      setSelectedBatchId(newBatchId);
+      await api.uploadFile(camtFile, 'CAMT', newBatchId, '');
+      setQuality(null);
+      setBatchRunResult(null);
+      setValidatedBatchId(null);
+    }, 'PSR and CAMT files uploaded — ready to validate');
+  };
+
   const validateSelectedBatch = async (batchId) => {
     await safe(async () => {
       const report = await api.validateBatch(batchId);
@@ -1869,12 +1989,9 @@ export default function App() {
         await refreshResults({ search: '', exceptionOnly: false, status: '' });
       },
       () => {
-        const suggested = (result?.clear_count ?? 0) + (result?.llm_adjudicated_count ?? 0);
-        const review = (result?.maybe_count ?? 0) - (result?.llm_adjudicated_count ?? 0);
-        const parts = [];
-        if (suggested) parts.push(`${suggested} suggested`);
-        if (review > 0) parts.push(`${review} awaiting review`);
-        return `AI triage complete — ${parts.length ? parts.join(', ') : '0 suggestions'}`;
+        const inserted = result?.inserted_count ?? 0;
+        const adjudicated = result?.llm_adjudicated_count ?? 0;
+        return `AI triage complete — ${inserted} candidate${inserted !== 1 ? 's' : ''} found, ${adjudicated} LLM-reviewed`;
       },
     );
     setTriageRunning(false);
@@ -1928,7 +2045,7 @@ export default function App() {
 
   const screen = useMemo(() => {
     if (active === 'workspace') return <Workspace workspace={workspace} summary={summary} onLoad={() => safe(api.loadSampleData, 'Sample PSR/CAMT loaded')} onRun={() => safe(api.runRecon, 'Reconciliation completed')} onSnapshot={() => safe(api.createSnapshot, 'Snapshot created')} onExport={exportCsv} loading={loading} />;
-    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
+    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
     if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} />;

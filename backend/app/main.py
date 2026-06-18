@@ -15,7 +15,7 @@ from .quality import get_quality_report, validate_batch
 from .workflow import get_exception_workflow, list_exception_workflow, mark_workflow_resolved, update_exception_workflow
 from .workspace import create_snapshot, export_reconciliation_results, get_dashboard_model, get_data_preview, get_no_code_rules, get_workspace_overview, get_workflow_rules, list_submissions, predict_match_fields
 from .schemas import CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
-from .ai_triage import build_ai_snapshot, run_tier2b, run_tier2c
+from .ai_triage import build_ai_snapshot, find_candidates, run_tier2c
 
 # Module-level logger — format applied in startup() after uvicorn finishes its own logging setup
 logger = logging.getLogger(__name__)
@@ -122,21 +122,14 @@ def run_reconcile() -> dict:
 
 
 
-_ZONE_CFG = {
-    "clear": {
-        "prefix": "AI",
-        "status": "AI-Assisted Suggested Match",
-        "reason_code": "AI_EMBEDDING_MATCH",
-        "suggestion_action": "CONFIRM_AI_MATCH",
-        "tier_label": "2b",
-    },
-    "maybe": {
-        "prefix": "AI-MAYBE",
-        "status": "AI - Analyst Adjudication Required",
-        "reason_code": "AI_MAYBE_ZONE",
-        "suggestion_action": "ROUTE_TO_ANALYST",
-        "tier_label": "2b_maybe",
-    },
+# All AI candidates start as 'Adjudication Required' pending the LLM decision.
+# Tier 2c overwrites this to the final status (CONFIRM / ROUTE / NO_MATCH).
+_AI_PENDING = {
+    "prefix": "AI",
+    "status": "AI - Analyst Adjudication Required",
+    "reason_code": "AI_PENDING_LLM",
+    "suggestion_action": "ROUTE_TO_ANALYST",
+    "tier_label": "2b_domain",
 }
 
 _AI_CASE_INSERT_SQL = """
@@ -156,28 +149,33 @@ VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
 def run_ai_triage() -> dict:
     """
     Pass 2 AI residual triage.
-    Tier 2b: embedding similarity on unmatched PSR pool.
-    Stores AI cases in recon_cases then hands 'maybe' zone records to Tier 2c.
+    Tier 2b: domain-aware candidate scoring (rapidfuzz + substring checks).
+    Tier 2c: LLM adjudication for ALL candidates — LLM is the sole decision-maker.
     """
     logger.info("AI triage requested")
-    candidates = run_tier2b()
-    clear = [c for c in candidates if c["zone"] == "clear"]
-    maybe = [c for c in candidates if c["zone"] == "maybe"]
-    logger.info("Tier 2b complete: %d total candidates (%d clear, %d maybe)", len(candidates), len(clear), len(maybe))
+    candidates = find_candidates()
+    logger.info("Tier 2b complete: %d candidates found", len(candidates))
+
+    # Group by PSR — find_candidates returns up to 5 per PSR sorted by score desc.
+    # We insert exactly ONE row per PSR (the top candidate); alternatives are
+    # stored in suggestions_json so the analyst can see them in the drawer.
+    by_psr: dict = {}
+    for c in candidates:
+        pid = c["psr_id"]
+        if pid not in by_psr:
+            by_psr[pid] = []
+        by_psr[pid].append(c)
 
     inserted = 0
     with get_conn() as conn:
-        # Remove previous AI suggestions so reruns are idempotent.
-        # Use case_id prefix (always "AI-…") not reconciliation_status, which
-        # Tier 2c may have overwritten to "Uncleared / In-Transit Payment" for
-        # NO_MATCH decisions — those ghost rows must be cleaned up too.
+        # Remove previous AI rows so reruns are idempotent.
         conn.execute("DELETE FROM recon_cases WHERE case_id LIKE 'AI%'")
 
-        for c in candidates:
-            zone = c["zone"]
-            cfg = _ZONE_CFG[zone]
-            case_id = f"{cfg['prefix']}-{c['psr_id']}-{c['camt_id']}"
-            conf = int(c["cosine_score"] * 100)
+        for psr_id_key, psr_candidates in by_psr.items():
+            c = psr_candidates[0]          # top-scored candidate
+            alternatives = psr_candidates[1:]  # remaining alternatives
+            case_id = f"{_AI_PENDING['prefix']}-{c['psr_id']}-{c['camt_id']}"
+            conf = int(c["candidate_score"] * 100)
             internal_amt = c.get("psr_amount")
             bank_amt = c.get("camt_amount")
             variance = (
@@ -186,24 +184,30 @@ def run_ai_triage() -> dict:
                 else None
             )
             explanation = (
-                f"Embedding cosine similarity {c['cosine_score']:.4f}. "
-                f"PSR text: '{c['psr_text']}'. CAMT text: '{c['camt_text']}'."
-                if zone == "clear" else
-                f"Embedding similarity {c['cosine_score']:.4f} \u2014 in 'maybe' zone (0.60\u20130.84). "
+                f"Domain score {c['candidate_score']:.4f}. "
                 f"Awaiting LLM adjudication (Tier 2c)."
             )
+            suggestions = [{
+                "action": _AI_PENDING["suggestion_action"],
+                "confidence": c["candidate_score"],
+                "tier": _AI_PENDING["tier_label"],
+                "camt_id": c["camt_id"],
+            }] + [
+                {
+                    "action": "ALTERNATIVE",
+                    "confidence": alt["candidate_score"],
+                    "tier": _AI_PENDING["tier_label"],
+                    "camt_id": alt["camt_id"],
+                }
+                for alt in alternatives
+            ]
             conn.execute(_AI_CASE_INSERT_SQL, (
                 case_id, c["psr_id"], c["camt_id"],
-                cfg["status"], cfg["reason_code"], "1_TO_1",
-                conf, "TIER2B_EMBEDDING", "Y",
+                _AI_PENDING["status"], _AI_PENDING["reason_code"], "1_TO_1",
+                conf, "AI_DOMAIN_SCORED", "Y",
                 explanation,
-                json_dumps([{
-                    "action": cfg["suggestion_action"],
-                    "confidence": c["cosine_score"],
-                    "tier": cfg["tier_label"],
-                    "camt_id": c["camt_id"],
-                }]),
-                json_dumps(build_ai_snapshot(c, conf, "TIER2B_EMBEDDING")),
+                json_dumps(suggestions),
+                json_dumps(build_ai_snapshot(c, conf, "AI_DOMAIN_SCORED")),
                 c.get("psr_reference") or c.get("camt_pmt_ref"),
                 c.get("psr_invoice") or c.get("camt_invoice"),
                 c.get("psr_counterparty") or c.get("camt_counterparty"),
@@ -214,21 +218,33 @@ def run_ai_triage() -> dict:
             ))
             inserted += 1
 
+        # Remove the original Uncleared / In-Transit rows for PSRs that now
+        # have an AI candidate row — otherwise In-Transit count never decreases.
+        if by_psr:
+            placeholders = ",".join("?" * len(by_psr))
+            conn.execute(
+                f"""DELETE FROM recon_cases
+                    WHERE psr_id IN ({placeholders})
+                      AND reconciliation_status IN (
+                          'Uncleared / In-Transit Payment'
+                      )
+                      AND case_id NOT LIKE 'AI%'""",
+                list(by_psr.keys()),
+            )
+
         conn.commit()
 
-    llm_decisions = run_tier2c(maybe)
+    llm_decisions = run_tier2c(candidates)
     logger.info(
-        "AI triage complete: inserted=%d clear=%d maybe=%d llm_adjudicated=%d",
-        inserted, len(clear), len(maybe), len(llm_decisions),
+        "AI triage complete: psr_groups=%d inserted=%d llm_adjudicated=%d",
+        len(by_psr), inserted, len(llm_decisions),
     )
 
     return {
         "status": "ok",
+        "candidates_count": len(candidates),
         "inserted_count": inserted,
-        "clear_count": len(clear),
-        "maybe_count": len(maybe),
         "llm_adjudicated_count": len(llm_decisions),
-        "skipped_count": len(candidates) - len(clear) - len(maybe),
     }
 
 @app.get("/api/reconcile/summary")
@@ -285,8 +301,12 @@ def workspace_export_results():
 @app.get("/api/reconcile/cases")
 def list_cases(status: Optional[str]=None, exception_only: bool=False, search: Optional[str]=None, limit:int=Query(100,ge=1,le=1000), offset:int=Query(0,ge=0)) -> dict:
     clauses=[]; params=[]
-    if status: clauses.append("reconciliation_status = ?"); params.append(status)
-    if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation')")
+    if status == 'ai_processed':
+        clauses.append("reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
+    elif status == 'in_transit':
+        clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
+    elif status: clauses.append("reconciliation_status = ?"); params.append(status)
+    if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI Confirmed \u2014 No Match')")
     if search:
         clauses.append("(case_id LIKE ? OR psr_id LIKE ? OR camt_id LIKE ? OR reference LIKE ? OR invoice LIKE ? OR counterparty LIKE ?)")
         term=f"%{search}%"; params.extend([term]*6)
