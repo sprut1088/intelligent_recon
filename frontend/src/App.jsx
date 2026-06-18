@@ -611,39 +611,49 @@ function FieldDiff({ item }) {
   const isValidId = (id) => Boolean(id && id.trim() && !['NOT FOUND', 'N/A', 'NONE', 'NULL'].includes(id.trim().toUpperCase()));
   const hasPsr = Boolean(item.psr_id);
   const hasCamtData = item.bank_amount != null;
-  const hasCamt = Boolean(item.camt_id || hasCamtData);
-  const rows = [
-    { label: 'Amount',       psr: hasPsr      ? item.internal_amount  : null,  camt: hasCamtData ? item.bank_amount        : null },
-    { label: 'Direction',    psr: hasPsr      ? item.psr_direction     : null,  camt: hasCamtData ? item.camt_direction     : null },
-    { label: 'Date',         psr: hasPsr      ? item.value_date        : null,  camt: hasCamtData ? item.booking_date       : null },
-    { label: 'Reference',    psr: hasPsr      ? item.reference         : null,  camt: hasCamtData ? item.camt_pmt_ref       : null },
-    { label: 'Counterparty', psr: hasPsr      ? item.counterparty      : null,  camt: hasCamtData ? item.camt_counterparty  : null },
-    { label: 'Invoice',      psr: hasPsr      ? item.invoice           : null,  camt: hasCamtData ? item.camt_invoice       : null },
-    { label: 'Remittance',   psr: null,                                         camt: hasCamtData ? item.camt_remittance    : null },
+  const fields = [
+    {
+      key: 'id',
+      label: 'ID',
+      psr: hasPsr && isValidId(item.psr_id)
+        ? <a className="source-link" href={`#psr-${item.psr_id}`}>{item.psr_id}</a>
+        : fmt(hasPsr ? item.psr_id : null),
+      camt: hasCamtData && isValidId(item.camt_id)
+        ? <a className="source-link" href={`#camt-${item.camt_id}`}>{item.camt_id}</a>
+        : fmt(hasCamtData ? item.camt_id : null),
+      psrRaw: hasPsr ? item.psr_id : null,
+      camtRaw: hasCamtData ? item.camt_id : null,
+    },
+    { key: 'amount', label: 'Amount', psr: fmt(hasPsr ? item.internal_amount : null), camt: fmt(hasCamtData ? item.bank_amount : null), psrRaw: hasPsr ? item.internal_amount : null, camtRaw: hasCamtData ? item.bank_amount : null },
+    { key: 'direction', label: 'Direction', psr: fmt(hasPsr ? item.psr_direction : null), camt: fmt(hasCamtData ? item.camt_direction : null), psrRaw: hasPsr ? item.psr_direction : null, camtRaw: hasCamtData ? item.camt_direction : null },
+    { key: 'date', label: 'Date', psr: fmt(hasPsr ? item.value_date : null), camt: fmt(hasCamtData ? item.booking_date : null), psrRaw: hasPsr ? item.value_date : null, camtRaw: hasCamtData ? item.booking_date : null },
+    { key: 'reference', label: 'Reference', psr: fmt(hasPsr ? item.reference : null), camt: fmt(hasCamtData ? item.camt_pmt_ref : null), psrRaw: hasPsr ? item.reference : null, camtRaw: hasCamtData ? item.camt_pmt_ref : null },
+    { key: 'counterparty', label: 'Counterparty', psr: fmt(hasPsr ? item.counterparty : null), camt: fmt(hasCamtData ? item.camt_counterparty : null), psrRaw: hasPsr ? item.counterparty : null, camtRaw: hasCamtData ? item.camt_counterparty : null },
+    { key: 'invoice', label: 'Invoice', psr: fmt(hasPsr ? item.invoice : null), camt: fmt(hasCamtData ? item.camt_invoice : null), psrRaw: hasPsr ? item.invoice : null, camtRaw: hasCamtData ? item.camt_invoice : null },
+    { key: 'remittance', label: 'Remittance', psr: fmt(null), camt: fmt(hasCamtData ? item.camt_remittance : null), psrRaw: null, camtRaw: hasCamtData ? item.camt_remittance : null },
   ];
   return (
-    <div className="field-diff">
-      <div className="field-diff-header">
-        <span className="field-label"></span>
-        <span>PSR (Internal)</span>
-        <span>Bank (CAMT)</span>
+    <div className="field-diff field-diff-transposed">
+      <div className="field-diff-scroll">
+        <table className="field-diff-table">
+          <thead>
+            <tr>
+              <th>Source</th>
+              {fields.map((f) => <th key={f.key}>{f.label}</th>)}
+            </tr>
+          </thead>
+          <tbody>
+            <tr>
+              <th scope="row">PSR (Internal)</th>
+              {fields.map((f) => <td key={`psr-${f.key}`} className={mismatch(f.psrRaw, f.camtRaw) ? 'mismatch' : ''}>{f.psr}</td>)}
+            </tr>
+            <tr>
+              <th scope="row">Bank (CAMT)</th>
+              {fields.map((f) => <td key={`camt-${f.key}`} className={mismatch(f.psrRaw, f.camtRaw) ? 'mismatch' : ''}>{f.camt}</td>)}
+            </tr>
+          </tbody>
+        </table>
       </div>
-      <div className="field-diff-row field-diff-ids">
-        <span className="field-label">ID</span>
-        <span className="field-val">
-          {hasPsr && isValidId(item.psr_id) ? <a className="source-link" href={`#psr-${item.psr_id}`}>{item.psr_id}</a> : fmt(hasPsr ? item.psr_id : null)}
-        </span>
-        <span className="field-val">
-          {hasCamtData && isValidId(item.camt_id) ? <a className="source-link" href={`#camt-${item.camt_id}`}>{item.camt_id}</a> : fmt(hasCamtData ? item.camt_id : null)}
-        </span>
-      </div>
-      {rows.map(({ label, psr, camt }) => (
-        <div key={label} className={`field-diff-row${mismatch(psr, camt) ? ' mismatch' : ''}`}>
-          <span className="field-label">{label}</span>
-          <span className="field-val">{fmt(psr)}</span>
-          <span className="field-val">{fmt(camt)}</span>
-        </div>
-      ))}
     </div>
   );
 }
@@ -749,8 +759,9 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
   const total = rows.length;
   return (
     <>
-      <div className="drawer-backdrop" onClick={onClose} />
-      <aside className="drawer">
+      <div className="evidence-modal-backdrop" onClick={onClose} />
+      <div className="evidence-modal-wrap" role="dialog" aria-modal="true" aria-label="Match evidence details">
+      <aside className="evidence-modal">
         <div className="drawer-nav">
           <button className="btn ghost" disabled={filteredIndex <= 0} onClick={() => goTo(-1)}>← Prev</button>
           <span className="drawer-nav-counter">
@@ -1095,6 +1106,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           </div>
         )}
       </aside>
+      </div>
     </>
   );
 }
