@@ -28,5 +28,12 @@ class Settings:
     assisted_confidence: int = int(os.getenv("ASSISTED_CONFIDENCE", "80"))
     learning_min_support: int = int(os.getenv("LEARNING_MIN_SUPPORT", "3"))
     in_transit_days: int = int(os.getenv("IN_TRANSIT_DAYS", "3"))
+    # LLM provider: "openrouter" (default) or "anthropic"
+    llm_provider: str = os.getenv("LLM_PROVIDER", "openrouter")
+    # Model name — use provider-specific format:
+    #   openrouter:  "openai/gpt-4o-mini", "anthropic/claude-3.5-sonnet"
+    #   anthropic:   "claude-3-5-sonnet-latest"
+    llm_model: str = os.getenv("LLM_MODEL", "openai/gpt-4o-mini")
+    llm_max_tokens: int = int(os.getenv("LLM_MAX_TOKENS", "300"))
 
 settings = Settings()
