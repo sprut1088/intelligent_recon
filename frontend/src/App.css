@@ -73,6 +73,7 @@ p { margin: 0; color: var(--muted); line-height: 1.55; }
 .tag.neutral { background: #eef2f7; color: #475569; border-color: #dbe4ee; }
 .tag.ai       { background: #ede9fe; color: #5b21b6; border-color: #c4b5fd; }
 .tag.ai-maybe { background: #f5f3ff; color: #7c3aed; border-color: #ddd6fe; }
+.tag.ai-nomatch { background: #fef2f2; color: #991b1b; border-color: #fecaca; }
 .ai-pill { font-size: 0.65rem; font-weight: 700; padding: 1px 5px; border-radius: 3px; margin-left: 4px; vertical-align: middle; cursor: default; border: 1px solid transparent; }
 .ai-pill.accent { background: #ede9fe; color: #5b21b6; border-color: #c4b5fd; }
 .ai-pill.muted  { background: #eef2f7; color: #94a3b8; border-color: #dbe4ee; text-decoration: line-through; }

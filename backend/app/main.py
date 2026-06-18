@@ -156,12 +156,24 @@ def run_ai_triage() -> dict:
     candidates = find_candidates()
     logger.info("Tier 2b complete: %d candidates found", len(candidates))
 
+    # Group by PSR — find_candidates returns up to 5 per PSR sorted by score desc.
+    # We insert exactly ONE row per PSR (the top candidate); alternatives are
+    # stored in suggestions_json so the analyst can see them in the drawer.
+    by_psr: dict = {}
+    for c in candidates:
+        pid = c["psr_id"]
+        if pid not in by_psr:
+            by_psr[pid] = []
+        by_psr[pid].append(c)
+
     inserted = 0
     with get_conn() as conn:
         # Remove previous AI rows so reruns are idempotent.
         conn.execute("DELETE FROM recon_cases WHERE case_id LIKE 'AI%'")
 
-        for c in candidates:
+        for psr_id_key, psr_candidates in by_psr.items():
+            c = psr_candidates[0]          # top-scored candidate
+            alternatives = psr_candidates[1:]  # remaining alternatives
             case_id = f"{_AI_PENDING['prefix']}-{c['psr_id']}-{c['camt_id']}"
             conf = int(c["candidate_score"] * 100)
             internal_amt = c.get("psr_amount")
@@ -175,17 +187,26 @@ def run_ai_triage() -> dict:
                 f"Domain score {c['candidate_score']:.4f}. "
                 f"Awaiting LLM adjudication (Tier 2c)."
             )
+            suggestions = [{
+                "action": _AI_PENDING["suggestion_action"],
+                "confidence": c["candidate_score"],
+                "tier": _AI_PENDING["tier_label"],
+                "camt_id": c["camt_id"],
+            }] + [
+                {
+                    "action": "ALTERNATIVE",
+                    "confidence": alt["candidate_score"],
+                    "tier": _AI_PENDING["tier_label"],
+                    "camt_id": alt["camt_id"],
+                }
+                for alt in alternatives
+            ]
             conn.execute(_AI_CASE_INSERT_SQL, (
                 case_id, c["psr_id"], c["camt_id"],
                 _AI_PENDING["status"], _AI_PENDING["reason_code"], "1_TO_1",
                 conf, "AI_DOMAIN_SCORED", "Y",
                 explanation,
-                json_dumps([{
-                    "action": _AI_PENDING["suggestion_action"],
-                    "confidence": c["candidate_score"],
-                    "tier": _AI_PENDING["tier_label"],
-                    "camt_id": c["camt_id"],
-                }]),
+                json_dumps(suggestions),
                 json_dumps(build_ai_snapshot(c, conf, "AI_DOMAIN_SCORED")),
                 c.get("psr_reference") or c.get("camt_pmt_ref"),
                 c.get("psr_invoice") or c.get("camt_invoice"),
@@ -201,8 +222,8 @@ def run_ai_triage() -> dict:
 
     llm_decisions = run_tier2c(candidates)
     logger.info(
-        "AI triage complete: candidates=%d inserted=%d llm_adjudicated=%d",
-        len(candidates), inserted, len(llm_decisions),
+        "AI triage complete: psr_groups=%d inserted=%d llm_adjudicated=%d",
+        len(by_psr), inserted, len(llm_decisions),
     )
 
     return {
@@ -266,8 +287,10 @@ def workspace_export_results():
 @app.get("/api/reconcile/cases")
 def list_cases(status: Optional[str]=None, exception_only: bool=False, search: Optional[str]=None, limit:int=Query(100,ge=1,le=1000), offset:int=Query(0,ge=0)) -> dict:
     clauses=[]; params=[]
-    if status: clauses.append("reconciliation_status = ?"); params.append(status)
-    if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation')")
+    if status == 'ai_processed':
+        clauses.append("reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
+    elif status: clauses.append("reconciliation_status = ?"); params.append(status)
+    if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
     if search:
         clauses.append("(case_id LIKE ? OR psr_id LIKE ? OR camt_id LIKE ? OR reference LIKE ? OR invoice LIKE ? OR counterparty LIKE ?)")
         term=f"%{search}%"; params.extend([term]*6)

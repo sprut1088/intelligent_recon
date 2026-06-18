@@ -25,6 +25,7 @@ function classForStatus(value = '') {
   const v = String(value).toLowerCase();
   if (v.startsWith('ai-assisted')) return 'ai';
   if (v.startsWith('ai -') || v.startsWith('ai –')) return 'ai-maybe';
+  if (v.includes('ai confirmed')) return 'ai-nomatch';
   if (v.includes('matched') || v.includes('active') || v.includes('processed') || v.includes('ok') || v.includes('complete')) return 'success';
   if (v.includes('variance') || v.includes('ledger') || v.includes('warning') || v.includes('review') || v.includes('candidate')) return 'warning';
   if (v.includes('transit') || v.includes('new') || v.includes('manual')) return 'info';
@@ -494,7 +495,7 @@ const varianceTone = (v) => {
 };
 
 function AiPill({ rule }) {
-  if (!rule || (!rule.startsWith('TIER2B') && !rule.startsWith('TIER2C'))) return null;
+  if (!rule || !rule.startsWith('TIER2C') && !rule.startsWith('AI_DOMAIN') && !rule.startsWith('AI_PENDING')) return null;
   const isNoMatch = rule === 'TIER2C_NO_MATCH';
   return <span className={`ai-pill ${isNoMatch ? 'muted' : 'accent'}`} title={rule}>AI</span>;
 }
@@ -786,7 +787,53 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           <Panel title="Why this decision?" className="nested-panel">
             {(() => {
               const NO_COMPARISON_STATUSES = ['Uncleared / In-Transit Payment', 'Bank-only Item - Investigation'];
+              const isAiConfirmedNoMatch = item.reconciliation_status === 'AI Confirmed — No Match';
               const isNoComparison = NO_COMPARISON_STATUSES.includes(item.reconciliation_status);
+              if (isAiConfirmedNoMatch) {
+                const candidatesReviewed = item.feature_snapshot?.candidates_reviewed || [];
+                return (
+                  <>
+                    <p className="no-match-explanation">
+                      AI reviewed all available candidates and found no credible match.
+                      {item.explanation ? ` ${item.explanation}` : ''}
+                    </p>
+                    <p className="no-match-explanation" style={{ marginTop: '0.5rem', color: 'var(--muted, #64748b)', fontStyle: 'italic' }}>
+                      If the bank posting is delayed, this payment may be matched in the next CAMT statement cycle. If it remains unmatched, route to the exception queue for investigation.
+                    </p>
+                    <div style={{ marginTop: '1rem', background: 'var(--bg, #f8fafc)', border: '1px solid var(--line, #e2e8f0)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
+                      <p style={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted, #64748b)', marginBottom: '0.35rem' }}>PSR (Internal)</p>
+                      <div style={{ color: '#334155', fontWeight: 600 }}>{item.counterparty || '—'}</div>
+                      <div style={{ marginTop: '0.15rem', color: '#475569' }}>
+                        {item.internal_amount != null && <span>{item.currency || ''} {Number(item.internal_amount).toLocaleString('en-EU', {minimumFractionDigits:2})}</span>}
+                        {item.value_date && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)' }}>{item.value_date}</span>}
+                        {item.reference && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)', fontFamily: 'monospace', fontSize: '0.72rem' }}>{item.reference}</span>}
+                      </div>
+                      {item.invoice && <div style={{ marginTop: '0.1rem', color: 'var(--muted)', fontSize: '0.72rem' }}>Invoice: {item.invoice}</div>}
+                    </div>
+                    {candidatesReviewed.length > 0 && (
+                      <div style={{ marginTop: '0.75rem' }}>
+                        <p style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted, #64748b)', marginBottom: '0.5rem' }}>Candidates reviewed ({candidatesReviewed.length})</p>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
+                          {candidatesReviewed.map((c, i) => (
+                            <div key={i} style={{ background: 'var(--bg, #f8fafc)', border: '1px solid var(--line, #e2e8f0)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
+                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem' }}>
+                                <span style={{ fontWeight: 600, fontFamily: 'monospace', color: '#475569' }}>{c.camt_id}</span>
+                                <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>domain score {c.domain_score != null ? (c.domain_score * 100).toFixed(0) : '—'}%</span>
+                              </div>
+                              <div style={{ marginTop: '0.2rem', color: '#334155' }}>
+                                {c.counterparty || <em style={{color:'var(--muted)'}}>no counterparty</em>}
+                                {c.amount != null && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)' }}>{c.currency} {Number(c.amount).toLocaleString('en-EU', {minimumFractionDigits:2})}</span>}
+                                {c.date && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)' }}>{c.date}</span>}
+                              </div>
+                              {c.remittance && <div style={{ marginTop: '0.15rem', color: 'var(--muted)', fontStyle: 'italic', fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.remittance}</div>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    )}
+                  </>
+                );
+              }
               if (isNoComparison) {
                 return (
                   <p className="no-match-explanation">
@@ -846,7 +893,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
               );
             })()}
           </Panel>
-{suggestions.length > 0 && (
+{suggestions.length > 0 && item.reconciliation_status !== 'AI Confirmed — No Match' && (
           <Panel title="Suggested actions" className="nested-panel">
             <div className="action-stack">
               {suggestions.map((s, idx) => {
@@ -898,8 +945,9 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           const isLedgerPost = item.reconciliation_status === 'Post to Short or Over Ledger';
           const isAiSuggested = item.reconciliation_status === 'AI-Assisted Suggested Match';
           const isAiReview = item.reconciliation_status === 'AI - Analyst Adjudication Required';
+          const isAiNoMatch = item.reconciliation_status === 'AI Confirmed — No Match';
 
-          if (!isMatch && !isNoMatch && !isAiSuggested && !isAiReview && !overrideMode) return null;
+          if (!isMatch && !isNoMatch && !isAiSuggested && !isAiReview && !isAiNoMatch && !overrideMode) return null;
 
           if (isAiSuggested || isAiReview) {
             if (overrideMode) {
@@ -946,6 +994,21 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
                   {isAiSuggested ? 'Confirm AI Match' : 'Confirm Match'}
                 </button>
                 <button className="btn secondary full" onClick={() => setOverrideMode(true)}>Override AI</button>
+              </div>
+            );
+          }
+
+          if (isAiNoMatch) {
+            return (
+              <div className="drawer-footer no-match-footer">
+                <p className="no-match-hint">Route to exception queue — AI found no match; monitor for next CAMT cycle:</p>
+                <button
+                  className="btn secondary full"
+                  disabled={noMatchLoading != null}
+                  onClick={() => submitNoMatch('ROUTE_TO_EXCEPTION', 'NO_BANK_MATCH')}
+                >
+                  {noMatchLoading === 'ROUTE_TO_EXCEPTION' ? 'Routing…' : 'Route to Exception Queue'}
+                </button>
               </div>
             );
           }
@@ -1098,11 +1161,12 @@ const RULE_LABELS = {
   P6: 'One-to-many grouping match',
   P7: 'Amount variance rule',
   // AI triage codes
-  TIER2C_NO_MATCH: 'AI reviewed — no match found',
-  TIER2C_LLM:      'AI reviewed — match suggested',
-  TIER2B_CLEAR:    'Embedding match — high confidence',
-  TIER2B_MAYBE:    'Embedding match — needs review',
-  AI_MAYBE_ZONE:   'Embedding match — needs review',
+  AI_DOMAIN_SCORED:     'AI candidate identified — awaiting adjudication',
+  AI_PENDING_LLM:       'AI candidate identified — awaiting adjudication',
+  TIER2C_LLM:           'AI reviewed — match suggested',
+  TIER2C_NO_MATCH:      'AI reviewed — no match found',
+  TIER2C_ROUTE_ANALYST: 'AI reviewed — analyst review required',
+  TIER2C_CONFIRM:       'AI reviewed — match confirmed',
 };
 const ruleLabel = (code) => RULE_LABELS[code] ?? code;
 
@@ -1117,6 +1181,7 @@ const STATUS_OPTIONS = [
   'Bank-only Item - Investigation',
   'AI-Assisted Suggested Match',
   'AI - Analyst Adjudication Required',
+  'AI Confirmed — No Match',
   'Suggested Match - Analyst Review',
   'Suggested Match - Learned Pattern',
   'Exception - Amount Variance Review',
@@ -1129,18 +1194,20 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
     .filter(s => match(s.reconciliation_status || ''))
     .reduce((acc, s) => acc + (s.count || 0), 0);
   const exceptionCount = summary.raw?.kpi?.exception_count ?? 0;
-  const aiSuggestedCount = statusCount(s => s === 'AI-Assisted Suggested Match');
-  const aiReviewCount = statusCount(s => s === 'AI - Analyst Adjudication Required');
+  const aiProcessedCount = statusCount(s =>
+    s === 'AI-Assisted Suggested Match' ||
+    s === 'AI - Analyst Adjudication Required' ||
+    s === 'AI Confirmed — No Match'
+  );
   const inTransitCount = statusCount(s => s.includes('In-Transit') || s.includes('Uncleared'));
   const bankOnlyCount = statusCount(s => s === 'Bank-only Item - Investigation');
   const chips = [
-    { label: 'Total',        value: total,            filter: '' },
+    { label: 'Total',        value: total,             filter: '' },
     { label: 'Matched',      value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close')), filter: 'Matched & Settled (Auto-Close)' },
-    { label: 'AI Suggested', value: aiSuggestedCount, filter: 'AI-Assisted Suggested Match' },
-    { label: 'AI Review',    value: aiReviewCount,    filter: 'AI - Analyst Adjudication Required' },
-    { label: 'Exceptions',   value: Math.max(0, exceptionCount - aiSuggestedCount - aiReviewCount - inTransitCount - bankOnlyCount), filter: 'exceptions' },
-    { label: 'In-Transit',   value: inTransitCount,   filter: 'Uncleared / In-Transit Payment' },
-    { label: 'Bank Only',    value: bankOnlyCount,    filter: 'Bank-only Item - Investigation' },
+    { label: 'AI Processed', value: aiProcessedCount,  filter: 'ai_processed' },
+    { label: 'Exceptions',   value: Math.max(0, exceptionCount - aiProcessedCount - inTransitCount - bankOnlyCount), filter: 'exceptions' },
+    { label: 'In-Transit',   value: inTransitCount,    filter: 'Uncleared / In-Transit Payment' },
+    { label: 'Bank Only',    value: bankOnlyCount,     filter: 'Bank-only Item - Investigation' },
   ];
   return (
     <div className="summary-bar">
@@ -1230,6 +1297,9 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
     } else if (filter === 'exceptions') {
       setExceptionOnly(true); setSelectedStatus('');
       refreshResults({ exceptionOnly: true, status: '', limit: PAGE_SIZE, offset: 0 });
+    } else if (filter === 'ai_processed') {
+      setSelectedStatus('ai_processed'); setExceptionOnly(false);
+      refreshResults({ status: 'ai_processed', exceptionOnly: false, limit: PAGE_SIZE, offset: 0 });
     } else {
       setSelectedStatus(filter); setExceptionOnly(false);
       refreshResults({ status: filter, exceptionOnly: false, limit: PAGE_SIZE, offset: 0 });
@@ -1869,12 +1939,9 @@ export default function App() {
         await refreshResults({ search: '', exceptionOnly: false, status: '' });
       },
       () => {
-        const suggested = (result?.clear_count ?? 0) + (result?.llm_adjudicated_count ?? 0);
-        const review = (result?.maybe_count ?? 0) - (result?.llm_adjudicated_count ?? 0);
-        const parts = [];
-        if (suggested) parts.push(`${suggested} suggested`);
-        if (review > 0) parts.push(`${review} awaiting review`);
-        return `AI triage complete — ${parts.length ? parts.join(', ') : '0 suggestions'}`;
+        const inserted = result?.inserted_count ?? 0;
+        const adjudicated = result?.llm_adjudicated_count ?? 0;
+        return `AI triage complete — ${inserted} candidate${inserted !== 1 ? 's' : ''} found, ${adjudicated} LLM-reviewed`;
       },
     );
     setTriageRunning(false);

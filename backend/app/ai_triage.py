@@ -369,28 +369,33 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
             )
 
         system_prompt = (
-            "You are an expert cash reconciliation analyst.\n"
-            "Your goal is to match an internal PSR payment ledger record to the correct bank CAMT log.\n"
-            "The candidate bank logs have already been pre-filtered for matching amounts, dates, and "
-            "directions, and ranked by domain similarity.\n\n"
+            "You are a cash reconciliation engine. Be precise and terse.\n\n"
+            "CONTEXT: Every candidate already passed amount (within tolerance), date (within "
+            "in-transit window), and direction checks. Do NOT re-examine those — focus solely "
+            "on IDENTITY signals to pick the right candidate.\n\n"
+            "IDENTITY SIGNALS (in priority order):\n"
+            "1. Counterparty name — word-order swaps ('Pinnacle Group' = 'Group Pinnacle'), "
+            "legal suffix differences ('Corp' = 'Corp Ltd'), and abbreviations all count as MATCH.\n"
+            "2. Invoice number in remittance text — strong positive evidence.\n"
+            "3. Reference number in remittance text — strong positive evidence.\n"
+            "4. CounterpartyInRemittance=YES — bank used intermediary as Party; actual payer "
+            "is in remittance text; treat as strong positive.\n"
+            "5. Generic remittance text (e.g. 'Technology Services Payment') — NOT evidence "
+            "for or against; ignore it.\n\n"
             "DECISION RULES:\n"
-            "1. If 'CounterpartyInRemittance' is YES, treat it as strong evidence of a match — banks "
-            "often use an intermediary name as the Party field while the actual payer appears in the "
-            "remittance text.\n"
-            "2. If multiple candidates are equally strong and you cannot distinguish them, do NOT guess. "
-            "Set matched_camt_id to null and suggested_action to ROUTE_TO_ANALYST.\n"
-            "3. CONFIDENCE THRESHOLDS:\n"
-            "   - CONFIRM_AI_MATCH: Use only if confidence is >= 85%.\n"
-            "   - ROUTE_TO_ANALYST: Use if confidence is 50-84%.\n"
-            "   - NO_MATCH: Use if no candidate is credible (confidence < 50%).\n\n"
-            "You MUST reply with valid JSON matching this schema exactly:\n"
-            '{\n'
-            '  "psr_id": "string",\n'
-            '  "matched_camt_id": "string or null",\n'
-            '  "confidence_pct": 0,\n'
-            '  "reason": "One clear sentence explaining the rationale.",\n'
-            '  "suggested_action": "CONFIRM_AI_MATCH|ROUTE_TO_ANALYST|NO_MATCH"\n'
-            "}"
+            "- CONFIRM_AI_MATCH (>=85%): counterparty is clearly the same entity (fuzzy name "
+            "match or exact), OR invoice/reference found in remittance, AND no other candidate "
+            "is equally strong.\n"
+            "- ROUTE_TO_ANALYST (30-84%): some identity overlap but not conclusive, OR two "
+            "candidates are indistinguishable — pick the best fit, set it as matched_camt_id, "
+            "and flag for human review.\n"
+            "- NO_MATCH (<30%): zero identity field overlap across ALL candidates. "
+            "Should be rare given pre-filtering. Set matched_camt_id to null.\n\n"
+            "REASON FIELD: One short factual sentence. State WHAT matched or WHY it is "
+            "ambiguous. No filler phrases. Max 20 words.\n\n"
+            "Reply with RAW JSON only. Do not use markdown blocks:\n"
+            '{"psr_id":"string","matched_camt_id":"string or null",'
+            '"confidence_pct":"integer 0-100","reason":"string","suggested_action":"CONFIRM_AI_MATCH|ROUTE_TO_ANALYST|NO_MATCH"}'
         )
 
         user_prompt = (
@@ -414,9 +419,23 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
                 ],
                 response_format={"type": "json_object"},
                 temperature=0,
-                max_tokens=300,
+                max_tokens=120,
             )
-            return json.loads(response.choices[0].message.content)
+            result = json.loads(response.choices[0].message.content)
+            result["_candidates"] = top_candidates[:3]
+            return result
+        except json.JSONDecodeError:
+            # Strip markdown fences if the model wraps output despite instructions
+            raw = response.choices[0].message.content.strip()
+            raw = re.sub(r'^```(?:json)?\s*', '', raw)
+            raw = re.sub(r'\s*```$', '', raw)
+            try:
+                result = json.loads(raw)
+                result["_candidates"] = top_candidates[:3]
+                return result
+            except Exception:
+                logger.error("Tier 2c JSON parse failed for PSR %s after strip", psr_id)
+                return None
         except Exception as exc:
             logger.error("Tier 2c LLM call failed for PSR %s: %s", psr_id, exc)
             return None
@@ -439,7 +458,7 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
 
         action = result.get("suggested_action", "ROUTE_TO_ANALYST")
         if action == "NO_MATCH":
-            new_status = "Uncleared / In-Transit Payment"
+            new_status = "AI Confirmed — No Match"
             rule = "TIER2C_NO_MATCH"
             new_reason_code = "TIER2C_NO_MATCH"
         elif action == "ROUTE_TO_ANALYST":
@@ -477,10 +496,23 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
                 "evidence": f"LLM confidence: {conf}%",
             },
         ]
+        candidates_reviewed = [
+            {
+                "camt_id": c.get("camt_id"),
+                "counterparty": c.get("camt_counterparty") or "",
+                "amount": c.get("camt_amount"),
+                "currency": c.get("camt_currency") or "",
+                "date": c.get("camt_booking_date") or "",
+                "remittance": c.get("camt_remittance") or "",
+                "domain_score": c.get("candidate_score"),
+            }
+            for c in result.get("_candidates", [])
+        ]
         passed_w = sum(x["weight"] for x in llm_components if x["passed"])
         total_w = sum(x["weight"] for x in llm_components) or 1
         llm_snapshot = json_dumps({
             "tier": "2c_llm",
+            "candidates_reviewed": candidates_reviewed,
             "score_breakdown": {
                 "rule_applied": rule,
                 "engine_confidence": conf,
