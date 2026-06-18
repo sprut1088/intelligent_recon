@@ -218,6 +218,20 @@ def run_ai_triage() -> dict:
             ))
             inserted += 1
 
+        # Remove the original Uncleared / In-Transit rows for PSRs that now
+        # have an AI candidate row — otherwise In-Transit count never decreases.
+        if by_psr:
+            placeholders = ",".join("?" * len(by_psr))
+            conn.execute(
+                f"""DELETE FROM recon_cases
+                    WHERE psr_id IN ({placeholders})
+                      AND reconciliation_status IN (
+                          'Uncleared / In-Transit Payment'
+                      )
+                      AND case_id NOT LIKE 'AI%'""",
+                list(by_psr.keys()),
+            )
+
         conn.commit()
 
     llm_decisions = run_tier2c(candidates)

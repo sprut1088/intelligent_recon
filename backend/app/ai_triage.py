@@ -147,7 +147,8 @@ def find_candidates(unmatched_psr_ids: Optional[List[str]] = None) -> List[Dict]
             unmatched_case_rows = rows_to_dicts(conn.execute(
                 """SELECT psr_id FROM recon_cases
                    WHERE reconciliation_status LIKE '%In-Transit%'
-                      OR reconciliation_status LIKE '%Uncleared%'"""
+                      OR reconciliation_status LIKE '%Uncleared%'
+                      OR reconciliation_status LIKE 'AI%'"""
             ).fetchall())
             ids = [r["psr_id"] for r in unmatched_case_rows if r["psr_id"]]
             if not ids:
