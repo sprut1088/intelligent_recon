@@ -303,8 +303,10 @@ def list_cases(status: Optional[str]=None, exception_only: bool=False, search: O
     clauses=[]; params=[]
     if status == 'ai_processed':
         clauses.append("reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
+    elif status == 'in_transit':
+        clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
     elif status: clauses.append("reconciliation_status = ?"); params.append(status)
-    if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
+    if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI Confirmed \u2014 No Match')")
     if search:
         clauses.append("(case_id LIKE ? OR psr_id LIKE ? OR camt_id LIKE ? OR reference LIKE ? OR invoice LIKE ? OR counterparty LIKE ?)")
         term=f"%{search}%"; params.extend([term]*6)
