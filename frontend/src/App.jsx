@@ -6,6 +6,8 @@ const tabs = [
   ['intake', 'Data Intake'],
   ['dataprep', 'Data Prep Studio'],
   ['matching', 'Matching Studio'],
+  ['pattern-builder', 'Pattern Builder'],
+  ['patterns', 'Pattern Manager'],
   ['results', 'Results Workbench'],
   ['exceptions', 'Exceptions'],
   ['dashboards', 'Dashboards'],
@@ -484,6 +486,324 @@ function MatchingStudio({ patterns, rules, onTunePattern, onTogglePattern, onCre
                   </tr>
                 );
               })}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </section>
+  );
+}
+
+function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
+  const [form, setForm] = useState({
+    pattern_name: '',
+    pattern_type: 'CUSTOM',
+    pattern_version: '1.0',
+    pattern_rule: '{\n  "fields": [],\n  "mode": "SUGGESTION"\n}',
+    status: 'DRAFT',
+    execution_mode: 'SUGGESTION',
+    confidence_threshold: 0.80,
+    approved_by: 'prototype_user',
+  });
+  const [drafts, setDrafts] = useState({});
+  const [errors, setErrors] = useState({});
+
+  useEffect(() => {
+    const next = {};
+    patterns.forEach((p) => {
+      next[p.pattern_id] = {
+        pattern_name: p.pattern_name || '',
+        pattern_type: p.pattern_type || 'CUSTOM',
+        pattern_version: p.pattern_version || '1.0',
+        pattern_rule: JSON.stringify(p.pattern_rule || {}, null, 2),
+        status: p.status || 'DRAFT',
+        execution_mode: p.execution_mode || 'SUGGESTION',
+        confidence_threshold: p.confidence_threshold ?? 0.8,
+        approved_by: p.approved_by || 'prototype_user',
+      };
+    });
+    setDrafts(next);
+  }, [patterns]);
+
+  const updateDraft = (patternId, field, value) => {
+    setDrafts((prev) => ({ ...prev, [patternId]: { ...(prev[patternId] || {}), [field]: value } }));
+  };
+
+  const updateForm = (field, value) => setForm((prev) => ({ ...prev, [field]: value }));
+
+  const createNewPattern = () => {
+    try {
+      const rule = JSON.parse(form.pattern_rule);
+      onCreate({
+        ...form,
+        pattern_rule: rule,
+      });
+      setForm({
+        pattern_name: '',
+        pattern_type: 'CUSTOM',
+        pattern_version: '1.0',
+        pattern_rule: '{\n  "fields": [],\n  "mode": "SUGGESTION"\n}',
+        status: 'DRAFT',
+        execution_mode: 'SUGGESTION',
+        confidence_threshold: 0.80,
+        approved_by: 'prototype_user',
+      });
+    } catch (err) {
+      setErrors((prev) => ({ ...prev, create: 'Invalid JSON in pattern rule' }));
+    }
+  };
+
+  const savePattern = (patternId) => {
+    try {
+      const draft = drafts[patternId];
+      if (!draft) return;
+      const rule = JSON.parse(draft.pattern_rule);
+      onUpdate(patternId, {
+        pattern_name: draft.pattern_name,
+        pattern_type: draft.pattern_type,
+        pattern_version: draft.pattern_version,
+        pattern_rule: rule,
+        status: draft.status,
+        execution_mode: draft.execution_mode,
+        confidence_threshold: draft.confidence_threshold,
+        approved_by: draft.approved_by,
+      });
+      setErrors((prev) => ({ ...prev, [patternId]: null }));
+    } catch (err) {
+      setErrors((prev) => ({ ...prev, [patternId]: 'Invalid JSON in pattern rule' }));
+    }
+  };
+
+  return (
+    <section className="screen">
+      <div className="screen-title">
+        <div>
+          <div className="eyebrow">Pattern manager</div>
+          <h1>Full pattern registry CRUD</h1>
+          <p>Create, edit, version, and delete reconciliation patterns for governance and testing.</p>
+        </div>
+      </div>
+
+      <Panel title="New pattern" subtitle="Create a new rule record with version, status and JSON pattern details.">
+        <div className="form-grid">
+          <label>Name</label>
+          <input value={form.pattern_name} onChange={(e) => updateForm('pattern_name', e.target.value)} placeholder="Pattern display name" />
+          <label>Type</label>
+          <input value={form.pattern_type} onChange={(e) => updateForm('pattern_type', e.target.value)} />
+          <label>Version</label>
+          <input value={form.pattern_version} onChange={(e) => updateForm('pattern_version', e.target.value)} />
+          <label>Status</label>
+          <input value={form.status} onChange={(e) => updateForm('status', e.target.value)} />
+          <label>Execution mode</label>
+          <input value={form.execution_mode} onChange={(e) => updateForm('execution_mode', e.target.value)} />
+          <label>Confidence threshold</label>
+          <input type="number" min="0" max="1" step="0.01" value={form.confidence_threshold} onChange={(e) => updateForm('confidence_threshold', Number(e.target.value))} />
+          <label>Approved by</label>
+          <input value={form.approved_by} onChange={(e) => updateForm('approved_by', e.target.value)} />
+          <label>Rule JSON</label>
+          <textarea rows={6} value={form.pattern_rule} onChange={(e) => updateForm('pattern_rule', e.target.value)} />
+          {errors.create && <p className="error-text">{errors.create}</p>}
+          <button className="btn primary" onClick={createNewPattern}>Create pattern</button>
+        </div>
+      </Panel>
+
+      <Panel title="Existing patterns" subtitle="Edit pattern metadata, JSON rule content, or delete obsolete rules.">
+        <div className="table-wrap compact tight">
+          <table>
+            <thead>
+              <tr>
+                <th>ID</th>
+                <th>Name</th>
+                <th>Version</th>
+                <th>Status</th>
+                <th>Mode</th>
+                <th>Threshold</th>
+                <th>Rule JSON</th>
+                <th>Actions</th>
+              </tr>
+            </thead>
+            <tbody>
+              {patterns.map((pattern) => {
+                const draft = drafts[pattern.pattern_id] || {};
+                return (
+                  <tr key={pattern.pattern_id}>
+                    <td><strong>{pattern.pattern_id}</strong></td>
+                    <td><input value={draft.pattern_name} onChange={(e) => updateDraft(pattern.pattern_id, 'pattern_name', e.target.value)} /></td>
+                    <td><input value={draft.pattern_version} onChange={(e) => updateDraft(pattern.pattern_id, 'pattern_version', e.target.value)} /></td>
+                    <td><input value={draft.status} onChange={(e) => updateDraft(pattern.pattern_id, 'status', e.target.value)} /></td>
+                    <td><input value={draft.execution_mode} onChange={(e) => updateDraft(pattern.pattern_id, 'execution_mode', e.target.value)} /></td>
+                    <td><input type="number" min="0" max="1" step="0.01" value={draft.confidence_threshold} onChange={(e) => updateDraft(pattern.pattern_id, 'confidence_threshold', Number(e.target.value))} /></td>
+                    <td>
+                      <textarea rows={3} value={draft.pattern_rule} onChange={(e) => updateDraft(pattern.pattern_id, 'pattern_rule', e.target.value)} />
+                      {errors[pattern.pattern_id] && <p className="error-text">{errors[pattern.pattern_id]}</p>}
+                    </td>
+                    <td className="action-cell">
+                      <button className="btn secondary" onClick={() => savePattern(pattern.pattern_id)}>Save</button>
+                      <button className="btn ghost" onClick={() => onDelete(pattern.pattern_id)}>Delete</button>
+                    </td>
+                  </tr>
+                );
+              })}
+              {!patterns.length && (
+                <tr><td colSpan={8} className="empty">No patterns available.</td></tr>
+              )}
+            </tbody>
+          </table>
+        </div>
+      </Panel>
+    </section>
+  );
+}
+
+function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSuggestPatterns, onSave, proposedPatterns, setProposedPatterns }) {
+  const [camtFile, setCamtFile] = useState(null);
+  const [otherFile, setOtherFile] = useState(null);
+  const [mappingResult, setMappingResult] = useState(null);
+  const [patternResult, setPatternResult] = useState(null);
+  const [providedRegexMap, setProvidedRegexMap] = useState('');
+  const [selectedPattern, setSelectedPattern] = useState(null);
+  const [error, setError] = useState('');
+  const [loadingPattern, setLoadingPattern] = useState(false);
+
+  const loadMapping = async () => {
+    if (!camtFile || !otherFile) return;
+    setError('');
+    try {
+      const result = await onGenerateMapping(camtFile, otherFile);
+      setMappingResult(result);
+    } catch (err) {
+      setError(err.message || 'Unable to generate regex mapping');
+      setMappingResult(null);
+    }
+  };
+
+  const buildPatterns = async () => {
+    if (!camtFile || !otherFile) return;
+    setError('');
+    setLoadingPattern(true);
+    try {
+      const regexMap = providedRegexMap ? JSON.parse(providedRegexMap) : null;
+      const result = await onGeneratePatterns(camtFile, otherFile, regexMap);
+      setPatternResult(result);
+      setProposedPatterns([result]);
+      setSelectedPattern(result);
+    } catch (err) {
+      setError(err.message || 'Unable to generate reconciliation pattern');
+      setPatternResult(null);
+    } finally {
+      setLoadingPattern(false);
+    }
+  };
+
+  const suggestPatterns = async () => {
+    if (!camtFile || !otherFile) return;
+    setError('');
+    setLoadingPattern(true);
+    try {
+      const result = await onSuggestPatterns(camtFile, otherFile);
+      // result contains examples, prompt and llm_output
+      const suggestions = (result.llm_output && result.llm_output.regex_map) ? result.llm_output : result;
+      setPatternResult(suggestions);
+      setProposedPatterns([suggestions]);
+      setSelectedPattern(suggestions);
+    } catch (err) {
+      setError(err.message || 'Unable to generate LLM suggestions');
+      setPatternResult(null);
+    } finally {
+      setLoadingPattern(false);
+    }
+  };
+
+  const savePattern = async () => {
+    if (!selectedPattern) return;
+    await onSave({
+      pattern_name: selectedPattern.pattern_name || 'Generated pattern',
+      pattern_type: 'AUTO_GENERATED',
+      pattern_version: '1.0',
+      pattern_rule: selectedPattern.pattern_rule,
+      status: 'DRAFT',
+      execution_mode: 'SUGGESTION',
+      confidence_threshold: 0.8,
+      approved_by: 'prototype_user',
+    });
+  };
+
+  return (
+    <section className="screen">
+      <div className="screen-title">
+        <div>
+          <div className="eyebrow">Pattern builder</div>
+          <h1>Upload CAMT and text/PSR, infer regex, then save generated patterns</h1>
+          <p>Use the CAMT/PSR flow to generate a candidate pattern, edit it, and persist it into the registry.</p>
+        </div>
+      </div>
+
+      <div className="grid two">
+        <Panel title="Upload source files" subtitle="Choose the bank CAMT file and the corresponding settlement/text file.">
+          <div className="form-grid">
+            <label>CAMT file</label>
+            <input type="file" accept=".xml,application/xml,text/xml" onChange={(e) => setCamtFile(e.target.files?.[0] || null)} />
+            <label>Other file</label>
+            <input type="file" accept=".txt,.dat,.psr,text/plain,.xml" onChange={(e) => setOtherFile(e.target.files?.[0] || null)} />
+            <label>Optional regex override JSON</label>
+            <textarea rows={4} value={providedRegexMap} onChange={(e) => setProvidedRegexMap(e.target.value)} placeholder='{"pmt_ref":"\\d+"}' />
+            <div className="button-row">
+              <button className="btn secondary" onClick={loadMapping} disabled={!camtFile || !otherFile}>Generate regex mapping</button>
+              <button className="btn ghost" onClick={suggestPatterns} disabled={!camtFile || !otherFile || loadingPattern}>{loadingPattern ? 'Suggesting…' : 'Find missing-ref suggestions (LLM)'}</button>
+              <button className="btn primary" onClick={buildPatterns} disabled={!camtFile || !otherFile || loadingPattern}>{loadingPattern ? 'Generating…' : 'Generate pattern'}</button>
+            </div>
+            {error && <p className="error-text">{error}</p>}
+          </div>
+        </Panel>
+
+        <Panel title="Pattern results" subtitle="Review the inferred pattern and save it to the registry.">
+          <div className="table-wrap compact tight">
+            <table>
+              <thead>
+                <tr><th>Key</th><th>Value</th></tr>
+              </thead>
+              <tbody>
+                {patternResult ? (
+                  Object.entries(patternResult).map(([key, value]) => (
+                    <tr key={key}>
+                      <td>{key}</td>
+                      <td><pre>{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre></td>
+                    </tr>
+                  ))
+                ) : (
+                  <tr><td colSpan={2} className="empty">No generated pattern yet.</td></tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+          {patternResult && (
+            <div className="button-row" style={{ marginTop: '1rem' }}>
+              <button className="btn primary" onClick={savePattern}>Save generated pattern</button>
+            </div>
+          )}
+        </Panel>
+      </div>
+
+      <Panel title="Proposed pattern candidates" subtitle="Select and edit candidate patterns before saving.">
+        <div className="table-wrap compact tight">
+          <table>
+            <thead>
+              <tr><th>Name</th><th>Mapping key</th><th>Regex</th><th>Actions</th></tr>
+            </thead>
+            <tbody>
+              {proposedPatterns.length ? proposedPatterns.map((pattern, idx) => (
+                <tr key={idx}>
+                  <td>{pattern.pattern_name}</td>
+                  <td>{pattern.mapping_key}</td>
+                  <td><pre>{JSON.stringify(pattern.regex_inferred, null, 2)}</pre></td>
+                  <td className="action-cell">
+                    <button className="btn secondary" onClick={() => setSelectedPattern(pattern)}>Edit</button>
+                    <button className="btn primary" onClick={savePattern}>Save</button>
+                  </td>
+                </tr>
+              )) : (
+                <tr><td colSpan={4} className="empty">No proposed patterns generated yet.</td></tr>
+              )}
             </tbody>
           </table>
         </div>
@@ -1883,6 +2203,7 @@ export default function App() {
   const [validatedBatchId, setValidatedBatchId] = useState(null);
   const [exceptions, setExceptions] = useState({ items: [] });
   const [patterns, setPatterns] = useState([]);
+  const [proposedPatterns, setProposedPatterns] = useState([]);
   const [candidates, setCandidates] = useState([]);
   const [events, setEvents] = useState([]);
   const [workspace, setWorkspace] = useState(null);
@@ -1920,6 +2241,7 @@ export default function App() {
     setResults(resultsData);
     setExceptions(exceptionsData);
     setPatterns(patternsData);
+    setProposedPatterns([]);
     setCandidates(candidatesData);
     setEvents(eventsData);
     setBatches(batchesData);
@@ -1992,6 +2314,22 @@ export default function App() {
     }, () => `Uploaded batch reconciled (divisor: ${result?.amount_divisor ?? 'default'})`);
   };
 
+  const generateRegexMapping = async (camtFile, otherFile) => {
+    return api.generateMapping(camtFile, otherFile);
+  };
+
+  const generatePatternsFromFiles = async (camtFile, otherFile, providedRegexMap = null) => {
+    return api.generateReconciliationPatterns(camtFile, otherFile, providedRegexMap);
+  };
+
+  const generatePatternSuggestions = async (camtFile, otherFile, maxExamples = 8) => {
+    return api.patternSuggestions(camtFile, otherFile, maxExamples);
+  };
+
+  const saveGeneratedPattern = async (patternPayload) => {
+    await safe(() => api.createPattern(patternPayload), 'Pattern saved to registry');
+  };
+
   const runAiTriage = async () => {
     let result;
     setTriageRunning(true);
@@ -2011,8 +2349,13 @@ export default function App() {
 
   const tunePattern = async (patternId, draft) => {
     await safe(() => api.updatePattern(patternId, {
+      pattern_name: draft.pattern_name,
+      pattern_type: draft.pattern_type,
+      pattern_version: draft.pattern_version,
+      status: draft.status,
       execution_mode: draft.execution_mode,
       confidence_threshold: draft.confidence_threshold,
+      approved_by: draft.approved_by,
       pattern_rule: draft.pattern_rule,
     }), 'Pattern configuration saved');
   };
@@ -2021,16 +2364,23 @@ export default function App() {
     await safe(() => pattern.status === 'ACTIVE' ? api.deactivatePattern(pattern.pattern_id) : api.activatePattern(pattern.pattern_id), 'Pattern status updated');
   };
 
-  const createPattern = async (name) => {
-    await safe(() => api.createPattern ? api.createPattern({
-      pattern_name: name,
+  const createPattern = async (payloadOrName) => {
+    const payload = typeof payloadOrName === 'string' ? {
+      pattern_name: payloadOrName,
       pattern_type: 'LEARNED_DRAFT',
+      pattern_version: '1.0',
       pattern_rule: { fields: ['invoice_suffix', 'amount', 'counterparty'], status: 'suggestion_only' },
       status: 'ACTIVE',
       execution_mode: 'SUGGESTION',
       confidence_threshold: 0.87,
       approved_by: 'prototype_user',
-    }) : Promise.resolve(), 'Suggestion pattern created');
+    } : payloadOrName;
+
+    await safe(() => api.createPattern(payload), 'Pattern created');
+  };
+
+  const removePattern = async (patternId) => {
+    await safe(() => api.deletePattern(patternId), 'Pattern deleted');
   };
 
   const updateWorkflow = async (caseId, payload) => {
@@ -2062,6 +2412,8 @@ export default function App() {
     if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
+    if (active === 'pattern-builder') return <PatternBuilder onGenerateMapping={generateRegexMapping} onGeneratePatterns={generatePatternsFromFiles} onSuggestPatterns={generatePatternSuggestions} onSave={saveGeneratedPattern} proposedPatterns={proposedPatterns} setProposedPatterns={setProposedPatterns} />;
+    if (active === 'patterns') return <PatternManagement patterns={patterns} onCreate={createPattern} onUpdate={tunePattern} onDelete={removePattern} />;
     if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;

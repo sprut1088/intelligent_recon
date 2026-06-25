@@ -5,6 +5,7 @@ import json
 import logging
 import re
 import shutil
+import tempfile
 import uuid
 from dataclasses import asdict
 from pathlib import Path
@@ -40,6 +41,15 @@ def _sha256(path: Path) -> str:
         for chunk in iter(lambda: handle.read(1024 * 1024), b""):
             digest.update(chunk)
     return digest.hexdigest()
+
+
+def _write_upload_to_temp(upload: UploadFile, temp_dir: Path) -> Path:
+    upload.file.seek(0)
+    filename = _safe_filename(upload.filename or "upload.dat")
+    target_path = temp_dir / filename
+    with target_path.open("wb") as handle:
+        shutil.copyfileobj(upload.file, handle)
+    return target_path
 
 
 def create_batch(batch_name: Optional[str] = None, created_by: str = "prototype_user") -> Dict:
@@ -207,7 +217,7 @@ def _sniff_psr_divisor(psr_path: Path, camt_transactions: list) -> float:
     return best
 
 
-def run_uploaded_batch(batch_id: str, amount_divisor: Optional[float] = None, reset_transactions: bool = True) -> Dict:
+def run_uploaded_batch(batch_id: str, amount_divisor: Optional[float] = None, reset_transactions: bool = True, pattern_version: Optional[str] = None) -> Dict:
     psr_path, camt_path = _batch_file_paths(batch_id)
     camt_transactions = parse_camt_file(camt_path)
 
@@ -238,7 +248,10 @@ def run_uploaded_batch(batch_id: str, amount_divisor: Optional[float] = None, re
             """,
             [{**asdict(txn), "raw_json": json_dumps(txn.raw)} for txn in camt_transactions],
         )
-        patterns = rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry").fetchall())
+        if pattern_version:
+            patterns = rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry WHERE pattern_version = ? ORDER BY pattern_id", (pattern_version,)).fetchall())
+        else:
+            patterns = rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry ORDER BY pattern_id").fetchall())
         cases = reconcile_transactions(psr_transactions, camt_transactions, patterns)
         conn.execute("DELETE FROM recon_cases")
         conn.executemany(CASE_INSERT_SQL, [case_to_db_tuple(case) for case in cases])

@@ -1,7 +1,9 @@
 from __future__ import annotations
 import logging
+import tempfile
 import time
 import uuid
+from pathlib import Path
 from typing import Optional
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
@@ -9,6 +11,7 @@ from fastapi.responses import JSONResponse
 from .config import settings
 from .db import get_conn, init_db, json_dumps, row_to_dict, rows_to_dicts
 from .learning import approve_candidate, run_learning, seed_demo_learning_signals
+from .filepatternrecognition import generate_mapping_regex, generate_reconciliation_patterns, recognize_files, _write_upload_to_temp, suggest_patterns_for_unmatched
 from .ingestion import get_batch, list_batches, run_uploaded_batch, store_uploaded_file
 from .loader import load_samples_and_reconcile, rerun_reconciliation_only
 from .quality import get_quality_report, validate_batch
@@ -79,6 +82,68 @@ def upload_file(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+@app.post("/api/files/recognize-patterns")
+def recognize_file_patterns(
+    camt_file: UploadFile = File(...),
+    other_file: UploadFile = File(...),
+) -> dict:
+    try:
+        return recognize_files(camt_file, other_file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.post("/api/files/generate-mapping")
+def generate_file_mapping(
+    camt_file: UploadFile = File(...),
+    other_file: UploadFile = File(...),
+    max_examples: int = Form(10),
+) -> dict:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        camt_path = _write_upload_to_temp(camt_file, temp_dir_path)
+        other_path = _write_upload_to_temp(other_file, temp_dir_path)
+        try:
+            return generate_mapping_regex(camt_path, other_path, max_examples=max_examples)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.post("/api/files/reconcile-patterns")
+def generate_reconciliation_patterns_route(
+    camt_file: UploadFile = File(...),
+    other_file: UploadFile = File(...),
+    provided_regex_map: Optional[str] = Form(None),
+) -> dict:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        camt_path = _write_upload_to_temp(camt_file, temp_dir_path)
+        other_path = _write_upload_to_temp(other_file, temp_dir_path)
+        try:
+            regex_map = None
+            if provided_regex_map:
+                import json
+                regex_map = json.loads(provided_regex_map)
+            return generate_reconciliation_patterns(camt_path, other_path, provided_regex_map=regex_map)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON for provided_regex_map: {exc}") from exc
+
+
+    @app.post("/api/files/pattern-suggestions")
+    def generate_pattern_suggestions(
+        camt_file: UploadFile = File(...),
+        other_file: UploadFile = File(...),
+        max_examples: int = Form(8),
+    ) -> dict:
+        with tempfile.TemporaryDirectory() as temp_dir:
+            temp_dir_path = Path(temp_dir)
+            camt_path = _write_upload_to_temp(camt_file, temp_dir_path)
+            other_path = _write_upload_to_temp(other_file, temp_dir_path)
+            try:
+                return suggest_patterns_for_unmatched(camt_path, other_path, max_examples=max_examples)
+            except ValueError as exc:
+                raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 @app.get("/api/files/batches")
 def files_batches(limit:int=Query(50,ge=1,le=200), offset:int=Query(0,ge=0)) -> dict:
     return list_batches(limit=limit, offset=offset)
@@ -93,7 +158,12 @@ def files_batch_detail(batch_id: str) -> dict:
 @app.post("/api/files/batches/{batch_id}/run")
 def run_uploaded_file_batch(batch_id: str, request: ReconcileRunRequest = ReconcileRunRequest()) -> dict:
     try:
-        return run_uploaded_batch(batch_id, amount_divisor=request.amount_divisor, reset_transactions=request.reset)
+        return run_uploaded_batch(
+            batch_id,
+            amount_divisor=request.amount_divisor,
+            reset_transactions=request.reset,
+            pattern_version=request.pattern_version,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -701,13 +771,14 @@ def create_pattern(request: PatternCreateRequest) -> dict:
         conn.execute(
             """
             INSERT INTO recon_pattern_registry
-            (pattern_id, pattern_name, pattern_type, pattern_rule_json, status, execution_mode, confidence_threshold, approved_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (pattern_id, pattern_name, pattern_type, pattern_version, pattern_rule_json, status, execution_mode, confidence_threshold, approved_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pattern_id,
                 request.pattern_name,
                 request.pattern_type,
+                request.pattern_version,
                 json_dumps(request.pattern_rule),
                 request.status,
                 request.execution_mode,
@@ -726,7 +797,7 @@ def update_pattern(pattern_id: str, request: PatternUpdateRequest) -> dict:
     data = request.model_dump(exclude_unset=True)
     if "pattern_rule" in data:
         data["pattern_rule_json"] = json_dumps(data.pop("pattern_rule"))
-    for field in ["pattern_name", "pattern_type", "pattern_rule_json", "status", "execution_mode", "confidence_threshold", "approved_by"]:
+    for field in ["pattern_name", "pattern_type", "pattern_version", "pattern_rule_json", "status", "execution_mode", "confidence_threshold", "approved_by"]:
         if field in data and data[field] is not None:
             fields.append(f"{field}=?")
             params.append(data[field])
@@ -742,6 +813,17 @@ def update_pattern(pattern_id: str, request: PatternUpdateRequest) -> dict:
         row = conn.execute("SELECT * FROM recon_pattern_registry WHERE pattern_id=?", (pattern_id,)).fetchone()
     rerun_reconciliation_only()
     return row_to_dict(row)
+
+@app.delete("/api/patterns/{pattern_id}")
+def delete_pattern(pattern_id: str) -> dict:
+    with get_conn() as conn:
+        existing = conn.execute("SELECT pattern_id FROM recon_pattern_registry WHERE pattern_id=?", (pattern_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Pattern not found")
+        conn.execute("DELETE FROM recon_pattern_registry WHERE pattern_id=?", (pattern_id,))
+        conn.commit()
+    rerun_reconciliation_only()
+    return {"pattern_id": pattern_id, "deleted": True}
 
 @app.post("/api/patterns/{pattern_id}/activate")
 def activate_pattern(pattern_id: str) -> dict:
