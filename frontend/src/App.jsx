@@ -23,6 +23,19 @@ const money = (value) =>
 
 const pct = (value) => `${Number(value || 0).toFixed(Number(value || 0) % 1 === 0 ? 0 : 1)}%`;
 
+function compareVersions(left = '1.0', right = '1.0') {
+  const parse = (value) => String(value || '1.0').split('.').map((part) => Number(part) || 0);
+  const leftParts = parse(left);
+  const rightParts = parse(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = leftParts[index] ?? 0;
+    const rightValue = rightParts[index] ?? 0;
+    if (leftValue !== rightValue) return leftValue - rightValue;
+  }
+  return 0;
+}
+
 function classForStatus(value = '') {
   const v = String(value).toLowerCase();
   if (v.startsWith('ai-assisted')) return 'ai';
@@ -164,11 +177,12 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
   );
 }
 
-function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, validatedBatchId, onUpload, onUploadBatch, onValidate, onRunBatch, onNavigate, loading }) {
+function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, validatedBatchId, onUpload, onUploadBatch, onValidate, onRunBatch, onNavigate, loading, patternGroups }) {
   const [psrFile, setPsrFile] = useState(null);
   const [camtFile, setCamtFile] = useState(null);
   const [batchName, setBatchName] = useState('');
   const [amountDivisor, setAmountDivisor] = useState('auto');
+  const [selectedPatternGroup, setSelectedPatternGroup] = useState('');
   const qualityTableRef = useRef(null);
   const selectedBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
   const batchId = selectedBatch?.batch_id || selectedBatchId || '';
@@ -227,10 +241,16 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
                   <option value="1">1 — amounts already match CAMT scale</option>
                   <option value="100">100 — amounts in minor units (cents)</option>
                 </select>
+                <label title="Only patterns in this group will be used during reconciliation.">Pattern group</label>
+                <select value={selectedPatternGroup || (patternGroups || [])[0] || ''} onChange={(e) => setSelectedPatternGroup(e.target.value)}>
+                  {(patternGroups || []).map((g) => (
+                    <option key={g} value={g}>{g}</option>
+                  ))}
+                </select>
               </div>
               <div className="button-row">
                 <button className="btn secondary" disabled={!batchId || loading} onClick={() => onValidate(batchId)}>Validate quality</button>
-                <button className="btn primary" disabled={!batchId || loading || validatedBatchId !== batchId} onClick={() => onRunBatch(batchId, amountDivisor === 'auto' ? null : Number(amountDivisor))}>Run uploaded batch</button>
+                <button className="btn primary" disabled={!batchId || loading || validatedBatchId !== batchId} onClick={() => onRunBatch(batchId, amountDivisor === 'auto' ? null : Number(amountDivisor), selectedPatternGroup || (patternGroups || [])[0] || null)}>Run uploaded batch</button>
               </div>
 
               {quality && (
@@ -494,84 +514,106 @@ function MatchingStudio({ patterns, rules, onTunePattern, onTogglePattern, onCre
   );
 }
 
-function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
-  const [form, setForm] = useState({
+function PatternManagement({ patterns, onCreate, onDelete }) {
+  const BLANK_PATTERN = {
     pattern_name: '',
     pattern_type: 'CUSTOM',
-    pattern_version: '1.0',
     pattern_rule: '{\n  "fields": [],\n  "mode": "SUGGESTION"\n}',
     status: 'DRAFT',
     execution_mode: 'SUGGESTION',
     confidence_threshold: 0.80,
     approved_by: 'prototype_user',
-  });
-  const [drafts, setDrafts] = useState({});
+  };
+
+  const [selectedGroup, setSelectedGroup] = useState('');
+  // rowEdits tracks unsaved inline edits: { pattern_id: { field: value } }
+  const [rowEdits, setRowEdits] = useState({});
+  const [showSaveAsGroupModal, setShowSaveAsGroupModal] = useState(false);
+  const [newGroupName, setNewGroupName] = useState('');
+  const [showAddPatternModal, setShowAddPatternModal] = useState(false);
+  const [addPatternDraft, setAddPatternDraft] = useState({ ...BLANK_PATTERN });
+  const [showNewGroupModal, setShowNewGroupModal] = useState(false);
+  const [newGroupDraft, setNewGroupDraft] = useState({ group_name: '', ...BLANK_PATTERN });
   const [errors, setErrors] = useState({});
 
-  useEffect(() => {
-    const next = {};
-    patterns.forEach((p) => {
-      next[p.pattern_id] = {
-        pattern_name: p.pattern_name || '',
-        pattern_type: p.pattern_type || 'CUSTOM',
-        pattern_version: p.pattern_version || '1.0',
-        pattern_rule: JSON.stringify(p.pattern_rule || {}, null, 2),
-        status: p.status || 'DRAFT',
-        execution_mode: p.execution_mode || 'SUGGESTION',
-        confidence_threshold: p.confidence_threshold ?? 0.8,
-        approved_by: p.approved_by || 'prototype_user',
-      };
+  const groupedPatterns = useMemo(() => {
+    const groups = {};
+    (patterns || []).forEach((p) => {
+      const key = (p.pattern_group || 'default').trim() || 'default';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(p);
     });
-    setDrafts(next);
+    return Object.entries(groups)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([groupName, items]) => ({
+        groupName,
+        items: [...items].sort((a, b) => (a.pattern_name || '').localeCompare(b.pattern_name || '')),
+      }));
   }, [patterns]);
 
-  const updateDraft = (patternId, field, value) => {
-    setDrafts((prev) => ({ ...prev, [patternId]: { ...(prev[patternId] || {}), [field]: value } }));
+  // Auto-select first group on load
+  useEffect(() => {
+    if (!selectedGroup && groupedPatterns[0]) setSelectedGroup(groupedPatterns[0].groupName);
+  }, [groupedPatterns, selectedGroup]);
+
+  // Clear row edits when switching groups
+  useEffect(() => { setRowEdits({}); }, [selectedGroup]);
+
+  const hasEdits = Object.keys(rowEdits).length > 0;
+  const activeGroup = groupedPatterns.find((g) => g.groupName === selectedGroup) || groupedPatterns[0];
+
+  const updateRowEdit = (patternId, field, value) =>
+    setRowEdits((prev) => ({ ...prev, [patternId]: { ...(prev[patternId] || {}), [field]: value } }));
+
+  // Copies all patterns from the active group (with applied edits) into a brand new group name
+  const saveAsNewGroup = async () => {
+    const name = newGroupName.trim();
+    if (!name) { setErrors({ newGroup: 'Group name is required' }); return; }
+    if (!activeGroup) return;
+    for (const p of activeGroup.items) {
+      const edits = rowEdits[p.pattern_id] || {};
+      const ruleStr = edits.pattern_rule !== undefined ? edits.pattern_rule : JSON.stringify(p.pattern_rule || {});
+      let rule;
+      try { rule = JSON.parse(ruleStr); }
+      catch { setErrors({ newGroup: `Invalid rule JSON in "${p.pattern_name}"` }); return; }
+      await onCreate({
+        pattern_name: edits.pattern_name ?? p.pattern_name,
+        pattern_type: edits.pattern_type ?? p.pattern_type,
+        pattern_group: name,
+        pattern_rule: rule,
+        status: edits.status ?? p.status,
+        execution_mode: edits.execution_mode ?? p.execution_mode,
+        confidence_threshold: edits.confidence_threshold ?? p.confidence_threshold,
+        approved_by: edits.approved_by ?? p.approved_by ?? 'prototype_user',
+      });
+    }
+    setShowSaveAsGroupModal(false);
+    setNewGroupName('');
+    setRowEdits({});
+    setSelectedGroup(name);
   };
 
-  const updateForm = (field, value) => setForm((prev) => ({ ...prev, [field]: value }));
-
-  const createNewPattern = () => {
-    try {
-      const rule = JSON.parse(form.pattern_rule);
-      onCreate({
-        ...form,
-        pattern_rule: rule,
-      });
-      setForm({
-        pattern_name: '',
-        pattern_type: 'CUSTOM',
-        pattern_version: '1.0',
-        pattern_rule: '{\n  "fields": [],\n  "mode": "SUGGESTION"\n}',
-        status: 'DRAFT',
-        execution_mode: 'SUGGESTION',
-        confidence_threshold: 0.80,
-        approved_by: 'prototype_user',
-      });
-    } catch (err) {
-      setErrors((prev) => ({ ...prev, create: 'Invalid JSON in pattern rule' }));
-    }
+  const saveAddPattern = () => {
+    let rule;
+    try { rule = JSON.parse(addPatternDraft.pattern_rule); }
+    catch { setErrors({ addPattern: 'Invalid JSON in pattern rule' }); return; }
+    onCreate({ ...addPatternDraft, pattern_name: addPatternDraft.pattern_name || 'New pattern', pattern_group: selectedGroup || 'default', pattern_rule: rule });
+    setShowAddPatternModal(false);
+    setAddPatternDraft({ ...BLANK_PATTERN });
+    setErrors({});
   };
 
-  const savePattern = (patternId) => {
-    try {
-      const draft = drafts[patternId];
-      if (!draft) return;
-      const rule = JSON.parse(draft.pattern_rule);
-      onUpdate(patternId, {
-        pattern_name: draft.pattern_name,
-        pattern_type: draft.pattern_type,
-        pattern_version: draft.pattern_version,
-        pattern_rule: rule,
-        status: draft.status,
-        execution_mode: draft.execution_mode,
-        confidence_threshold: draft.confidence_threshold,
-        approved_by: draft.approved_by,
-      });
-      setErrors((prev) => ({ ...prev, [patternId]: null }));
-    } catch (err) {
-      setErrors((prev) => ({ ...prev, [patternId]: 'Invalid JSON in pattern rule' }));
-    }
+  const saveNewGroup = () => {
+    const name = newGroupDraft.group_name.trim();
+    if (!name) { setErrors({ newGroupModal: 'Group name is required' }); return; }
+    let rule;
+    try { rule = JSON.parse(newGroupDraft.pattern_rule); }
+    catch { setErrors({ newGroupModal: 'Invalid JSON in pattern rule' }); return; }
+    onCreate({ pattern_name: newGroupDraft.pattern_name || 'New pattern', pattern_type: newGroupDraft.pattern_type, pattern_group: name, pattern_rule: rule, status: newGroupDraft.status, execution_mode: newGroupDraft.execution_mode, confidence_threshold: newGroupDraft.confidence_threshold, approved_by: newGroupDraft.approved_by });
+    setShowNewGroupModal(false);
+    setSelectedGroup(name);
+    setNewGroupDraft({ group_name: '', ...BLANK_PATTERN });
+    setErrors({});
   };
 
   return (
@@ -579,78 +621,224 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
       <div className="screen-title">
         <div>
           <div className="eyebrow">Pattern manager</div>
-          <h1>Full pattern registry CRUD</h1>
-          <p>Create, edit, version, and delete reconciliation patterns for governance and testing.</p>
+          <h1>Pattern groups</h1>
+          <p>A group is a named set of patterns. Edit patterns inline and save the full set as a new group.</p>
         </div>
+        <button className="btn primary" onClick={() => { setErrors({}); setShowNewGroupModal(true); }}>Add new group</button>
       </div>
 
-      <Panel title="New pattern" subtitle="Create a new rule record with version, status and JSON pattern details.">
-        <div className="form-grid">
-          <label>Name</label>
-          <input value={form.pattern_name} onChange={(e) => updateForm('pattern_name', e.target.value)} placeholder="Pattern display name" />
-          <label>Type</label>
-          <input value={form.pattern_type} onChange={(e) => updateForm('pattern_type', e.target.value)} />
-          <label>Version</label>
-          <input value={form.pattern_version} onChange={(e) => updateForm('pattern_version', e.target.value)} />
-          <label>Status</label>
-          <input value={form.status} onChange={(e) => updateForm('status', e.target.value)} />
-          <label>Execution mode</label>
-          <input value={form.execution_mode} onChange={(e) => updateForm('execution_mode', e.target.value)} />
-          <label>Confidence threshold</label>
-          <input type="number" min="0" max="1" step="0.01" value={form.confidence_threshold} onChange={(e) => updateForm('confidence_threshold', Number(e.target.value))} />
-          <label>Approved by</label>
-          <input value={form.approved_by} onChange={(e) => updateForm('approved_by', e.target.value)} />
-          <label>Rule JSON</label>
-          <textarea rows={6} value={form.pattern_rule} onChange={(e) => updateForm('pattern_rule', e.target.value)} />
-          {errors.create && <p className="error-text">{errors.create}</p>}
-          <button className="btn primary" onClick={createNewPattern}>Create pattern</button>
+      <Panel
+        title="Groups"
+        subtitle="Pick a group to view its patterns. Edit any row, then save all changes as a new group."
+      >
+        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
+          {/* Group selector + action bar */}
+          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <select value={selectedGroup} onChange={(e) => setSelectedGroup(e.target.value)} style={{ minWidth: '200px' }}>
+              {groupedPatterns.map((g) => (
+                <option key={g.groupName} value={g.groupName}>{g.groupName} ({g.items.length})</option>
+              ))}
+            </select>
+
+            {hasEdits && (
+              <>
+                <button className="btn primary" onClick={() => { setNewGroupName(''); setErrors({}); setShowSaveAsGroupModal(true); }}>
+                  Save edits as new group
+                </button>
+                <button className="btn ghost" onClick={() => setRowEdits({})}>Discard edits</button>
+              </>
+            )}
+
+            <button className="btn secondary" style={{ marginLeft: 'auto' }} onClick={() => { setErrors({}); setShowAddPatternModal(true); }}>
+              Add pattern to group
+            </button>
+          </div>
+
+          {hasEdits && (
+            <div className="tag warning" style={{ alignSelf: 'flex-start' }}>
+              Unsaved edits — click "Save edits as new group" to persist
+            </div>
+          )}
+
+          {/* Patterns table */}
+          {activeGroup ? (
+            <div style={{ overflowX: 'auto' }}>
+              <table className="data-table">
+                <thead>
+                  <tr>
+                    <th>Pattern name</th>
+                    <th>Type</th>
+                    <th>Status</th>
+                    <th>Mode</th>
+                    <th>Confidence</th>
+                    <th>Rule (JSON)</th>
+                    <th></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeGroup.items.map((p) => {
+                    const edits = rowEdits[p.pattern_id] || {};
+                    const dirty = Object.keys(edits).length > 0;
+                    const rowStyle = dirty ? { background: 'var(--warning-bg, #fffbeb)' } : {};
+                    return (
+                      <tr key={p.pattern_id} style={rowStyle}>
+                        <td>
+                          <input
+                            style={{ width: '100%' }}
+                            value={edits.pattern_name ?? p.pattern_name}
+                            onChange={(e) => updateRowEdit(p.pattern_id, 'pattern_name', e.target.value)}
+                          />
+                        </td>
+                        <td>
+                          <input
+                            style={{ width: '90px' }}
+                            value={edits.pattern_type ?? p.pattern_type}
+                            onChange={(e) => updateRowEdit(p.pattern_id, 'pattern_type', e.target.value)}
+                          />
+                        </td>
+                        <td>
+                          <select value={edits.status ?? p.status} onChange={(e) => updateRowEdit(p.pattern_id, 'status', e.target.value)}>
+                            <option>DRAFT</option><option>ACTIVE</option><option>INACTIVE</option>
+                          </select>
+                        </td>
+                        <td>
+                          <select value={edits.execution_mode ?? p.execution_mode} onChange={(e) => updateRowEdit(p.pattern_id, 'execution_mode', e.target.value)}>
+                            <option value="SUGGESTION">SUGGESTION</option>
+                            <option value="AUTO_CLOSE">AUTO_CLOSE</option>
+                            <option value="MANUAL">MANUAL</option>
+                            <option value="LEDGER_OR_IN_TRANSIT">LEDGER_OR_IN_TRANSIT</option>
+                          </select>
+                        </td>
+                        <td>
+                          <input
+                            type="number" min="0" max="1" step="0.01"
+                            style={{ width: '70px' }}
+                            value={edits.confidence_threshold ?? p.confidence_threshold}
+                            onChange={(e) => updateRowEdit(p.pattern_id, 'confidence_threshold', Number(e.target.value))}
+                          />
+                        </td>
+                        <td><code style={{ fontSize: '0.72rem' }}>{JSON.stringify(p.pattern_rule || {})}</code></td>
+                        <td>
+                          <button className="btn ghost" onClick={() => onDelete(p.pattern_id)}>Remove</button>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="empty">No groups yet. Click "Add new group" to create one.</p>
+          )}
         </div>
       </Panel>
 
-      <Panel title="Existing patterns" subtitle="Edit pattern metadata, JSON rule content, or delete obsolete rules.">
-        <div className="table-wrap compact tight">
-          <table>
-            <thead>
-              <tr>
-                <th>ID</th>
-                <th>Name</th>
-                <th>Version</th>
-                <th>Status</th>
-                <th>Mode</th>
-                <th>Threshold</th>
-                <th>Rule JSON</th>
-                <th>Actions</th>
-              </tr>
-            </thead>
-            <tbody>
-              {patterns.map((pattern) => {
-                const draft = drafts[pattern.pattern_id] || {};
-                return (
-                  <tr key={pattern.pattern_id}>
-                    <td><strong>{pattern.pattern_id}</strong></td>
-                    <td><input value={draft.pattern_name} onChange={(e) => updateDraft(pattern.pattern_id, 'pattern_name', e.target.value)} /></td>
-                    <td><input value={draft.pattern_version} onChange={(e) => updateDraft(pattern.pattern_id, 'pattern_version', e.target.value)} /></td>
-                    <td><input value={draft.status} onChange={(e) => updateDraft(pattern.pattern_id, 'status', e.target.value)} /></td>
-                    <td><input value={draft.execution_mode} onChange={(e) => updateDraft(pattern.pattern_id, 'execution_mode', e.target.value)} /></td>
-                    <td><input type="number" min="0" max="1" step="0.01" value={draft.confidence_threshold} onChange={(e) => updateDraft(pattern.pattern_id, 'confidence_threshold', Number(e.target.value))} /></td>
-                    <td>
-                      <textarea rows={3} value={draft.pattern_rule} onChange={(e) => updateDraft(pattern.pattern_id, 'pattern_rule', e.target.value)} />
-                      {errors[pattern.pattern_id] && <p className="error-text">{errors[pattern.pattern_id]}</p>}
-                    </td>
-                    <td className="action-cell">
-                      <button className="btn secondary" onClick={() => savePattern(pattern.pattern_id)}>Save</button>
-                      <button className="btn ghost" onClick={() => onDelete(pattern.pattern_id)}>Delete</button>
-                    </td>
-                  </tr>
-                );
-              })}
-              {!patterns.length && (
-                <tr><td colSpan={8} className="empty">No patterns available.</td></tr>
-              )}
-            </tbody>
-          </table>
+      {/* ── Save edits as new group modal ── */}
+      {showSaveAsGroupModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+          <div style={{ background: 'white', padding: '1.5rem', borderRadius: '12px', width: 'min(480px, 90vw)', boxShadow: '0 12px 28px rgba(0,0,0,0.2)' }}>
+            <h3 style={{ margin: '0 0 0.5rem' }}>Save edits as new group</h3>
+            <p className="muted" style={{ marginBottom: '1rem' }}>
+              All {activeGroup?.items.length} patterns from <strong>{selectedGroup}</strong> will be copied with your edits into the new group.
+            </p>
+            <label>New group name</label>
+            <input
+              autoFocus
+              value={newGroupName}
+              placeholder="e.g. Invoice Rules v2"
+              onChange={(e) => setNewGroupName(e.target.value)}
+              style={{ width: '100%', marginTop: '0.35rem', marginBottom: '0.75rem' }}
+            />
+            {errors.newGroup && <p className="error-text">{errors.newGroup}</p>}
+            <div className="button-row">
+              <button className="btn secondary" onClick={() => setShowSaveAsGroupModal(false)}>Cancel</button>
+              <button className="btn primary" onClick={saveAsNewGroup}>Create new group</button>
+            </div>
+          </div>
         </div>
-      </Panel>
+      )}
+
+      {/* ── Add pattern to existing group modal ── */}
+      {showAddPatternModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+          <div style={{ background: 'white', padding: '1.25rem', borderRadius: '12px', width: 'min(560px, 90vw)', boxShadow: '0 12px 28px rgba(0,0,0,0.2)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.8rem' }}>
+              <strong>Add pattern to &ldquo;{selectedGroup}&rdquo;</strong>
+              <button className="btn ghost" onClick={() => setShowAddPatternModal(false)}>Close</button>
+            </div>
+            <div className="form-grid">
+              <label>Name</label>
+              <input value={addPatternDraft.pattern_name} onChange={(e) => setAddPatternDraft((d) => ({ ...d, pattern_name: e.target.value }))} />
+              <label>Type</label>
+              <input value={addPatternDraft.pattern_type} onChange={(e) => setAddPatternDraft((d) => ({ ...d, pattern_type: e.target.value }))} />
+              <label>Status</label>
+              <select value={addPatternDraft.status} onChange={(e) => setAddPatternDraft((d) => ({ ...d, status: e.target.value }))}>
+                <option>DRAFT</option><option>ACTIVE</option><option>INACTIVE</option>
+              </select>
+              <label>Execution mode</label>
+              <select value={addPatternDraft.execution_mode} onChange={(e) => setAddPatternDraft((d) => ({ ...d, execution_mode: e.target.value }))}>
+                <option value="SUGGESTION">SUGGESTION</option>
+                <option value="AUTO_CLOSE">AUTO_CLOSE</option>
+                <option value="MANUAL">MANUAL</option>
+                <option value="LEDGER_OR_IN_TRANSIT">LEDGER_OR_IN_TRANSIT</option>
+              </select>
+              <label>Confidence</label>
+              <input type="number" min="0" max="1" step="0.01" value={addPatternDraft.confidence_threshold} onChange={(e) => setAddPatternDraft((d) => ({ ...d, confidence_threshold: Number(e.target.value) }))} />
+              <label>Approved by</label>
+              <input value={addPatternDraft.approved_by} onChange={(e) => setAddPatternDraft((d) => ({ ...d, approved_by: e.target.value }))} />
+              <label>Rule JSON</label>
+              <textarea rows={4} value={addPatternDraft.pattern_rule} onChange={(e) => setAddPatternDraft((d) => ({ ...d, pattern_rule: e.target.value }))} />
+              {errors.addPattern && <p className="error-text">{errors.addPattern}</p>}
+              <div className="button-row">
+                <button className="btn secondary" onClick={() => setShowAddPatternModal(false)}>Cancel</button>
+                <button className="btn primary" onClick={saveAddPattern}>Add pattern</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* ── Add new group modal ── */}
+      {showNewGroupModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+          <div style={{ background: 'white', padding: '1.25rem', borderRadius: '12px', width: 'min(560px, 90vw)', boxShadow: '0 12px 28px rgba(0,0,0,0.2)' }}>
+            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.8rem' }}>
+              <strong>Create new group</strong>
+              <button className="btn ghost" onClick={() => setShowNewGroupModal(false)}>Close</button>
+            </div>
+            <div className="form-grid">
+              <label>Group name</label>
+              <input autoFocus value={newGroupDraft.group_name} placeholder="e.g. Invoice Rules" onChange={(e) => setNewGroupDraft((d) => ({ ...d, group_name: e.target.value }))} />
+              <label>First pattern name</label>
+              <input value={newGroupDraft.pattern_name} onChange={(e) => setNewGroupDraft((d) => ({ ...d, pattern_name: e.target.value }))} />
+              <label>Type</label>
+              <input value={newGroupDraft.pattern_type} onChange={(e) => setNewGroupDraft((d) => ({ ...d, pattern_type: e.target.value }))} />
+              <label>Status</label>
+              <select value={newGroupDraft.status} onChange={(e) => setNewGroupDraft((d) => ({ ...d, status: e.target.value }))}>
+                <option>DRAFT</option><option>ACTIVE</option>
+              </select>
+              <label>Execution mode</label>
+              <select value={newGroupDraft.execution_mode} onChange={(e) => setNewGroupDraft((d) => ({ ...d, execution_mode: e.target.value }))}>
+                <option value="SUGGESTION">SUGGESTION</option>
+                <option value="AUTO_CLOSE">AUTO_CLOSE</option>
+                <option value="MANUAL">MANUAL</option>
+                <option value="LEDGER_OR_IN_TRANSIT">LEDGER_OR_IN_TRANSIT</option>
+              </select>
+              <label>Confidence</label>
+              <input type="number" min="0" max="1" step="0.01" value={newGroupDraft.confidence_threshold} onChange={(e) => setNewGroupDraft((d) => ({ ...d, confidence_threshold: Number(e.target.value) }))} />
+              <label>Approved by</label>
+              <input value={newGroupDraft.approved_by} onChange={(e) => setNewGroupDraft((d) => ({ ...d, approved_by: e.target.value }))} />
+              <label>Rule JSON</label>
+              <textarea rows={4} value={newGroupDraft.pattern_rule} onChange={(e) => setNewGroupDraft((d) => ({ ...d, pattern_rule: e.target.value }))} />
+              {errors.newGroupModal && <p className="error-text">{errors.newGroupModal}</p>}
+              <div className="button-row">
+                <button className="btn secondary" onClick={() => setShowNewGroupModal(false)}>Cancel</button>
+                <button className="btn primary" onClick={saveNewGroup}>Create group</button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
     </section>
   );
 }
@@ -2304,14 +2492,14 @@ export default function App() {
     }, 'Data quality validation completed');
   };
 
-  const runSelectedBatch = async (batchId, amountDivisor = null) => {
+  const runSelectedBatch = async (batchId, amountDivisor = null, patternGroup = null) => {
     let result;
     await safe(async () => {
-      result = await api.runBatch(batchId, amountDivisor);
+      result = await api.runBatch(batchId, amountDivisor, patternGroup);
       setBatchRunResult(result);
       setQuality(null);
       setValidatedBatchId(null);
-    }, () => `Uploaded batch reconciled (divisor: ${result?.amount_divisor ?? 'default'})`);
+    }, () => `Uploaded batch reconciled (divisor: ${result?.amount_divisor ?? 'default'}${patternGroup ? `, group: ${patternGroup}` : ''})`);
   };
 
   const generateRegexMapping = async (camtFile, otherFile) => {
@@ -2409,7 +2597,7 @@ export default function App() {
 
   const screen = useMemo(() => {
     if (active === 'workspace') return <Workspace workspace={workspace} summary={summary} onLoad={() => safe(api.loadSampleData, 'Sample PSR/CAMT loaded')} onRun={() => safe(api.runRecon, 'Reconciliation completed')} onSnapshot={() => safe(api.createSnapshot, 'Snapshot created')} onExport={exportCsv} loading={loading} />;
-    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
+    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} patternGroups={[...new Set((patterns || []).map((p) => p.pattern_group || 'default').filter(Boolean))].sort()} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
     if (active === 'pattern-builder') return <PatternBuilder onGenerateMapping={generateRegexMapping} onGeneratePatterns={generatePatternsFromFiles} onSuggestPatterns={generatePatternSuggestions} onSave={saveGeneratedPattern} proposedPatterns={proposedPatterns} setProposedPatterns={setProposedPatterns} />;

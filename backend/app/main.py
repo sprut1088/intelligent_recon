@@ -162,7 +162,7 @@ def run_uploaded_file_batch(batch_id: str, request: ReconcileRunRequest = Reconc
             batch_id,
             amount_divisor=request.amount_divisor,
             reset_transactions=request.reset,
-            pattern_version=request.pattern_version,
+            pattern_group=request.pattern_group,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -755,10 +755,25 @@ def assistant_query(question: str) -> dict:
         answer = f"Current run: {total} cases, {auto} auto-closed ({match_rate}% match rate), {ex} exceptions, EUR {variance:,.2f} total variance."
     return {"question": question, "answer": answer, "actions": actions, "source": "rules", "context": ctx}
 
+def _group_patterns(rows: list[dict]) -> list[dict]:
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        group_name = (row.get("pattern_group") or "default").strip() or "default"
+        grouped.setdefault(group_name, []).append(row)
+    return [
+        {
+            "group_name": group_name,
+            "items": sorted(items, key=lambda item: (item.get("pattern_name") or "").lower()),
+        }
+        for group_name, items in sorted(grouped.items(), key=lambda entry: entry[0].lower())
+    ]
+
+
 @app.get("/api/patterns")
 def list_patterns() -> dict:
-    with get_conn() as conn: rows=rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry ORDER BY pattern_id").fetchall())
-    return {"items":rows}
+    with get_conn() as conn:
+        rows = rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry ORDER BY pattern_id").fetchall())
+    return {"items": rows, "grouped_patterns": _group_patterns(rows)}
 
 
 @app.post("/api/patterns")
@@ -771,13 +786,14 @@ def create_pattern(request: PatternCreateRequest) -> dict:
         conn.execute(
             """
             INSERT INTO recon_pattern_registry
-            (pattern_id, pattern_name, pattern_type, pattern_version, pattern_rule_json, status, execution_mode, confidence_threshold, approved_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            (pattern_id, pattern_name, pattern_type, pattern_group, pattern_version, pattern_rule_json, status, execution_mode, confidence_threshold, approved_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pattern_id,
                 request.pattern_name,
                 request.pattern_type,
+                request.pattern_group,
                 request.pattern_version,
                 json_dumps(request.pattern_rule),
                 request.status,
@@ -797,7 +813,7 @@ def update_pattern(pattern_id: str, request: PatternUpdateRequest) -> dict:
     data = request.model_dump(exclude_unset=True)
     if "pattern_rule" in data:
         data["pattern_rule_json"] = json_dumps(data.pop("pattern_rule"))
-    for field in ["pattern_name", "pattern_type", "pattern_version", "pattern_rule_json", "status", "execution_mode", "confidence_threshold", "approved_by"]:
+    for field in ["pattern_name", "pattern_type", "pattern_group", "pattern_version", "pattern_rule_json", "status", "execution_mode", "confidence_threshold", "approved_by"]:
         if field in data and data[field] is not None:
             fields.append(f"{field}=?")
             params.append(data[field])

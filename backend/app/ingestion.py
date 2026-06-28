@@ -217,7 +217,7 @@ def _sniff_psr_divisor(psr_path: Path, camt_transactions: list) -> float:
     return best
 
 
-def run_uploaded_batch(batch_id: str, amount_divisor: Optional[float] = None, reset_transactions: bool = True, pattern_version: Optional[str] = None) -> Dict:
+def run_uploaded_batch(batch_id: str, amount_divisor: Optional[float] = None, reset_transactions: bool = True, pattern_group: Optional[str] = None) -> Dict:
     psr_path, camt_path = _batch_file_paths(batch_id)
     camt_transactions = parse_camt_file(camt_path)
 
@@ -248,8 +248,8 @@ def run_uploaded_batch(batch_id: str, amount_divisor: Optional[float] = None, re
             """,
             [{**asdict(txn), "raw_json": json_dumps(txn.raw)} for txn in camt_transactions],
         )
-        if pattern_version:
-            patterns = rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry WHERE pattern_version = ? ORDER BY pattern_id", (pattern_version,)).fetchall())
+        if pattern_group:
+            patterns = rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry WHERE pattern_group = ? ORDER BY pattern_id", (pattern_group,)).fetchall())
         else:
             patterns = rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry ORDER BY pattern_id").fetchall())
         cases = reconcile_transactions(psr_transactions, camt_transactions, patterns)

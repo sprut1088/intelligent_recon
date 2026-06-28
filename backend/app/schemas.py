@@ -24,7 +24,7 @@ class UserEventRequest(BaseModel):
 class ReconcileRunRequest(BaseModel):
     reset: bool = True
     amount_divisor: Optional[float] = None
-    pattern_version: Optional[str] = None
+    pattern_group: Optional[str] = None
 
 class CandidateApprovalRequest(BaseModel):
     approved_by: str = "recon_lead"
@@ -36,6 +36,7 @@ class PatternCreateRequest(BaseModel):
     pattern_id: Optional[str] = None
     pattern_name: str
     pattern_type: str = "CUSTOM"
+    pattern_group: str = "default"
     pattern_version: str = "1.0"
     pattern_rule: Dict[str, Any] = Field(default_factory=dict)
     status: str = "DRAFT"
@@ -46,6 +47,7 @@ class PatternCreateRequest(BaseModel):
 class PatternUpdateRequest(BaseModel):
     pattern_name: Optional[str] = None
     pattern_type: Optional[str] = None
+    pattern_group: Optional[str] = None
     pattern_version: Optional[str] = None
     pattern_rule: Optional[Dict[str, Any]] = None
     status: Optional[str] = None
