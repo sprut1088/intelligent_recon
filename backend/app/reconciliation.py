@@ -1,5 +1,6 @@
 from __future__ import annotations
 import logging
+import re
 from dataclasses import dataclass, asdict
 from datetime import date
 from itertools import combinations as _combinations
@@ -35,6 +36,59 @@ def similarity(left: str, right: str) -> float:
     ts = _rfuzz.token_set_ratio(a, b) / 100.0
     wr = _rfuzz.WRatio(a, b) / 100.0
     return max(ts, wr)
+
+
+# ── Counterparty normalisation (TASK-35) ───────────────────────────────────────
+# Used by P6 partitioning and (post TASK-37) by P4 fuzzy gate. Keep deterministic.
+
+_LEGAL_SUFFIXES = {
+    "llc", "inc", "co", "corp", "ltd", "gmbh", "pvt", "limited", "company",
+    "plc", "ag", "sa", "nv", "bv", "kg", "ohg", "spa", "srl", "oy", "ab",
+    "as", "aps", "sas", "sarl", "sl", "lp", "llp", "pte", "kk", "yk",
+}
+_PUNCT_RE = re.compile(r"[.,;:'\"\-_/\\()]")
+_WS_RE = re.compile(r"\s+")
+
+
+def normalise_counterparty(name: str) -> str:
+    """Return a partition key for counterparty grouping.
+
+    Lowercases, strips punctuation, collapses whitespace, drops common legal
+    suffixes. Designed so that 'Acme LLC', 'acme', 'Acme, Inc.' all collapse
+    to the same key, while preserving distinct names like 'Acme Holdings'.
+    """
+    if not name:
+        return ""
+    s = _PUNCT_RE.sub(" ", name.lower())
+    s = _WS_RE.sub(" ", s).strip()
+    tokens = [t for t in s.split(" ") if t and t not in _LEGAL_SUFFIXES]
+    return " ".join(tokens)
+
+
+def trailing_single_char_diff(a: str, b: str) -> bool:
+    """True when two strings differ only in their final 1-2 alphanumeric chars.
+
+    Catches sibling-entity name patterns like 'Batch Customer A' vs 'Batch
+    Customer B', 'Branch 01' vs 'Branch 02'. These should never partition
+    together in P6 and (post TASK-37) should never pass the P4 gate either.
+    """
+    if not a or not b or a == b:
+        return False
+    # Quick exit if lengths differ by more than 1 (single trailing char insert)
+    if abs(len(a) - len(b)) > 1:
+        return False
+    # Find common prefix
+    i = 0
+    while i < len(a) and i < len(b) and a[i] == b[i]:
+        i += 1
+    rem_a, rem_b = a[i:], b[i:]
+    if len(rem_a) > 2 or len(rem_b) > 2:
+        return False
+    # Differing chars must be alphanumeric and the common prefix non-trivial
+    if i < 3:
+        return False
+    return all(c.isalnum() for c in rem_a + rem_b)
+
 
 def aging_bucket(days: int) -> str:
     if days <= 1: return "0-1 Days"
@@ -210,7 +264,10 @@ def find_one_to_many_groups(
     if not pattern_is_active(config, "P6"):
         return []
 
-    cp_threshold = float(pattern_rule_value(config, "P6", "counterparty_threshold", 0.85))
+    # TASK-35: bank-vs-partition similarity is the only fuzzy gate; in-partition
+    # membership is exact on the normalised key. The legacy P6.counterparty_threshold
+    # rule is deprecated — it no longer affects matching.
+    bank_cp_min  = float(pattern_rule_value(config, "P6", "bank_counterparty_min_similarity", 0.95))
     max_grp_size = int(pattern_rule_value(config, "P6", "max_group_size", 6))
     date_window  = int(pattern_rule_value(config, "P6", "date_window_days", 3))
     var_subpass  = bool(pattern_rule_value(config, "P6", "variance_subpass_enabled", True))
@@ -220,22 +277,56 @@ def find_one_to_many_groups(
     used_psr_ids: set = set()
     used_camt_ids: set = set()
 
+    # TASK-35: partition residual PSRs by normalised counterparty key. A P6 group
+    # may only contain PSRs from a SINGLE partition — never mix customers.
+    partitions: Dict[str, List[PsrTransaction]] = {}
+    for p in residual_psrs:
+        key = normalise_counterparty(p.counterparty)
+        if not key:
+            continue
+        partitions.setdefault(key, []).append(p)
+
     for camt in residual_camts:
         if camt.ntry_id in used_camt_ids or camt.amount is None:
             continue
 
-        # Step 1: narrow PSR pool by direction + counterparty similarity + date window
+        bank_key = normalise_counterparty(camt.counterparty)
+        if not bank_key:
+            continue
+
+        # Step 1: locate the matching partition for this bank entry.
+        # Prefer exact key match; otherwise allow a high-bar fuzzy match
+        # (bank_cp_min, default 0.95) on the normalised keys.
+        partition_key = None
+        if bank_key in partitions:
+            partition_key = bank_key
+        else:
+            best_key, best_sim = None, 0.0
+            for k in partitions.keys():
+                # Sibling-entity guard: never bind to a partition that differs
+                # only in trailing 1-2 alphanumeric chars from the bank key.
+                if trailing_single_char_diff(bank_key, k):
+                    continue
+                sim = similarity(bank_key, k)
+                if sim > best_sim:
+                    best_key, best_sim = k, sim
+            if best_key and best_sim >= bank_cp_min:
+                partition_key = best_key
+
+        if not partition_key:
+            continue
+
+        # Step 2: narrow to PSRs from that partition only, applying direction + date window.
         candidates = [
-            p for p in residual_psrs
+            p for p in partitions[partition_key]
             if p.id not in used_psr_ids
             and p.direction == camt.direction
-            and similarity(p.counterparty, camt.counterparty) >= cp_threshold
             and safe_date_diff(p.execution_date or "", camt.booking_date or "") <= date_window
         ]
         if len(candidates) < 2:
             continue
 
-        # Step 2: exact subset-sum
+        # Step 3: exact subset-sum
         exact_matches = _find_subset_matches(
             candidates, camt.amount, max_grp_size, settings.exact_amount_tolerance
         )
@@ -251,7 +342,7 @@ def find_one_to_many_groups(
                 f"{'Ambiguous: multiple valid groupings. Selected by earliest date. ' if ambiguous else ''}"
                 f"{len(chosen)} PSR transactions ({psr_ids_str}) sum to "
                 f"{sum(p.amount for p in chosen):.2f} = CAMT {camt.ntry_id} ({camt.amount:.2f}). "
-                f"Counterparty similarity confirmed."
+                f"Counterparty partition '{partition_key}' confirmed."
             )
             if ambiguous and alt:
                 expl += f" Alternative grouping: {', '.join(p.id for p in alt)}."
@@ -259,7 +350,7 @@ def find_one_to_many_groups(
                           conf, rule, reason, expl, 0.0, ambiguous)
             continue
 
-        # Step 3: variance sub-pass (small groups only)
+        # Step 4: variance sub-pass (small groups only)
         if var_subpass and len(candidates) >= 2:
             var_matches = _find_subset_matches(
                 candidates, camt.amount, var_max_size, settings.minor_variance_tolerance

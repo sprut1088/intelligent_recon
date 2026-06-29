@@ -194,7 +194,7 @@ TASK-38  P10 split settlement (1 PSR → N CAMT) — new branch `feat/p10-split-
 | Task | Title | Type | Depends on | Status |
 |---|---|---|---|---|
 | [TASK-34](TASK-34-cascade-reorder-p6-before-p4.md) | Cascade re-order: P6 before P4 | Backend | — | ✅ Complete |
-| [TASK-35](TASK-35-p6-strict-counterparty-partitioning.md) | P6 strict counterparty partitioning | Backend | TASK-34 | 🔲 Not started |
+| [TASK-35](TASK-35-p6-strict-counterparty-partitioning.md) | P6 strict counterparty partitioning | Backend | TASK-34 | ✅ Complete |
 | [TASK-36](TASK-36-p6-bank-batch-marker-seeding.md) | P6 bank-side batch marker seeding | Backend | TASK-35 | 🔲 Not started |
 | [TASK-37](TASK-37-tighten-p4-fuzzy-gate.md) | Tighten P4 fuzzy gate (corroboration required) | Backend | TASK-34, TASK-35 | 🔲 Not started |
 | [TASK-38](TASK-38-p10-split-settlement.md) | P10 split settlement (1 PSR → N CAMT) | Backend | TASK-34 | 🔲 Not started |
