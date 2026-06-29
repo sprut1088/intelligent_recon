@@ -161,6 +161,75 @@ Dev B: TASK-30 (immediate) → wait for TASK-28+29 → TASK-31
 | [TASK-33](TASK-33-results-workbench-export.md) | Download reconciliation report from Results Workbench | Full-stack | — | ✅ Complete |
 
 ---
+
+## Dependency Map — Reconciliation Engine Correctness (`feat/recon-correctness` + `feat/p10-split-settlement`)
+
+Source: `abc-recon-20260629` regression analysis — three real defects + one known gap.
+
+```
+TASK-34  Cascade re-order: P4 runs AFTER P6 (unblocks downstream fixes)
+    │
+    ├──► TASK-35  P6 strict counterparty partitioning (normalisation + trailing-char rule)
+    │       │
+    │       └──► TASK-36  P6 bank-side batch marker seeding (reuses TASK-35 helpers)
+    │
+    └──► TASK-37  Tighten P4 fuzzy gate (corroboration required, threshold raised,
+                  reuses TASK-35 helpers)
+
+TASK-38  P10 split settlement (1 PSR → N CAMT) — new branch `feat/p10-split-settlement`
+         depends on TASK-34 landing first
+```
+
+**Defect coverage map:**
+
+| Defect (from abc-recon analysis) | Fixed by |
+|---|---|
+| 1. P4 cannibalised P6 batch member (TX-9009 → wrong CAMT) | TASK-34 (primary), TASK-37 (belt-and-braces) |
+| 2. P6 mixed two customers into one group | TASK-35 (primary), TASK-36 (reinforcement) |
+| 3. Variance band misclassification (TX-9015) | _Configuration only — no task, owner adjusts thresholds_ |
+| 4. Split settlement unsupported (TX-9010) | TASK-38 |
+
+## Task Summary — Reconciliation Engine Correctness
+
+| Task | Title | Type | Depends on | Status |
+|---|---|---|---|---|
+| [TASK-34](TASK-34-cascade-reorder-p6-before-p4.md) | Cascade re-order: P6 before P4 | Backend | — | ✅ Complete |
+| [TASK-35](TASK-35-p6-strict-counterparty-partitioning.md) | P6 strict counterparty partitioning | Backend | TASK-34 | ✅ Complete |
+| [TASK-36](TASK-36-p6-bank-batch-marker-seeding.md) | P6 bank-side batch marker seeding | Backend | TASK-35 | ✅ Complete |
+| [TASK-37](TASK-37-tighten-p4-fuzzy-gate.md) | Tighten P4 fuzzy gate (corroboration required) | Backend | TASK-34, TASK-35 | ✅ Complete |
+| [TASK-38](TASK-38-p10-split-settlement.md) | P10 split settlement (1 PSR → N CAMT) | Backend | TASK-34 | ✅ Complete |
+
+### Suggested merge order
+
+```
+TASK-34 → TASK-37 → TASK-35 → TASK-36   (all on feat/recon-correctness)
+TASK-38                                  (separate branch feat/p10-split-settlement)
+```
+
+Rationale:
+- TASK-34 is small but unlocks the rest — land it first.
+- TASK-37 stops P4 from producing overconfident false-positives immediately after.
+- TASK-35 + TASK-36 then make P6 deterministically correct on multi-customer batches.
+- TASK-38 is largest and structurally independent — separate branch keeps PR review tractable.
+
+### Definition of Done — Recon-correctness branch
+
+- [ ] TASK-34, TASK-35, TASK-36, TASK-37 all complete and verified
+- [ ] `python -m pytest backend/tests/ -v` passes with no regressions
+- [ ] **abc-recon regression** (new fixture `backend/sample_data/regression_abc/`) runs end-to-end and matches expected output: GRP-A `{9007,9008,9009}` and GRP-B `{9017,9018}` form correctly; CASE-000006 (mis-routed 9009) does not appear; no mixed-customer groups exist
+- [ ] No P4 case has `match_confidence > 89`
+- [ ] No P4 case is emitted without a corroborating signal
+- [ ] Branch merged to `feature/development` via PR with reviewer approval
+
+### Definition of Done — P10 split-settlement branch
+
+- [x] TASK-38 complete and verified
+- [ ] abc-recon regression: TX-9010 forms a `1_TO_N` group with NTRY-USD-008 + NTRY-USD-009 at confidence 92
+- [ ] CASE-000018, CASE-000020, CASE-000021 disappear from output (replaced by the group)
+- [ ] Frontend EvidenceDrawer sibling panel renders the split group without code changes
+- [ ] Branch merged to `feature/development` via PR with reviewer approval
+
+---
 ### Definition of Done — P6 branch
 
 - [ ] All 7 tasks completed and individually verified

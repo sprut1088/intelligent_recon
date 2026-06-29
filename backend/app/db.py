@@ -26,6 +26,7 @@ DEFAULT_PATTERNS = [
     ("P5", "Exception Handling / Unmatch", "SEED", {"route_to": "manual_review"}, "ACTIVE", "MANUAL", 0.00),
     ("P6", "One-to-Many Bank Settlement", "SEED", {"fields": ["pmt_ref", "invoice", "amount_sum"], "counterparty_threshold": 0.85, "max_group_size": 6, "date_window_days": 3, "variance_subpass_enabled": True, "variance_subpass_max_group_size": 3}, "ACTIVE", "SUGGESTION", 0.85),
     ("P7", "Amount Variance", "SEED", {"fields": ["identity", "amount_variance"], "minor_tolerance": settings.minor_variance_tolerance}, "ACTIVE", "LEDGER_OR_IN_TRANSIT", 0.75),
+    ("P10", "Split Settlement (1 PSR -> N CAMTs)", "SEED", {"fields": ["pmt_ref", "invoice", "amount_sum"], "max_split_size": 5, "date_window_days": 3, "bank_counterparty_min_similarity": 0.95, "shared_reference_confidence": 92, "subset_sum_confidence": 86}, "ACTIVE", "SUGGESTION", 0.85),
 ]
 
 class ManagedConnection(sqlite3.Connection):
