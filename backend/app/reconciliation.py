@@ -126,6 +126,37 @@ def is_bank_batch_marker(end_to_end_id: Optional[str], pattern: str = _DEFAULT_B
         return bool(re.match(_DEFAULT_BATCH_MARKER_REGEX, end_to_end_id.strip(), re.IGNORECASE))
 
 
+# ── Split-settlement helpers (TASK-38) ─────────────────────────────────────────
+
+_DEFAULT_SPLIT_MARKER_REGEX = r"\b(\d+)\s*(?:of|/)\s*(\d+)\b"
+
+
+def detect_split_marker(text: Optional[str], pattern: str = _DEFAULT_SPLIT_MARKER_REGEX) -> Optional[Tuple[int, int]]:
+    """Return (part_num, total_parts) if text contains a 'K of N' split marker.
+
+    Used by P10 to recognise bank-side split-payment hints like '1 of 2', '2/3',
+    'PART 1 OF 4'. The marker enriches the explanation; the linkage itself is
+    via the shared PMT-REF/invoice between CAMTs.
+    """
+    if not text:
+        return None
+    try:
+        m = re.search(pattern, text, re.IGNORECASE)
+    except re.error:
+        logger.warning("Invalid P10.split_marker_regex %r; falling back to default", pattern)
+        m = re.search(_DEFAULT_SPLIT_MARKER_REGEX, text, re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        part_n = int(m.group(1))
+        total_n = int(m.group(2))
+        if 1 <= part_n <= total_n and 2 <= total_n <= 99:
+            return part_n, total_n
+    except (ValueError, IndexError):
+        return None
+    return None
+
+
 def aging_bucket(days: int) -> str:
     if days <= 1: return "0-1 Days"
     if days <= 2: return "2 Days"
@@ -441,6 +472,234 @@ def find_one_to_many_groups(
 
 # ── End P6 helpers ─────────────────────────────────────────────────────────────
 
+
+# ── P10 split-settlement helpers (TASK-38) ─────────────────────────────────────
+
+def _find_camt_subset_matches(
+    camts: List[CamtTransaction],
+    target: float,
+    max_size: int,
+    tolerance: float,
+) -> List[List[CamtTransaction]]:
+    """Return up to 2 CAMT subsets whose amounts sum to target within tolerance.
+    Sorted deterministically: earliest booking_date, tiebreak ntry_id asc.
+    Stops at 2 results so callers can detect ambiguity without further search."""
+    results: List[List[CamtTransaction]] = []
+    pool = [c for c in camts if c.amount is not None]
+    for size in range(2, min(max_size, len(pool)) + 1):
+        for combo in _combinations(pool, size):
+            if abs(sum(c.amount for c in combo) - target) <= tolerance:
+                sorted_combo = sorted(combo, key=lambda c: (c.booking_date or "", c.ntry_id))
+                results.append(list(sorted_combo))
+                if len(results) >= 2:
+                    return results
+        if results:
+            return results  # found matches at this size; don't try larger subsets
+    return results
+
+
+def find_one_to_n_splits(
+    residual_psrs: List[PsrTransaction],
+    residual_camts: List[CamtTransaction],
+    config: Dict[str, Dict],
+) -> List[Dict]:
+    """Find PSRs whose amount is settled by N CAMT entries (split settlement).
+
+    Two trigger paths, evaluated in order so the stronger evidence wins first:
+      1. Shared PMT-REF / invoice linkage: 2+ CAMTs whose pmt_ref or invoice
+         matches the PSR's reference and whose amounts sum to PSR.amount.
+         Confidence 92 (default). 'K of N' marker text in remittance adds
+         richer explanation but is not required.
+      2. Counterparty subset-sum: CAMTs in the same normalised counterparty
+         partition (TASK-35 helper) within ±date_window summing to PSR.amount.
+         Confidence 86. Ambiguous if multiple valid subsets — confidence 70.
+
+    Returns a list of split dicts with keys:
+        psr, camts (date-sorted), anchor_camt, confidence, rule_applied,
+        reason_code, explanation, marker_detected, ambiguous,
+        alternative_camts, variance
+    """
+    if not pattern_is_active(config, "P10"):
+        return []
+
+    max_split    = int(pattern_rule_value(config, "P10", "max_split_size", 5))
+    date_window  = int(pattern_rule_value(config, "P10", "date_window_days", 3))
+    cp_min_sim   = float(pattern_rule_value(config, "P10", "bank_counterparty_min_similarity", 0.95))
+    marker_regex = str(pattern_rule_value(config, "P10", "split_marker_regex", _DEFAULT_SPLIT_MARKER_REGEX))
+    ref_conf     = int(pattern_rule_value(config, "P10", "shared_reference_confidence", 92))
+    sum_conf     = int(pattern_rule_value(config, "P10", "subset_sum_confidence", 86))
+
+    splits: List[Dict] = []
+    used_psr_ids: set = set()
+    used_camt_ids: set = set()
+
+    # Index residual CAMTs by reference + invoice for Path 1
+    camts_by_ref: Dict[str, List[CamtTransaction]] = {}
+    camts_by_inv: Dict[str, List[CamtTransaction]] = {}
+    for c in residual_camts:
+        if c.amount is None:
+            continue
+        if c.pmt_ref:
+            camts_by_ref.setdefault(c.pmt_ref, []).append(c)
+        if c.invoice:
+            camts_by_inv.setdefault(c.invoice, []).append(c)
+
+    # ── Path 1: shared PMT-REF / invoice linkage ──────────────────────────────
+    for psr in residual_psrs:
+        if psr.id in used_psr_ids:
+            continue
+
+        candidate_buckets: List[Tuple[str, str, List[CamtTransaction]]] = []
+        if psr.reference and psr.reference in camts_by_ref:
+            bucket = [c for c in camts_by_ref[psr.reference]
+                      if c.ntry_id not in used_camt_ids and c.direction == psr.direction]
+            if len(bucket) >= 2:
+                candidate_buckets.append(("PMT-REF", psr.reference, bucket))
+        if psr.invoice and psr.invoice in camts_by_inv:
+            bucket = [c for c in camts_by_inv[psr.invoice]
+                      if c.ntry_id not in used_camt_ids and c.direction == psr.direction]
+            if len(bucket) >= 2:
+                candidate_buckets.append(("invoice", psr.invoice, bucket))
+
+        for link_kind, link_value, bucket in candidate_buckets:
+            total = round(sum(c.amount for c in bucket), 2)
+            if abs(total - psr.amount) <= settings.exact_amount_tolerance and len(bucket) <= max_split:
+                chosen = sorted(bucket, key=lambda c: (c.booking_date or "", c.ntry_id))
+                ambiguous = False
+                alt = None
+            else:
+                subsets = _find_camt_subset_matches(
+                    bucket, psr.amount, max_split, settings.exact_amount_tolerance
+                )
+                if not subsets:
+                    continue
+                chosen = subsets[0]
+                ambiguous = len(subsets) > 1
+                alt = subsets[1] if ambiguous else None
+
+            markers = []
+            for c in chosen:
+                m = detect_split_marker(c.remittance, marker_regex)
+                if m:
+                    markers.append((c.ntry_id, m))
+
+            marker_clause = ""
+            if markers:
+                marker_clause = (
+                    f"Bank marked these as split parts ("
+                    + ", ".join(f"{cid} = {p}/{t}" for cid, (p, t) in markers)
+                    + "). "
+                )
+
+            camt_ids_str = ", ".join(c.ntry_id for c in chosen)
+            expl = (
+                f"{marker_clause}"
+                f"{'Ambiguous: multiple valid CAMT subsets. Selected by earliest date. ' if ambiguous else ''}"
+                f"PSR {psr.id} ({psr.amount:.2f}) is settled by {len(chosen)} CAMT entries "
+                f"({camt_ids_str}) sharing {link_kind} '{link_value}', summing to "
+                f"{sum(c.amount for c in chosen):.2f}."
+            )
+            if ambiguous and alt:
+                expl += f" Alternative subset: {', '.join(c.ntry_id for c in alt)}."
+
+            splits.append({
+                "psr": psr, "camts": chosen, "anchor_camt": chosen[0],
+                "confidence": 70 if ambiguous else ref_conf,
+                "rule_applied": "P10_SPLIT_SHARED_REFERENCE_AMBIGUOUS" if ambiguous else "P10_SPLIT_SHARED_REFERENCE",
+                "reason_code": "SPLIT_SETTLEMENT_AMBIGUOUS" if ambiguous else "SPLIT_SETTLEMENT_SHARED_REFERENCE",
+                "explanation": expl,
+                "marker_detected": bool(markers),
+                "ambiguous": ambiguous,
+                "alternative_camts": alt,
+                "variance": round(sum(c.amount for c in chosen) - psr.amount, 2),
+            })
+            used_psr_ids.add(psr.id)
+            for c in chosen:
+                used_camt_ids.add(c.ntry_id)
+            break  # one split per PSR
+
+    # ── Path 2: counterparty subset-sum (no shared reference required) ────────
+    # Partition the still-unmatched CAMTs by normalised counterparty.
+    camt_partitions: Dict[str, List[CamtTransaction]] = {}
+    for c in residual_camts:
+        if c.ntry_id in used_camt_ids or c.amount is None:
+            continue
+        key = normalise_counterparty(c.counterparty)
+        if key:
+            camt_partitions.setdefault(key, []).append(c)
+
+    for psr in residual_psrs:
+        if psr.id in used_psr_ids:
+            continue
+        psr_key = normalise_counterparty(psr.counterparty)
+        if not psr_key:
+            continue
+
+        # Find the matching CAMT partition (exact key first, then high-bar fuzzy)
+        target_key = None
+        if psr_key in camt_partitions:
+            target_key = psr_key
+        else:
+            best_sim = 0.0
+            best_key = None
+            for ck in camt_partitions:
+                if trailing_single_char_diff(psr_key, ck):
+                    continue
+                s = similarity(psr_key, ck)
+                if s > best_sim:
+                    best_sim, best_key = s, ck
+            if best_key and best_sim >= cp_min_sim:
+                target_key = best_key
+        if not target_key:
+            continue
+
+        avail = [
+            c for c in camt_partitions[target_key]
+            if c.ntry_id not in used_camt_ids
+            and c.direction == psr.direction
+            and safe_date_diff(psr.execution_date or "", c.booking_date or "") <= date_window
+        ]
+        if len(avail) < 2:
+            continue
+
+        subsets = _find_camt_subset_matches(
+            avail, psr.amount, max_split, settings.exact_amount_tolerance
+        )
+        if not subsets:
+            continue
+
+        chosen = subsets[0]
+        ambiguous = len(subsets) > 1
+        alt = subsets[1] if ambiguous else None
+        conf = 70 if ambiguous else sum_conf
+        rule = "P10_SPLIT_SUBSET_SUM_AMBIGUOUS" if ambiguous else "P10_SPLIT_SUBSET_SUM"
+        reason = "SPLIT_SETTLEMENT_AMBIGUOUS" if ambiguous else "SPLIT_SETTLEMENT_SUBSET_SUM"
+        camt_ids_str = ", ".join(c.ntry_id for c in chosen)
+        expl = (
+            f"{'Ambiguous: multiple valid CAMT subsets. Selected by earliest date. ' if ambiguous else ''}"
+            f"PSR {psr.id} ({psr.amount:.2f}) is settled by {len(chosen)} CAMT entries "
+            f"({camt_ids_str}) summing to {sum(c.amount for c in chosen):.2f}. "
+            f"Counterparty partition '{target_key}' confirmed."
+        )
+        if ambiguous and alt:
+            expl += f" Alternative subset: {', '.join(c.ntry_id for c in alt)}."
+
+        splits.append({
+            "psr": psr, "camts": chosen, "anchor_camt": chosen[0],
+            "confidence": conf, "rule_applied": rule, "reason_code": reason,
+            "explanation": expl, "marker_detected": False,
+            "ambiguous": ambiguous, "alternative_camts": alt,
+            "variance": 0.0,
+        })
+        used_psr_ids.add(psr.id)
+        for c in chosen:
+            used_camt_ids.add(c.ntry_id)
+
+    return splits
+
+# ── End P10 helpers ────────────────────────────────────────────────────────────
+
+
 def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_transactions: Sequence[CamtTransaction], pattern_registry_rows: Sequence[Dict]) -> List[ReconCase]:
     logger.info("reconcile_transactions: psr=%d camt=%d patterns=%d", len(psr_transactions), len(camt_transactions), len(pattern_registry_rows))
     cases=[]; used=set(); idx=1; p5_pending: List[PsrTransaction]=[]
@@ -597,6 +856,103 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     # Post-P6 residual: PSRs that did not land in a P6 group
     post_p6_residual = [psr for psr in p5_pending if psr.id not in p6_consumed_psr_ids]
 
+    # ── P10 split-settlement pass (runs AFTER P6, BEFORE P4 — TASK-38) ────────
+    # Looks for 1 PSR -> N CAMTs (the inverse of P6's N PSRs -> 1 CAMT). Must run
+    # before P4 so a partial-payment PSR isn't fuzzy-matched to one of its CAMTs.
+    p10_consumed_psr_ids: set = set()
+    p10_splits: List[Dict] = []
+    if pattern_is_active(config, "P10") and post_p6_residual:
+        residual_camts_for_p10 = [b for b in camt_transactions if b.ntry_id not in used]
+        p10_splits = find_one_to_n_splits(post_p6_residual, residual_camts_for_p10, config)
+
+        for split in p10_splits:
+            split_id   = f"SPLIT-{idx:06d}"
+            psr_s      = split["psr"]
+            camts_s    = split["camts"]            # already date-sorted
+            anchor_c   = split["anchor_camt"]
+            conf_s     = split["confidence"]
+            rule_s     = split["rule_applied"]
+            reason_s   = split["reason_code"]
+            expl_s     = split["explanation"]
+            ambig_s    = split["ambiguous"]
+            camts_sum  = round(sum(c.amount for c in camts_s), 2)
+
+            status_s = "Suggested Match - Analyst Review" if ambig_s else "Suggested Match - Split Settlement"
+
+            anchor_case_id = f"CASE-{idx:06d}"
+
+            for pos, camt_s in enumerate(camts_s):
+                is_anchor = (pos == 0)
+                this_case_id = f"CASE-{idx:06d}"
+                days_s = safe_date_diff(psr_s.execution_date or "", camt_s.booking_date or "")
+
+                if is_anchor:
+                    feat = {
+                        "split_id": split_id, "group_role": "ANCHOR",
+                        "n_camts_in_split": len(camts_s),
+                        "sum_of_camt_amounts": camts_sum,
+                        "marker_detected": split["marker_detected"],
+                        "is_ambiguous": ambig_s,
+                        "score_breakdown": score_breakdown(
+                            {"amount_exact": True, "currency_match": True,
+                             "counterparty_similarity": 0.95, "end_to_end_id_exact": False,
+                             "pmt_ref_exact": True, "invoice_exact": True,
+                             "invoice_suffix_match": False, "amount_variance": 0.0},
+                            rule_s, conf_s),
+                    }
+                    if ambig_s and split["alternative_camts"]:
+                        feat["alternative_split_camt_ids"] = [c.ntry_id for c in split["alternative_camts"]]
+                    sugg_s = [{"action": "CONFIRM_SPLIT_MATCH", "confidence": conf_s / 100.0,
+                               "split_id": split_id, "psr_id": psr_s.id,
+                               "split_camt_ids": [c.ntry_id for c in camts_s]}]
+                    rc = ReconCase(
+                        case_id=this_case_id, match_key=psr_s.id,
+                        psr_id=psr_s.id, camt_id=camt_s.camt_id,
+                        reference=psr_s.reference, invoice=psr_s.invoice,
+                        counterparty=psr_s.counterparty,
+                        internal_amount=psr_s.amount,
+                        bank_amount=camts_sum,     # aggregated CAMT sum on anchor
+                        variance=round(camts_sum - psr_s.amount, 2),
+                        currency=psr_s.currency,
+                        value_date=psr_s.execution_date or "", booking_date=camt_s.booking_date or "",
+                        reconciliation_status=status_s, reason_code=reason_s,
+                        match_type="1_TO_N", match_confidence=conf_s,
+                        aging_days=days_s, aging_bucket=aging_bucket(days_s),
+                        rule_applied=rule_s, exception_flag="Y",
+                        explanation=expl_s, feature_snapshot=feat, suggestions=sugg_s,
+                        group_id=split_id, group_role="ANCHOR",
+                    )
+                else:
+                    feat = {"split_member": True, "split_id": split_id, "anchor_case_id": anchor_case_id}
+                    mem_expl = (
+                        f"Part of split {split_id} ({len(camts_s)} CAMTs settle PSR "
+                        f"{psr_s.id} {psr_s.amount:.2f}). This CAMT contributes "
+                        f"{camt_s.amount:.2f}. See anchor case {anchor_case_id}."
+                    )
+                    rc = ReconCase(
+                        case_id=this_case_id, match_key=psr_s.id,
+                        psr_id=psr_s.id, camt_id=camt_s.camt_id,
+                        reference=psr_s.reference, invoice=psr_s.invoice,
+                        counterparty=psr_s.counterparty,
+                        internal_amount=None,        # PSR shown on anchor only
+                        bank_amount=camt_s.amount,
+                        variance=None,
+                        currency=psr_s.currency,
+                        value_date=psr_s.execution_date or "", booking_date=camt_s.booking_date or "",
+                        reconciliation_status=status_s, reason_code=reason_s,
+                        match_type="1_TO_N", match_confidence=conf_s,
+                        aging_days=days_s, aging_bucket=aging_bucket(days_s),
+                        rule_applied=rule_s, exception_flag="Y",
+                        explanation=mem_expl, feature_snapshot=feat, suggestions=[],
+                        group_id=split_id, group_role="MEMBER",
+                    )
+
+                cases.append(rc)
+                idx += 1
+                used.add(camt_s.ntry_id)
+
+            p10_consumed_psr_ids.add(psr_s.id)
+
     # ── P4 fuzzy 1-to-1 pass (runs AFTER P6 — TASK-34, hardened TASK-37) ───────
     # Lifted out of the per-PSR loop so P6 has first refusal on residuals.
     # P6 uses stronger evidence (subset-sum + counterparty + date window) and should
@@ -611,6 +967,8 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     p4_consumed_psr_ids: set = set()
     if pattern_is_active(config, "P4") and post_p6_residual:
         for psr in post_p6_residual:
+            if psr.id in p10_consumed_psr_ids:
+                continue
             cands = [b for b in by_amt.get(psr.amount, []) if b.ntry_id not in used]
             if not cands:
                 continue
@@ -663,7 +1021,7 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
 
     # ── P5 exception emission for everything still unmatched ───────────────────
     for psr in post_p6_residual:
-        if psr.id in p4_consumed_psr_ids:
+        if psr.id in p4_consumed_psr_ids or psr.id in p10_consumed_psr_ids:
             continue
         cases.append(build_case(idx, psr, None, "Uncleared / In-Transit Payment",
             "NO_ACCEPTABLE_CANDIDATES", "UNMATCHED_PSR", 45, "P5_EXCEPTION_HANDLING", "Y",
@@ -677,8 +1035,8 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
         if bank.ntry_id in used: continue
         cases.append(build_case(idx, None, bank, "Bank-only Item - Investigation", "BANK_ONLY_UNMATCHED", "UNMATCHED_BANK", 40, "P5_EXCEPTION_HANDLING", "Y", "Bank entry was present in CAMT but no matching expected payment was found in PSR.", [{"action":"INVESTIGATE_BANK_ONLY","confidence":0.40}])); idx+=1
     exceptions = sum(1 for c in cases if c.exception_flag == "Y")
-    logger.info("reconcile_transactions done: %d cases, %d exceptions (p6_groups=%d, p4_matches=%d)",
-                len(cases), exceptions, len(p6_groups), len(p4_consumed_psr_ids))
+    logger.info("reconcile_transactions done: %d cases, %d exceptions (p6_groups=%d, p10_splits=%d, p4_matches=%d)",
+                len(cases), exceptions, len(p6_groups), len(p10_splits), len(p4_consumed_psr_ids))
     return cases
 
 def case_to_db_tuple(case: ReconCase) -> tuple:
