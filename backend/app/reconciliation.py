@@ -1,4 +1,5 @@
 from __future__ import annotations
+import difflib
 import logging
 import re
 from dataclasses import dataclass, asdict
@@ -88,6 +89,22 @@ def trailing_single_char_diff(a: str, b: str) -> bool:
     if i < 3:
         return False
     return all(c.isalnum() for c in rem_a + rem_b)
+
+
+def shared_substring(a: Optional[str], b: Optional[str], min_len: int = 5) -> bool:
+    """True when a and b share a contiguous substring of length >= min_len.
+
+    Used by P4 (post TASK-37) as a corroboration signal: a fuzzy counterparty
+    match alone is no longer enough — there must be a non-trivial shared chunk
+    in the payment reference or invoice number for P4 to fire.
+    """
+    if not a or not b or min_len <= 0:
+        return False
+    sa, sb = str(a).strip().upper(), str(b).strip().upper()
+    if len(sa) < min_len or len(sb) < min_len:
+        return False
+    m = difflib.SequenceMatcher(a=sa, b=sb, autojunk=False).find_longest_match(0, len(sa), 0, len(sb))
+    return m.size >= min_len
 
 
 def aging_bucket(days: int) -> str:
@@ -378,7 +395,17 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     logger.info("reconcile_transactions: psr=%d camt=%d patterns=%d", len(psr_transactions), len(camt_transactions), len(pattern_registry_rows))
     cases=[]; used=set(); idx=1; p5_pending: List[PsrTransaction]=[]
     config = pattern_config(pattern_registry_rows)
-    p4_threshold = float(pattern_rule_value(config, "P4", "threshold", 0.85))
+    # TASK-37: P4 hardened. similarity_floor replaces threshold (legacy key still honoured).
+    _legacy_p4_threshold = pattern_rule_value(config, "P4", "threshold", None)
+    if _legacy_p4_threshold is not None:
+        logger.warning("P4.threshold is deprecated; use P4.similarity_floor (default 0.92). Legacy value=%s applied as floor.", _legacy_p4_threshold)
+        p4_sim_floor = float(_legacy_p4_threshold)
+    else:
+        p4_sim_floor = float(pattern_rule_value(config, "P4", "similarity_floor", 0.92))
+    p4_conf_cap            = int(pattern_rule_value(config, "P4", "confidence_cap", 89))
+    p4_corrob_required     = bool(pattern_rule_value(config, "P4", "corroboration_required", True))
+    p4_shared_sub_min_len  = int(pattern_rule_value(config, "P4", "shared_substring_min_len", 5))
+    p4_date_window_days    = int(pattern_rule_value(config, "P4", "date_window_days", 1))
     p7_minor_tolerance = float(pattern_rule_value(config, "P7", "minor_tolerance", settings.minor_variance_tolerance))
     by_e2e={b.end_to_end_id:b for b in camt_transactions if b.end_to_end_id}
     by_ref_amt={}; by_inv_amt={}; by_inv={}; by_amt={}
@@ -520,32 +547,69 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     # Post-P6 residual: PSRs that did not land in a P6 group
     post_p6_residual = [psr for psr in p5_pending if psr.id not in p6_consumed_psr_ids]
 
-    # ── P4 fuzzy 1-to-1 pass (runs AFTER P6 — TASK-34) ─────────────────────────
+    # ── P4 fuzzy 1-to-1 pass (runs AFTER P6 — TASK-34, hardened TASK-37) ───────
     # Lifted out of the per-PSR loop so P6 has first refusal on residuals.
     # P6 uses stronger evidence (subset-sum + counterparty + date window) and should
     # outrank P4 (fuzzy name + amount only). Without this ordering, P4 cannibalises
     # batch members whose individual amount coincidentally matches an unrelated CAMT.
+    #
+    # TASK-37: P4 now demands BOTH a high similarity floor on normalised keys AND
+    # a corroborating signal (shared PMT-REF substring, shared invoice substring,
+    # or tight date proximity). Sibling-entity names ("Customer A" vs "Customer B")
+    # are blocked by trailing_single_char_diff regardless of score. Confidence is
+    # capped (default 89) so the suggestion can never appear auto-closable.
     p4_consumed_psr_ids: set = set()
     if pattern_is_active(config, "P4") and post_p6_residual:
         for psr in post_p6_residual:
             cands = [b for b in by_amt.get(psr.amount, []) if b.ntry_id not in used]
-            fuzzy = None; score = 0.0
+            if not cands:
+                continue
+            psr_key = normalise_counterparty(psr.counterparty)
+            best_cand: Optional[CamtTransaction] = None
+            best_score: float = 0.0
             for b in cands:
-                sc = similarity(psr.counterparty, b.counterparty)
-                if sc > score:
-                    fuzzy, score = b, sc
-            if fuzzy and score >= p4_threshold:
-                used.add(fuzzy.ntry_id)
-                cases.append(build_case(
-                    idx, psr, fuzzy, "Suggested Match - Analyst Review",
-                    "COUNTERPARTY_FUZZY_AMOUNT", "1_TO_1", int(score * 100),
-                    "P4_COUNTERPARTY_FUZZY", "Y",
-                    f"Counterparty similarity {score:.2f} with exact amount. Requires analyst confirmation.",
-                    [{"action": "REVIEW_FUZZY_CANDIDATE", "confidence": round(score, 3),
-                      "bank_id": fuzzy.camt_id}],
-                ))
-                idx += 1
-                p4_consumed_psr_ids.add(psr.id)
+                cand_key = normalise_counterparty(b.counterparty)
+                if not psr_key or not cand_key:
+                    continue
+                if trailing_single_char_diff(psr_key, cand_key):
+                    continue  # sibling-entity guard — never fuzzy-match A vs B
+                sc = similarity(psr_key, cand_key)
+                if sc > best_score:
+                    best_cand, best_score = b, sc
+            if not best_cand or best_score < p4_sim_floor:
+                continue
+
+            # Corroboration: a high name score alone is not enough.
+            corrob_reasons: List[str] = []
+            if shared_substring(psr.reference, best_cand.pmt_ref, p4_shared_sub_min_len):
+                corrob_reasons.append(f"shared PMT-REF substring (>={p4_shared_sub_min_len} chars)")
+            if shared_substring(psr.invoice, best_cand.invoice, p4_shared_sub_min_len):
+                corrob_reasons.append(f"shared invoice substring (>={p4_shared_sub_min_len} chars)")
+            date_close = (
+                psr.execution_date
+                and (best_cand.value_date or best_cand.booking_date)
+                and safe_date_diff(psr.execution_date, best_cand.value_date or best_cand.booking_date) <= p4_date_window_days
+            )
+            if date_close:
+                corrob_reasons.append(f"date within +/-{p4_date_window_days} day with exact amount")
+
+            if p4_corrob_required and not corrob_reasons:
+                continue  # high similarity but no second signal — defer to P5
+
+            conf = min(int(best_score * 100), p4_conf_cap)
+            corrob_text = ("; ".join(corrob_reasons)) if corrob_reasons else "no additional corroboration required (gate disabled)"
+            used.add(best_cand.ntry_id)
+            cases.append(build_case(
+                idx, psr, best_cand, "Suggested Match - Analyst Review",
+                "COUNTERPARTY_FUZZY_AMOUNT", "1_TO_1", conf,
+                "P4_COUNTERPARTY_FUZZY", "Y",
+                f"Counterparty similarity {best_score:.2f} (normalised) with exact amount; "
+                f"corroboration: {corrob_text}. Requires analyst confirmation.",
+                [{"action": "REVIEW_FUZZY_CANDIDATE", "confidence": round(best_score, 3),
+                  "bank_id": best_cand.camt_id, "corroboration": corrob_reasons}],
+            ))
+            idx += 1
+            p4_consumed_psr_ids.add(psr.id)
 
     # ── P5 exception emission for everything still unmatched ───────────────────
     for psr in post_p6_residual:
