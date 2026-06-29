@@ -324,20 +324,16 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
         learned_match = learned_invoice_suffix_match(psr, camt_transactions, used, learned)
         if learned_match:
             lb, s = learned_match; used.add(lb.ntry_id); cases.append(build_case(idx, psr, lb, "Suggested Match - Learned Pattern", "LEARNED_INVOICE_SUFFIX", "1_TO_1", 90, "P8_LEARNED_INVOICE_SUFFIX", "Y", "Approved learned pattern suggested this match. Analyst confirmation is required.", [{"action":"CONFIRM_LEARNED_MATCH", **s}])); idx+=1; continue
-        cands=[b for b in by_amt.get(psr.amount,[]) if b.ntry_id not in used]
-        fuzzy=None; score=0
-        for b in cands:
-            sc=similarity(psr.counterparty,b.counterparty)
-            if sc>score: fuzzy,score=b,sc
-        if pattern_is_active(config, "P4") and fuzzy and score>=p4_threshold:
-            used.add(fuzzy.ntry_id); cases.append(build_case(idx, psr, fuzzy, "Suggested Match - Analyst Review", "COUNTERPARTY_FUZZY_AMOUNT", "1_TO_1", int(score*100), "P4_COUNTERPARTY_FUZZY", "Y", f"Counterparty similarity {score:.2f} with exact amount. Requires analyst confirmation.", [{"action":"REVIEW_FUZZY_CANDIDATE","confidence":round(score,3),"bank_id":fuzzy.camt_id}])); idx+=1; continue
-        p5_pending.append(psr)  # stage for P6 before emitting P5
+        # P4 (fuzzy 1-to-1) deliberately deferred to a post-P6 pass — see TASK-34.
+        # PSRs that belong to a P6 batch group must not be cannibalised by P4 fuzzy matching first.
+        p5_pending.append(psr)  # stage for P6 + post-P6 P4 pass before emitting P5
 
-    # ── P6 One-to-Many residual-pool pass ──────────────────────────────────────
+    # ── P6 One-to-Many residual-pool pass (runs BEFORE P4 — TASK-34) ──────────
+    p6_consumed_psr_ids: set = set()
+    p6_groups: List[Dict] = []
     if pattern_is_active(config, "P6") and p5_pending:
         residual_camts = [b for b in camt_transactions if b.ntry_id not in used]
         p6_groups = find_one_to_many_groups(p5_pending, residual_camts, config)
-        p6_consumed_psr_ids: set = set()
 
         for grp in p6_groups:
             grp_id     = f"GRP-{idx:06d}"
@@ -430,32 +426,54 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
 
             used.add(camt_b.ntry_id)
 
-        # Emit P5 for PSRs not consumed by P6
-        for psr in p5_pending:
-            if psr.id in p6_consumed_psr_ids:
-                continue
-            cases.append(build_case(idx, psr, None, "Uncleared / In-Transit Payment",
-                "NO_ACCEPTABLE_CANDIDATES", "UNMATCHED_PSR", 45, "P5_EXCEPTION_HANDLING", "Y",
-                "No acceptable bank candidate was found. Route to exception queue and monitor next CAMT cycle.",
-                [{"action": "ROUTE_TO_EXCEPTION_QUEUE", "confidence": 0.45,
-                  "expected_clear_days": settings.in_transit_days}]))
-            idx += 1
-    else:
-        for psr in p5_pending:
-            cases.append(build_case(idx, psr, None, "Uncleared / In-Transit Payment",
-                "NO_ACCEPTABLE_CANDIDATES", "UNMATCHED_PSR", 45, "P5_EXCEPTION_HANDLING", "Y",
-                "No acceptable bank candidate was found. Route to exception queue and monitor next CAMT cycle.",
-                [{"action": "ROUTE_TO_EXCEPTION_QUEUE", "confidence": 0.45,
-                  "expected_clear_days": settings.in_transit_days}]))
-            idx += 1
-    # ── End P6 pass ────────────────────────────────────────────────────────────
+    # Post-P6 residual: PSRs that did not land in a P6 group
+    post_p6_residual = [psr for psr in p5_pending if psr.id not in p6_consumed_psr_ids]
+
+    # ── P4 fuzzy 1-to-1 pass (runs AFTER P6 — TASK-34) ─────────────────────────
+    # Lifted out of the per-PSR loop so P6 has first refusal on residuals.
+    # P6 uses stronger evidence (subset-sum + counterparty + date window) and should
+    # outrank P4 (fuzzy name + amount only). Without this ordering, P4 cannibalises
+    # batch members whose individual amount coincidentally matches an unrelated CAMT.
+    p4_consumed_psr_ids: set = set()
+    if pattern_is_active(config, "P4") and post_p6_residual:
+        for psr in post_p6_residual:
+            cands = [b for b in by_amt.get(psr.amount, []) if b.ntry_id not in used]
+            fuzzy = None; score = 0.0
+            for b in cands:
+                sc = similarity(psr.counterparty, b.counterparty)
+                if sc > score:
+                    fuzzy, score = b, sc
+            if fuzzy and score >= p4_threshold:
+                used.add(fuzzy.ntry_id)
+                cases.append(build_case(
+                    idx, psr, fuzzy, "Suggested Match - Analyst Review",
+                    "COUNTERPARTY_FUZZY_AMOUNT", "1_TO_1", int(score * 100),
+                    "P4_COUNTERPARTY_FUZZY", "Y",
+                    f"Counterparty similarity {score:.2f} with exact amount. Requires analyst confirmation.",
+                    [{"action": "REVIEW_FUZZY_CANDIDATE", "confidence": round(score, 3),
+                      "bank_id": fuzzy.camt_id}],
+                ))
+                idx += 1
+                p4_consumed_psr_ids.add(psr.id)
+
+    # ── P5 exception emission for everything still unmatched ───────────────────
+    for psr in post_p6_residual:
+        if psr.id in p4_consumed_psr_ids:
+            continue
+        cases.append(build_case(idx, psr, None, "Uncleared / In-Transit Payment",
+            "NO_ACCEPTABLE_CANDIDATES", "UNMATCHED_PSR", 45, "P5_EXCEPTION_HANDLING", "Y",
+            "No acceptable bank candidate was found. Route to exception queue and monitor next CAMT cycle.",
+            [{"action": "ROUTE_TO_EXCEPTION_QUEUE", "confidence": 0.45,
+              "expected_clear_days": settings.in_transit_days}]))
+        idx += 1
+    # ── End P6 + P4 + P5 residual pass ─────────────────────────────────────────
 
     for bank in camt_transactions:
         if bank.ntry_id in used: continue
         cases.append(build_case(idx, None, bank, "Bank-only Item - Investigation", "BANK_ONLY_UNMATCHED", "UNMATCHED_BANK", 40, "P5_EXCEPTION_HANDLING", "Y", "Bank entry was present in CAMT but no matching expected payment was found in PSR.", [{"action":"INVESTIGATE_BANK_ONLY","confidence":0.40}])); idx+=1
     exceptions = sum(1 for c in cases if c.exception_flag == "Y")
-    logger.info("reconcile_transactions done: %d cases, %d exceptions (p6_groups=%d)",
-                len(cases), exceptions, len(p6_groups) if pattern_is_active(config, "P6") and p5_pending else 0)
+    logger.info("reconcile_transactions done: %d cases, %d exceptions (p6_groups=%d, p4_matches=%d)",
+                len(cases), exceptions, len(p6_groups), len(p4_consumed_psr_ids))
     return cases
 
 def case_to_db_tuple(case: ReconCase) -> tuple:
