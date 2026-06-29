@@ -197,7 +197,7 @@ TASK-38  P10 split settlement (1 PSR → N CAMT) — new branch `feat/p10-split-
 | [TASK-35](TASK-35-p6-strict-counterparty-partitioning.md) | P6 strict counterparty partitioning | Backend | TASK-34 | ✅ Complete |
 | [TASK-36](TASK-36-p6-bank-batch-marker-seeding.md) | P6 bank-side batch marker seeding | Backend | TASK-35 | ✅ Complete |
 | [TASK-37](TASK-37-tighten-p4-fuzzy-gate.md) | Tighten P4 fuzzy gate (corroboration required) | Backend | TASK-34, TASK-35 | ✅ Complete |
-| [TASK-38](TASK-38-p10-split-settlement.md) | P10 split settlement (1 PSR → N CAMT) | Backend | TASK-34 | 🔲 Not started |
+| [TASK-38](TASK-38-p10-split-settlement.md) | P10 split settlement (1 PSR → N CAMT) | Backend | TASK-34 | ✅ Complete |
 
 ### Suggested merge order
 
@@ -223,7 +223,7 @@ Rationale:
 
 ### Definition of Done — P10 split-settlement branch
 
-- [ ] TASK-38 complete and verified
+- [x] TASK-38 complete and verified
 - [ ] abc-recon regression: TX-9010 forms a `1_TO_N` group with NTRY-USD-008 + NTRY-USD-009 at confidence 92
 - [ ] CASE-000018, CASE-000020, CASE-000021 disappear from output (replaced by the group)
 - [ ] Frontend EvidenceDrawer sibling panel renders the split group without code changes
