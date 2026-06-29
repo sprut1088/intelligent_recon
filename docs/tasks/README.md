@@ -153,6 +153,14 @@ Dev A: TASK-26 → TASK-27 → TASK-28 → TASK-29 → TASK-32
 Dev B: TASK-30 (immediate) → wait for TASK-28+29 → TASK-31
 ```
 
+---
+## Task Summary — Results Workbench Export (`feat/rw-export`)
+
+| Task | Title | Type | Depends on | Status |
+|---|---|---|---|---|
+| [TASK-33](TASK-33-results-workbench-export.md) | Download reconciliation report from Results Workbench | Full-stack | — | ✅ Complete |
+
+---
 ### Definition of Done — P6 branch
 
 - [ ] All 7 tasks completed and individually verified

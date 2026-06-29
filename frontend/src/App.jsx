@@ -1352,7 +1352,7 @@ function AiTriageLoader() {
   );
 }
 
-function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, onResolve, loading, triageRunning }) {
+function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, onResolve, loading, triageRunning, batchName }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -1403,7 +1403,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
           <h1>Matched, proposed and unresolved records</h1>
           <p>Drill into match evidence, failed fields, confidence and next-best action.</p>
         </div>
-        <div className="toolbar" style={{ flexWrap: 'nowrap', gap: '0.5rem', alignItems: 'center' }}>
+        <div className="toolbar" style={{ flexWrap: 'nowrap', gap: '0.5rem', alignItems: 'flex-start' }}>
           {/* Filter group — allowed to shrink/wrap internally */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', flex: 1, minWidth: 0 }}>
             <input
@@ -1441,9 +1441,26 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
               /> Exceptions only
             </label>
           </div>
-          {/* AI triage — always anchored to the right, never wraps */}
-          <span style={{ borderLeft: '1px solid var(--border)', height: '1.5rem', flexShrink: 0 }} />
-          <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
+          {/* Action buttons — pinned to top row, never wrap */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+            <span style={{ borderLeft: '1px solid var(--border)', height: '1.5rem' }} />
+            <button
+              className="btn secondary"
+              style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+              onClick={() => {
+                const a = document.createElement('a');
+                const now = new Date();
+                const d = now.toISOString().slice(0, 10).replace(/-/g, '');
+                const t = now.toISOString().slice(11, 16).replace(':', '');
+                const safeName = (batchName || 'recon').replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'recon';
+                const filename = `${safeName}-recon-${d}-${t}`;
+                const url = api.exportCasesUrl({ search, status: selectedStatus, exceptionOnly, filename });
+                a.href = url;
+                a.click();
+              }}
+            >↓ Download Report</button>
+            <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
+          </div>
         </div>
       </div>
       <SummaryBar summary={summary} total={total} activeFilter={activeFilter} onFilter={onFilter} />
@@ -2092,7 +2109,9 @@ export default function App() {
     if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
-    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} />;
+    const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
+    const activeBatchName = activeBatch?.batch_name || activeBatch?.batch_id || 'recon';
+    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;

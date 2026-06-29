@@ -1,11 +1,9 @@
 from __future__ import annotations
-import logging
-import time
-import uuid
+import csv, io, logging, re, time, uuid
 from typing import Optional
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import JSONResponse
+from fastapi.responses import JSONResponse, StreamingResponse
 from .config import settings
 from .db import get_conn, init_db, json_dumps, row_to_dict, rows_to_dicts
 from .learning import approve_candidate, run_learning, seed_demo_learning_signals
@@ -320,6 +318,51 @@ def workspace_snapshot() -> dict:
 @app.get("/api/workspace/export/reconciliation-results")
 def workspace_export_results():
     return export_reconciliation_results()
+
+@app.get("/api/reconcile/cases/export")
+def export_cases(
+    status: Optional[str] = None,
+    exception_only: bool = False,
+    search: Optional[str] = None,
+    group_id: Optional[str] = None,
+    filename: Optional[str] = None,
+) -> StreamingResponse:
+    clauses=[]; params=[]
+    if group_id: clauses.append("group_id = ?"); params.append(group_id)
+    if status == 'ai_processed':
+        clauses.append("reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
+    elif status == 'in_transit':
+        clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
+    elif status == 'matched':
+        clauses.append("reconciliation_status IN ('Matched & Settled (Auto-Close)', 'Resolved Manually')")
+    elif status: clauses.append("reconciliation_status = ?"); params.append(status)
+    if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI Confirmed \u2014 No Match')")
+    if search:
+        clauses.append("(case_id LIKE ? OR psr_id LIKE ? OR camt_id LIKE ? OR reference LIKE ? OR invoice LIKE ? OR counterparty LIKE ?)")
+        term=f"%{search}%"; params.extend([term]*6)
+    where="WHERE "+" AND ".join(clauses) if clauses else ""
+    COLS = [
+        "case_id","psr_id","camt_id","match_type","group_id","group_role",
+        "reference","invoice","counterparty","internal_amount","bank_amount",
+        "variance","currency","value_date","booking_date",
+        "reconciliation_status","reason_code","match_confidence","rule_applied",
+        "exception_flag","aging_days","aging_bucket","explanation",
+    ]
+    with get_conn() as conn:
+        rows = rows_to_dicts(conn.execute(
+            f"SELECT * FROM recon_cases {where} ORDER BY case_id", params
+        ).fetchall())
+    buf = io.StringIO()
+    writer = csv.DictWriter(buf, fieldnames=COLS, extrasaction="ignore")
+    writer.writeheader()
+    writer.writerows(rows)
+    buf.seek(0)
+    safe_filename = re.sub(r'[^\w\-]', '_', filename or 'recon_report') + '.csv'
+    return StreamingResponse(
+        iter([buf.getvalue()]),
+        media_type="text/csv",
+        headers={"Content-Disposition": f"attachment; filename={safe_filename}"},
+    )
 
 @app.get("/api/reconcile/cases")
 def list_cases(status: Optional[str]=None, exception_only: bool=False, search: Optional[str]=None, group_id: Optional[str]=None, limit:int=Query(100,ge=1,le=1000), offset:int=Query(0,ge=0)) -> dict:
