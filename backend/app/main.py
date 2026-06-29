@@ -322,8 +322,9 @@ def workspace_export_results():
     return export_reconciliation_results()
 
 @app.get("/api/reconcile/cases")
-def list_cases(status: Optional[str]=None, exception_only: bool=False, search: Optional[str]=None, limit:int=Query(100,ge=1,le=1000), offset:int=Query(0,ge=0)) -> dict:
+def list_cases(status: Optional[str]=None, exception_only: bool=False, search: Optional[str]=None, group_id: Optional[str]=None, limit:int=Query(100,ge=1,le=1000), offset:int=Query(0,ge=0)) -> dict:
     clauses=[]; params=[]
+    if group_id: clauses.append("group_id = ?"); params.append(group_id)
     if status == 'ai_processed':
         clauses.append("reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
     elif status == 'in_transit':
@@ -418,25 +419,110 @@ def get_similar_cases(case_id: str, limit: int = Query(5, ge=1, le=20)) -> dict:
 @app.post("/api/reconcile/cases/{case_id}/resolve")
 def resolve_case(case_id: str, request: CaseResolveRequest) -> dict:
     with get_conn() as conn:
-        case=conn.execute("SELECT * FROM recon_cases WHERE case_id=?", (case_id,)).fetchone()
+        case = conn.execute("SELECT * FROM recon_cases WHERE case_id=?", (case_id,)).fetchone()
         if not case: raise HTTPException(status_code=404, detail="Case not found")
-        event_id=f"EVT-{uuid.uuid4().hex[:10].upper()}"; resolution_id=f"RES-{uuid.uuid4().hex[:10].upper()}"
-        selected_psr=request.selected_psr_ids or ([case["psr_id"]] if case["psr_id"] else [])
-        selected_bank=request.selected_bank_ids or ([case["camt_id"]] if case["camt_id"] else [])
-        # Override path: mark as not eligible for learning signal
+
+        # ── Group-awareness: auto-route member → anchor ──────────────────
+        routed_from_member = False
+        if case["group_role"] == "MEMBER":
+            anchor_row = conn.execute(
+                "SELECT * FROM recon_cases WHERE group_id = ? AND group_role = 'ANCHOR'",
+                (case["group_id"],),
+            ).fetchone()
+            if anchor_row:
+                routed_from_member = True
+                case = anchor_row
+
+        # ── Collect group siblings ────────────────────────────────────────
+        group_id       = case["group_id"]
+        group_case_ids = []
+        group_psr_ids  = []
+        if group_id:
+            sibling_rows = conn.execute(
+                "SELECT case_id, psr_id FROM recon_cases WHERE group_id = ?", (group_id,)
+            ).fetchall()
+            group_case_ids = [r["case_id"] for r in sibling_rows]
+            group_psr_ids  = [r["psr_id"]  for r in sibling_rows if r["psr_id"]]
+
+        anchor_case_id = case["case_id"]
+
+        # ── PSR / bank IDs for the resolution record ─────────────────────
+        selected_psr  = group_psr_ids if group_psr_ids else (
+            request.selected_psr_ids or ([case["psr_id"]] if case["psr_id"] else []))
+        selected_bank = request.selected_bank_ids or ([case["camt_id"]] if case["camt_id"] else [])
+
+        # ── Override + learning eligibility ──────────────────────────────
         is_override = bool(request.override_reason)
-        effective_learning_eligible = False if is_override else request.learning_eligible
+        is_p6_case  = (case["rule_applied"] or "").startswith("P6_")
+        effective_learning_eligible = False if (is_override or is_p6_case) else request.learning_eligible
         effective_comment = request.comment
         if is_override:
             note_part = f" Note: {request.override_note}" if request.override_note else ""
             effective_comment = f"Override reason: {request.override_reason}.{note_part}"
-        payload={"case_id":case_id,"resolution_type":request.resolution_type,"reason_code":request.reason_code,"selected_psr_ids":selected_psr,"selected_bank_ids":selected_bank,"fields_used":request.fields_used,"fields_ignored":request.fields_ignored,"accepted_variance":request.accepted_variance,"comment":effective_comment,"previous_engine_confidence":case["match_confidence"],"final_user_confidence":request.final_user_confidence,"override_reason":request.override_reason,"override_note":request.override_note}
-        conn.execute("INSERT INTO recon_user_action_event (event_id, case_id, event_type, user_id, event_payload_json) VALUES (?, ?, 'exception_resolved', 'prototype_user', ?)", (event_id,case_id,json_dumps(payload)))
-        conn.execute("INSERT INTO recon_manual_resolution (resolution_id, case_id, original_exception_type, final_resolution_type, reason_code, psr_transaction_ids_json, bank_transaction_ids_json, amount_variance, date_variance_days, fields_used_json, fields_ignored_json, user_comment, resolved_by, learning_eligible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prototype_user', ?)", (resolution_id,case_id,case["reconciliation_status"],request.resolution_type,request.reason_code,json_dumps(selected_psr),json_dumps(selected_bank),request.accepted_variance if request.accepted_variance is not None else case["variance"],case["aging_days"],json_dumps(request.fields_used),json_dumps(request.fields_ignored),effective_comment,1 if effective_learning_eligible else 0))
-        conn.execute("UPDATE recon_cases SET reconciliation_status='Resolved Manually', reason_code=?, exception_flag='N', explanation=?, updated_at=CURRENT_TIMESTAMP WHERE case_id=?", (request.reason_code,f"Resolved by analyst as {request.resolution_type}. Learning signal {'excluded (override)' if is_override else 'captured'}.",case_id))
-        mark_workflow_resolved(conn, case_id, updated_by="prototype_user", comment=f"Resolved as {request.resolution_type}")
+
+        # ── Write event ───────────────────────────────────────────────────
+        event_id      = f"EVT-{uuid.uuid4().hex[:10].upper()}"
+        resolution_id = f"RES-{uuid.uuid4().hex[:10].upper()}"
+        payload = {
+            "case_id": case_id, "resolved_via_anchor": anchor_case_id if routed_from_member else None,
+            "routed_from_member": routed_from_member, "group_id": group_id,
+            "resolution_type": request.resolution_type, "reason_code": request.reason_code,
+            "selected_psr_ids": selected_psr, "selected_bank_ids": selected_bank,
+            "fields_used": request.fields_used, "fields_ignored": request.fields_ignored,
+            "accepted_variance": request.accepted_variance, "comment": effective_comment,
+            "previous_engine_confidence": case["match_confidence"],
+            "final_user_confidence": request.final_user_confidence,
+            "override_reason": request.override_reason, "override_note": request.override_note,
+        }
+        conn.execute(
+            "INSERT INTO recon_user_action_event (event_id, case_id, event_type, user_id, event_payload_json) VALUES (?, ?, 'exception_resolved', 'prototype_user', ?)",
+            (event_id, anchor_case_id, json_dumps(payload)),
+        )
+
+        # ── One resolution row per group (keyed to anchor) ────────────────
+        learning_signal_note = (
+            "excluded (P6 engine suggestion)" if is_p6_case
+            else "excluded (override)" if is_override
+            else "captured"
+        )
+        conn.execute(
+            "INSERT INTO recon_manual_resolution (resolution_id, case_id, original_exception_type, final_resolution_type, reason_code, psr_transaction_ids_json, bank_transaction_ids_json, amount_variance, date_variance_days, fields_used_json, fields_ignored_json, user_comment, resolved_by, learning_eligible) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 'prototype_user', ?)",
+            (resolution_id, anchor_case_id, case["reconciliation_status"], request.resolution_type,
+             request.reason_code, json_dumps(selected_psr), json_dumps(selected_bank),
+             request.accepted_variance if request.accepted_variance is not None else case["variance"],
+             case["aging_days"], json_dumps(request.fields_used), json_dumps(request.fields_ignored),
+             effective_comment, 1 if effective_learning_eligible else 0),
+        )
+
+        # ── Atomically update all cases in the group ──────────────────────
+        resolution_expl = f"Resolved by analyst as {request.resolution_type}. Learning signal {learning_signal_note}."
+        if group_case_ids:
+            placeholders = ",".join("?" * len(group_case_ids))
+            conn.execute(
+                f"UPDATE recon_cases SET reconciliation_status='Resolved Manually', reason_code=?, exception_flag='N', explanation=?, updated_at=CURRENT_TIMESTAMP WHERE case_id IN ({placeholders})",
+                (request.reason_code, resolution_expl, *group_case_ids),
+            )
+            mark_workflow_resolved(conn, anchor_case_id, updated_by="prototype_user",
+                                   comment=f"Resolved as {request.resolution_type}")
+        else:
+            conn.execute(
+                "UPDATE recon_cases SET reconciliation_status='Resolved Manually', reason_code=?, exception_flag='N', explanation=?, updated_at=CURRENT_TIMESTAMP WHERE case_id=?",
+                (request.reason_code, resolution_expl, anchor_case_id),
+            )
+            mark_workflow_resolved(conn, anchor_case_id, updated_by="prototype_user",
+                                   comment=f"Resolved as {request.resolution_type}")
+
         conn.commit()
-    return {"case_id":case_id,"event_id":event_id,"resolution_id":resolution_id,"status":"resolved"}
+
+    return {
+        "case_id":             case_id,
+        "event_id":            event_id,
+        "resolution_id":       resolution_id,
+        "status":              "resolved",
+        "group_id":            group_id,
+        "resolved_via_anchor": anchor_case_id if routed_from_member else None,
+        "member_case_ids":     [c for c in group_case_ids if c != anchor_case_id] if group_case_ids else [],
+    }
 
 @app.post("/api/reconcile/events")
 def capture_event(request: UserEventRequest) -> dict:

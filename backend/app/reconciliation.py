@@ -2,6 +2,7 @@ from __future__ import annotations
 import logging
 from dataclasses import dataclass, asdict
 from datetime import date
+from itertools import combinations as _combinations
 from rapidfuzz import fuzz as _rfuzz
 from typing import Dict, List, Optional, Sequence, Tuple
 import json
@@ -16,6 +17,8 @@ class ReconCase:
     internal_amount: Optional[float]; bank_amount: Optional[float]; variance: Optional[float]; currency: str; value_date: str; booking_date: str
     reconciliation_status: str; reason_code: str; match_type: str; match_confidence: int; aging_days: int; aging_bucket: str; rule_applied: str; exception_flag: str
     explanation: str; feature_snapshot: Dict; suggestions: List[Dict]
+    group_id: Optional[str] = None
+    group_role: Optional[str] = None
 
 def amount_equal(left: Optional[float], right: Optional[float]) -> bool:
     return left is not None and right is not None and abs(left - right) <= settings.exact_amount_tolerance
@@ -137,9 +140,152 @@ def learned_invoice_suffix_match(psr: PsrTransaction, banks: Sequence[CamtTransa
             return bank, {"pattern": "P8 Invoice Suffix Normalisation", "score": score, "reason": "Approved learned pattern matched invoice suffix + amount + counterparty similarity."}
     return None
 
+# ── P6 One-to-Many helpers ─────────────────────────────────────────────────────
+
+def _find_subset_matches(
+    psrs: List[PsrTransaction],
+    target: float,
+    max_size: int,
+    tolerance: float,
+) -> List[List[PsrTransaction]]:
+    """Return up to 2 sorted PSR subsets whose amounts sum to target within tolerance.
+    Sorted deterministically: earliest execution_date, tiebreak psr_id asc.
+    Returns at most 2 results so callers can detect ambiguity without searching further."""
+    results: List[List[PsrTransaction]] = []
+    for size in range(2, min(max_size, len(psrs)) + 1):
+        for combo in _combinations(psrs, size):
+            if abs(sum(p.amount for p in combo) - target) <= tolerance:
+                sorted_combo = sorted(combo, key=lambda p: (p.execution_date or "", p.id))
+                results.append(list(sorted_combo))
+                if len(results) >= 2:
+                    return results  # enough to detect ambiguity — stop early
+        if results:
+            return results  # found matches at this size; don't try larger subsets
+    return results
+
+
+def _record_group(
+    groups: List[Dict],
+    used_psr_ids: set,
+    used_camt_ids: set,
+    camt: CamtTransaction,
+    chosen: List[PsrTransaction],
+    alternative: Optional[List[PsrTransaction]],
+    confidence: int,
+    rule_applied: str,
+    reason_code: str,
+    explanation: str,
+    group_variance: float,
+    ambiguous: bool,
+) -> None:
+    """Append a group descriptor and mark its PSRs/CAMT as consumed."""
+    used_camt_ids.add(camt.ntry_id)
+    for p in chosen:
+        used_psr_ids.add(p.id)
+    groups.append({
+        "camt":             camt,
+        "psrs":             chosen,
+        "anchor_psr":       chosen[0],
+        "confidence":       confidence,
+        "rule_applied":     rule_applied,
+        "reason_code":      reason_code,
+        "explanation":      explanation,
+        "ambiguous":        ambiguous,
+        "group_variance":   group_variance,
+        "alternative_psrs": alternative,
+    })
+
+
+def find_one_to_many_groups(
+    residual_psrs: List[PsrTransaction],
+    residual_camts: List[CamtTransaction],
+    config: Dict[str, Dict],
+) -> List[Dict]:
+    """Find groups of PSR transactions whose amounts sum to a single CAMT entry.
+
+    Returns a list of group dicts with keys:
+        camt, psrs, anchor_psr, confidence, rule_applied, reason_code,
+        explanation, ambiguous, group_variance, alternative_psrs
+    """
+    if not pattern_is_active(config, "P6"):
+        return []
+
+    cp_threshold = float(pattern_rule_value(config, "P6", "counterparty_threshold", 0.85))
+    max_grp_size = int(pattern_rule_value(config, "P6", "max_group_size", 6))
+    date_window  = int(pattern_rule_value(config, "P6", "date_window_days", 3))
+    var_subpass  = bool(pattern_rule_value(config, "P6", "variance_subpass_enabled", True))
+    var_max_size = int(pattern_rule_value(config, "P6", "variance_subpass_max_group_size", 3))
+
+    groups: List[Dict] = []
+    used_psr_ids: set = set()
+    used_camt_ids: set = set()
+
+    for camt in residual_camts:
+        if camt.ntry_id in used_camt_ids or camt.amount is None:
+            continue
+
+        # Step 1: narrow PSR pool by direction + counterparty similarity + date window
+        candidates = [
+            p for p in residual_psrs
+            if p.id not in used_psr_ids
+            and p.direction == camt.direction
+            and similarity(p.counterparty, camt.counterparty) >= cp_threshold
+            and safe_date_diff(p.execution_date or "", camt.booking_date or "") <= date_window
+        ]
+        if len(candidates) < 2:
+            continue
+
+        # Step 2: exact subset-sum
+        exact_matches = _find_subset_matches(
+            candidates, camt.amount, max_grp_size, settings.exact_amount_tolerance
+        )
+        if exact_matches:
+            chosen    = exact_matches[0]
+            ambiguous = len(exact_matches) > 1
+            alt       = exact_matches[1] if ambiguous else None
+            conf      = 72 if ambiguous else 88
+            rule      = "P6_BANK_BATCH_GROUPING_AMBIGUOUS" if ambiguous else "P6_BANK_BATCH_GROUPING"
+            reason    = "BANK_BATCH_GROUPING_AMBIGUOUS" if ambiguous else "BANK_BATCH_GROUPING"
+            psr_ids_str = ", ".join(p.id for p in chosen)
+            expl = (
+                f"{'Ambiguous: multiple valid groupings. Selected by earliest date. ' if ambiguous else ''}"
+                f"{len(chosen)} PSR transactions ({psr_ids_str}) sum to "
+                f"{sum(p.amount for p in chosen):.2f} = CAMT {camt.ntry_id} ({camt.amount:.2f}). "
+                f"Counterparty similarity confirmed."
+            )
+            if ambiguous and alt:
+                expl += f" Alternative grouping: {', '.join(p.id for p in alt)}."
+            _record_group(groups, used_psr_ids, used_camt_ids, camt, chosen, alt,
+                          conf, rule, reason, expl, 0.0, ambiguous)
+            continue
+
+        # Step 3: variance sub-pass (small groups only)
+        if var_subpass and len(candidates) >= 2:
+            var_matches = _find_subset_matches(
+                candidates, camt.amount, var_max_size, settings.minor_variance_tolerance
+            )
+            if var_matches:
+                chosen      = var_matches[0]
+                group_sum   = sum(p.amount for p in chosen)
+                grp_var     = round(group_sum - camt.amount, 2)
+                psr_ids_str = ", ".join(p.id for p in chosen)
+                expl = (
+                    f"{len(chosen)} PSR transactions ({psr_ids_str}) sum to "
+                    f"{group_sum:.2f} vs CAMT {camt.ntry_id} ({camt.amount:.2f}). "
+                    f"Variance {grp_var:+.2f} is within minor tolerance. "
+                    f"Post to short/over ledger."
+                )
+                _record_group(groups, used_psr_ids, used_camt_ids, camt, chosen, None,
+                              78, "P6_BATCH_MINOR_VARIANCE", "AMOUNT_VARIANCE_MINOR_BATCH",
+                              expl, grp_var, False)
+
+    return groups
+
+# ── End P6 helpers ─────────────────────────────────────────────────────────────
+
 def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_transactions: Sequence[CamtTransaction], pattern_registry_rows: Sequence[Dict]) -> List[ReconCase]:
     logger.info("reconcile_transactions: psr=%d camt=%d patterns=%d", len(psr_transactions), len(camt_transactions), len(pattern_registry_rows))
-    cases=[]; used=set(); idx=1
+    cases=[]; used=set(); idx=1; p5_pending: List[PsrTransaction]=[]
     config = pattern_config(pattern_registry_rows)
     p4_threshold = float(pattern_rule_value(config, "P4", "threshold", 0.85))
     p7_minor_tolerance = float(pattern_rule_value(config, "P7", "minor_tolerance", settings.minor_variance_tolerance))
@@ -185,14 +331,133 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
             if sc>score: fuzzy,score=b,sc
         if pattern_is_active(config, "P4") and fuzzy and score>=p4_threshold:
             used.add(fuzzy.ntry_id); cases.append(build_case(idx, psr, fuzzy, "Suggested Match - Analyst Review", "COUNTERPARTY_FUZZY_AMOUNT", "1_TO_1", int(score*100), "P4_COUNTERPARTY_FUZZY", "Y", f"Counterparty similarity {score:.2f} with exact amount. Requires analyst confirmation.", [{"action":"REVIEW_FUZZY_CANDIDATE","confidence":round(score,3),"bank_id":fuzzy.camt_id}])); idx+=1; continue
-        cases.append(build_case(idx, psr, None, "Uncleared / In-Transit Payment", "NO_ACCEPTABLE_CANDIDATES", "UNMATCHED_PSR", 45, "P5_EXCEPTION_HANDLING", "Y", "No acceptable bank candidate was found. Route to exception queue and monitor next CAMT cycle.", [{"action":"ROUTE_TO_EXCEPTION_QUEUE","confidence":0.45,"expected_clear_days":settings.in_transit_days}])); idx+=1
+        p5_pending.append(psr)  # stage for P6 before emitting P5
+
+    # ── P6 One-to-Many residual-pool pass ──────────────────────────────────────
+    if pattern_is_active(config, "P6") and p5_pending:
+        residual_camts = [b for b in camt_transactions if b.ntry_id not in used]
+        p6_groups = find_one_to_many_groups(p5_pending, residual_camts, config)
+        p6_consumed_psr_ids: set = set()
+
+        for grp in p6_groups:
+            grp_id     = f"GRP-{idx:06d}"
+            camt_b     = grp["camt"]
+            psrs_g     = grp["psrs"]   # anchor-first (sorted by date/id)
+            conf_g     = grp["confidence"]
+            rule_g     = grp["rule_applied"]
+            reason_g   = grp["reason_code"]
+            expl_g     = grp["explanation"]
+            grp_var    = grp["group_variance"]
+            group_sum  = round(sum(p.amount for p in psrs_g), 2)
+
+            if rule_g == "P6_BATCH_MINOR_VARIANCE":
+                status_g = "Post to Short or Over Ledger"
+            elif rule_g == "P6_BANK_BATCH_GROUPING_AMBIGUOUS":
+                status_g = "Suggested Match - Analyst Review"
+            else:
+                status_g = "Suggested Match - Group Settlement"
+
+            anchor_case_id = f"CASE-{idx:06d}"
+
+            for pos, psr_g in enumerate(psrs_g):
+                is_anchor  = (pos == 0)
+                this_case_id = f"CASE-{idx:06d}"
+                days_g     = safe_date_diff(psr_g.execution_date or "", camt_b.booking_date or "")
+
+                if is_anchor:
+                    feat = {
+                        "group_id": grp_id, "group_role": "ANCHOR",
+                        "n_psrs_in_group": len(psrs_g), "sum_of_psr_amounts": group_sum,
+                        "counterparty_consensus_similarity": round(
+                            sum(similarity(p.counterparty, camt_b.counterparty) for p in psrs_g) / len(psrs_g), 4),
+                        "max_date_spread_days": max(
+                            safe_date_diff(p.execution_date or "", camt_b.booking_date or "") for p in psrs_g),
+                        "is_ambiguous": grp["ambiguous"], "group_variance": grp_var,
+                        "score_breakdown": score_breakdown(
+                            {"amount_exact": grp_var == 0.0, "currency_match": True,
+                             "counterparty_similarity": 0.9, "end_to_end_id_exact": False,
+                             "pmt_ref_exact": False, "invoice_exact": False,
+                             "invoice_suffix_match": False, "amount_variance": grp_var},
+                            rule_g, conf_g),
+                    }
+                    if grp["ambiguous"] and grp["alternative_psrs"]:
+                        feat["alternative_group_psr_ids"] = [p.id for p in grp["alternative_psrs"]]
+                    sugg_g = [{"action": "CONFIRM_GROUP_MATCH", "confidence": conf_g / 100.0,
+                               "group_id": grp_id, "group_psr_ids": [p.id for p in psrs_g],
+                               "camt_id": camt_b.camt_id}]
+                    rc = ReconCase(
+                        case_id=this_case_id, match_key=camt_b.ntry_id,
+                        psr_id=psr_g.id, camt_id=camt_b.camt_id,
+                        reference=psr_g.reference, invoice=psr_g.invoice,
+                        counterparty=psr_g.counterparty,
+                        internal_amount=group_sum,  # group sum on anchor
+                        bank_amount=camt_b.amount,
+                        variance=round(group_sum - (camt_b.amount or 0), 2),
+                        currency=psr_g.currency,
+                        value_date=psr_g.execution_date or "", booking_date=camt_b.booking_date or "",
+                        reconciliation_status=status_g, reason_code=reason_g,
+                        match_type="N_TO_1", match_confidence=conf_g,
+                        aging_days=days_g, aging_bucket=aging_bucket(days_g),
+                        rule_applied=rule_g, exception_flag="Y",
+                        explanation=expl_g, feature_snapshot=feat, suggestions=sugg_g,
+                        group_id=grp_id, group_role="ANCHOR",
+                    )
+                else:
+                    feat = {"group_member": True, "group_id": grp_id, "anchor_case_id": anchor_case_id}
+                    mem_expl = (f"Part of group {grp_id} ({len(psrs_g)} PSRs sum to "
+                                f"{group_sum:.2f} = CAMT {camt_b.ntry_id} {camt_b.amount:.2f}). "
+                                f"See anchor case {anchor_case_id}.")
+                    rc = ReconCase(
+                        case_id=this_case_id, match_key=camt_b.ntry_id,
+                        psr_id=psr_g.id, camt_id=camt_b.camt_id,
+                        reference=psr_g.reference, invoice=psr_g.invoice,
+                        counterparty=psr_g.counterparty,
+                        internal_amount=psr_g.amount,  # individual amount on members
+                        bank_amount=None, variance=None,
+                        currency=psr_g.currency,
+                        value_date=psr_g.execution_date or "", booking_date=camt_b.booking_date or "",
+                        reconciliation_status=status_g, reason_code=reason_g,
+                        match_type="N_TO_1", match_confidence=conf_g,
+                        aging_days=days_g, aging_bucket=aging_bucket(days_g),
+                        rule_applied=rule_g, exception_flag="Y",
+                        explanation=mem_expl, feature_snapshot=feat, suggestions=[],
+                        group_id=grp_id, group_role="MEMBER",
+                    )
+
+                cases.append(rc)
+                idx += 1
+                p6_consumed_psr_ids.add(psr_g.id)
+
+            used.add(camt_b.ntry_id)
+
+        # Emit P5 for PSRs not consumed by P6
+        for psr in p5_pending:
+            if psr.id in p6_consumed_psr_ids:
+                continue
+            cases.append(build_case(idx, psr, None, "Uncleared / In-Transit Payment",
+                "NO_ACCEPTABLE_CANDIDATES", "UNMATCHED_PSR", 45, "P5_EXCEPTION_HANDLING", "Y",
+                "No acceptable bank candidate was found. Route to exception queue and monitor next CAMT cycle.",
+                [{"action": "ROUTE_TO_EXCEPTION_QUEUE", "confidence": 0.45,
+                  "expected_clear_days": settings.in_transit_days}]))
+            idx += 1
+    else:
+        for psr in p5_pending:
+            cases.append(build_case(idx, psr, None, "Uncleared / In-Transit Payment",
+                "NO_ACCEPTABLE_CANDIDATES", "UNMATCHED_PSR", 45, "P5_EXCEPTION_HANDLING", "Y",
+                "No acceptable bank candidate was found. Route to exception queue and monitor next CAMT cycle.",
+                [{"action": "ROUTE_TO_EXCEPTION_QUEUE", "confidence": 0.45,
+                  "expected_clear_days": settings.in_transit_days}]))
+            idx += 1
+    # ── End P6 pass ────────────────────────────────────────────────────────────
+
     for bank in camt_transactions:
         if bank.ntry_id in used: continue
         cases.append(build_case(idx, None, bank, "Bank-only Item - Investigation", "BANK_ONLY_UNMATCHED", "UNMATCHED_BANK", 40, "P5_EXCEPTION_HANDLING", "Y", "Bank entry was present in CAMT but no matching expected payment was found in PSR.", [{"action":"INVESTIGATE_BANK_ONLY","confidence":0.40}])); idx+=1
     exceptions = sum(1 for c in cases if c.exception_flag == "Y")
-    logger.info("reconcile_transactions done: %d cases, %d exceptions", len(cases), exceptions)
+    logger.info("reconcile_transactions done: %d cases, %d exceptions (p6_groups=%d)",
+                len(cases), exceptions, len(p6_groups) if pattern_is_active(config, "P6") and p5_pending else 0)
     return cases
 
 def case_to_db_tuple(case: ReconCase) -> tuple:
     p=asdict(case)
-    return (p["case_id"],p["match_key"],p["psr_id"],p["camt_id"],p["reference"],p["invoice"],p["counterparty"],p["internal_amount"],p["bank_amount"],p["variance"],p["currency"],p["value_date"],p["booking_date"],p["reconciliation_status"],p["reason_code"],p["match_type"],p["match_confidence"],p["aging_days"],p["aging_bucket"],p["rule_applied"],p["exception_flag"],p["explanation"],json.dumps(p["feature_snapshot"]),json.dumps(p["suggestions"]))
+    return (p["case_id"],p["match_key"],p["psr_id"],p["camt_id"],p["reference"],p["invoice"],p["counterparty"],p["internal_amount"],p["bank_amount"],p["variance"],p["currency"],p["value_date"],p["booking_date"],p["reconciliation_status"],p["reason_code"],p["match_type"],p["match_confidence"],p["aging_days"],p["aging_bucket"],p["rule_applied"],p["exception_flag"],p["explanation"],json.dumps(p["feature_snapshot"]),json.dumps(p["suggestions"]),p["group_id"],p["group_role"])

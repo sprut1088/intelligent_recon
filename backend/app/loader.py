@@ -16,8 +16,8 @@ INSERT INTO recon_cases
 (case_id, match_key, psr_id, camt_id, reference, invoice, counterparty, internal_amount, bank_amount,
  variance, currency, value_date, booking_date, reconciliation_status, reason_code, match_type,
  match_confidence, aging_days, aging_bucket, rule_applied, exception_flag, explanation,
- feature_snapshot_json, suggestions_json)
-VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+ feature_snapshot_json, suggestions_json, group_id, group_role)
+VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 """
 
 def load_samples_and_reconcile(amount_divisor: Optional[float] = None, reset: bool = True) -> Dict:

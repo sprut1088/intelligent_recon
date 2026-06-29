@@ -87,6 +87,8 @@ export const api = {
     if (status) qs.set('status', status);
     return mapCaseList(await request(`/api/reconcile/cases?${qs.toString()}`));
   },
+  groupCases: async (groupId) =>
+    mapCaseList(await request(`/api/reconcile/cases?${new URLSearchParams({ group_id: groupId, limit: 20 }).toString()}`)),
   caseDetail: async (caseId) => {
     const data = await request(`/api/reconcile/cases/${caseId}`);
     return { ...data, case: mapCase(data.case || {}) };

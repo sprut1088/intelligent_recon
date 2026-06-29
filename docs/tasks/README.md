@@ -131,13 +131,13 @@ TASK-30  P10 honesty fix (rename candidate label + log line)
 
 | Task | Title | Type | Depends on | Status |
 |---|---|---|---|---|
-| [TASK-26](TASK-26-p6-schema-and-dataclass.md) | DB schema + `ReconCase` dataclass + P6 seed | Backend | — | 🔲 Not started |
-| [TASK-27](TASK-27-p6-core-algorithm.md) | `find_one_to_many_groups()` core algorithm | Backend | TASK-26 | 🔲 Not started |
-| [TASK-28](TASK-28-p6-wire-into-cascade.md) | Wire P6 into `reconcile_transactions()` cascade | Backend | TASK-27 | 🔲 Not started |
-| [TASK-29](TASK-29-p6-group-aware-resolve.md) | Group-aware resolve endpoint | Backend | TASK-28 | 🔲 Not started |
-| [TASK-30](TASK-30-p10-honesty-fix.md) | P10 honesty fix (rename + log line) | Backend | — | 🔲 Not started |
-| [TASK-31](TASK-31-p6-frontend-group-ui.md) | Frontend: group badge + EvidenceDrawer sibling panel | Frontend | TASK-28, TASK-29 | 🔲 Not started |
-| [TASK-32](TASK-32-p6-tests.md) | Tests: P6 fixtures and 6 test scenarios | Backend | TASK-28, TASK-29 | 🔲 Not started |
+| [TASK-26](TASK-26-p6-schema-and-dataclass.md) | DB schema + `ReconCase` dataclass + P6 seed | Backend | — | ✅ Complete |
+| [TASK-27](TASK-27-p6-core-algorithm.md) | `find_one_to_many_groups()` core algorithm | Backend | TASK-26 | ✅ Complete |
+| [TASK-28](TASK-28-p6-wire-into-cascade.md) | Wire P6 into `reconcile_transactions()` cascade | Backend | TASK-27 | ✅ Complete |
+| [TASK-29](TASK-29-p6-group-aware-resolve.md) | Group-aware resolve endpoint | Backend | TASK-28 | ✅ Complete |
+| [TASK-30](TASK-30-p10-honesty-fix.md) | P10 honesty fix (rename + log line) | Backend | — | ✅ Complete |
+| [TASK-31](TASK-31-p6-frontend-group-ui.md) | Frontend: group badge + EvidenceDrawer sibling panel | Frontend | TASK-28, TASK-29 | ✅ Complete |
+| [TASK-32](TASK-32-p6-tests.md) | Tests: P6 fixtures and 6 test scenarios | Backend | TASK-28, TASK-29 | ✅ Complete |
 
 ### Recommended pickup order
 

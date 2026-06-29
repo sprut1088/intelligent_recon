@@ -11,7 +11,7 @@ logger = logging.getLogger(__name__)
 def pattern_name_for(reason_code: str, fields_used: List[str]) -> str:
     if reason_code == "REMITTANCE_FORMAT_MISMATCH" or "invoice_suffix" in fields_used: return "Invoice Suffix Normalisation Match"
     if reason_code == "COUNTERPARTY_ALIAS" or "counterparty_alias" in fields_used: return "Counterparty Alias Learned Match"
-    if reason_code == "BANK_BATCH_AGGREGATION" or "one_to_many" in fields_used: return "Bank Batch Settlement Grouping"
+    if reason_code == "BANK_BATCH_AGGREGATION" or "one_to_many" in fields_used: return "Bank Batch Settlement — Loosen P6 Parameters"
     if reason_code == "AMOUNT_VARIANCE_MINOR": return "Minor Amount Variance Auto-Categorisation"
     return f"Learned {reason_code.replace('_', ' ').title()} Pattern"
 
@@ -19,7 +19,7 @@ def proposed_rule_for(pattern_name: str, reason_code: str, fields_used: List[str
     if "Invoice Suffix" in pattern_name:
         return {"pattern_key": "P8_LEARNED_INVOICE_SUFFIX", "when": "seed patterns fail and exception is NO_ACCEPTABLE_CANDIDATES", "logic": ["extract invoice numeric suffix from PSR invoice", "extract invoice numeric suffix from CAMT remittance invoice", "match when suffix + amount + currency match", "use counterparty similarity as confidence booster"], "required_fields": ["invoice_suffix", "amount", "currency"], "confidence_policy": "suggestion_only_until_backtest_precision_exceeds_threshold"}
     if "Counterparty Alias" in pattern_name: return {"pattern_key": "P9_COUNTERPARTY_ALIAS", "logic": ["learn counterparty aliases from approved manual resolutions", "apply alias map before fuzzy scoring"], "required_fields": ["counterparty", "amount", "currency"]}
-    if "Bank Batch" in pattern_name: return {"pattern_key": "P10_BANK_BATCH_GROUPING", "logic": ["group PSR payments by booking date/reference family", "compare sum to CAMT bank entry amount"], "required_fields": ["amount_sum", "date", "reference_family"]}
+    if "Bank Batch Settlement" in pattern_name: return {"pattern_key": "P10_BANK_BATCH_GROUPING", "intent": "Loosen P6 one-to-many matching parameters", "mechanism": "Reduce P6 counterparty_threshold or raise max_group_size in pattern_rule_json", "current_p6_defaults": {"counterparty_threshold": 0.85, "max_group_size": 6, "date_window_days": 3}, "proposed_relaxation": "Lower counterparty_threshold toward 0.75 based on confirmed alias patterns", "execution_status": "NOT_WIRED — approving this candidate records the intent but does not automatically adjust P6 parameters.", "required_fields": ["amount_sum", "date", "reference_family"]}
     return {"pattern_key": "PX_LEARNED_EXCEPTION_CATEGORY", "logic": ["classify future exceptions using repeated analyst reason codes"], "required_fields": fields_used or ["reason_code"], "source_reason_code": reason_code}
 
 def run_learning() -> Dict:
@@ -53,6 +53,8 @@ def approve_candidate(candidate_id: str, approved_by: str, execution_mode: str, 
         pattern_id = "P8" if "Invoice Suffix" in cand["pattern_name"] else f"PL-{candidate_id[-6:]}"
         conn.execute("INSERT OR REPLACE INTO recon_pattern_registry (pattern_id, pattern_name, pattern_type, pattern_rule_json, status, execution_mode, confidence_threshold, approved_by) VALUES (?, ?, 'LEARNED', ?, 'ACTIVE', ?, ?, ?)", (pattern_id, cand["pattern_name"], cand["proposed_rule_json"], execution_mode, confidence_threshold, approved_by))
         conn.execute("UPDATE recon_pattern_candidate SET status='APPROVED', updated_at=CURRENT_TIMESTAMP WHERE candidate_pattern_id=?", (candidate_id,)); conn.commit()
+        if "Bank Batch Settlement" in cand["pattern_name"]:
+            logger.info("P10 candidate '%s' approved and recorded in registry (pattern_id=%s). NOTE: does not automatically adjust P6 parameters — see TASK-30 / Gap G7.", cand["pattern_name"], pattern_id)
     return {"pattern_id": pattern_id, "candidate_pattern_id": candidate_id, "status": "APPROVED"}
 
 def seed_demo_learning_signals() -> Dict:

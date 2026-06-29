@@ -6,7 +6,7 @@ from .config import settings
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS psr_transactions (id TEXT PRIMARY KEY, execution_date TEXT, reference TEXT, amount REAL, direction TEXT, invoice TEXT, counterparty TEXT, currency TEXT, source_line INTEGER, raw_line TEXT);
 CREATE TABLE IF NOT EXISTS camt_transactions (ntry_id TEXT PRIMARY KEY, camt_id TEXT, end_to_end_id TEXT, amount REAL, direction TEXT, booking_date TEXT, value_date TEXT, currency TEXT, remittance TEXT, counterparty TEXT, pmt_ref TEXT, invoice TEXT, raw_json TEXT);
-CREATE TABLE IF NOT EXISTS recon_cases (case_id TEXT PRIMARY KEY, match_key TEXT, psr_id TEXT, camt_id TEXT, reference TEXT, invoice TEXT, counterparty TEXT, internal_amount REAL, bank_amount REAL, variance REAL, currency TEXT, value_date TEXT, booking_date TEXT, reconciliation_status TEXT, reason_code TEXT, match_type TEXT, match_confidence INTEGER, aging_days INTEGER, aging_bucket TEXT, rule_applied TEXT, exception_flag TEXT, explanation TEXT, feature_snapshot_json TEXT, suggestions_json TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS recon_cases (case_id TEXT PRIMARY KEY, match_key TEXT, psr_id TEXT, camt_id TEXT, reference TEXT, invoice TEXT, counterparty TEXT, internal_amount REAL, bank_amount REAL, variance REAL, currency TEXT, value_date TEXT, booking_date TEXT, reconciliation_status TEXT, reason_code TEXT, match_type TEXT, match_confidence INTEGER, aging_days INTEGER, aging_bucket TEXT, rule_applied TEXT, exception_flag TEXT, explanation TEXT, feature_snapshot_json TEXT, suggestions_json TEXT, group_id TEXT, group_role TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS recon_user_action_event (event_id TEXT PRIMARY KEY, case_id TEXT, event_type TEXT, user_id TEXT, event_timestamp TEXT DEFAULT CURRENT_TIMESTAMP, event_payload_json TEXT);
 CREATE TABLE IF NOT EXISTS recon_manual_resolution (resolution_id TEXT PRIMARY KEY, case_id TEXT, original_exception_type TEXT, final_resolution_type TEXT, reason_code TEXT, psr_transaction_ids_json TEXT, bank_transaction_ids_json TEXT, amount_variance REAL, date_variance_days INTEGER, fields_used_json TEXT, fields_ignored_json TEXT, user_comment TEXT, resolved_by TEXT, resolved_at TEXT DEFAULT CURRENT_TIMESTAMP, approved_by TEXT, reversed_flag INTEGER DEFAULT 0, learning_eligible INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS exception_workflow (case_id TEXT PRIMARY KEY, workflow_status TEXT DEFAULT 'NEW', owner TEXT DEFAULT 'Unassigned', priority TEXT DEFAULT 'Medium', sla_due_at TEXT, assigned_at TEXT, assigned_by TEXT, comments_json TEXT DEFAULT '[]', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -24,7 +24,7 @@ DEFAULT_PATTERNS = [
     ("P3", "Invoice Extracted from Ustrd", "SEED", {"fields": ["invoice", "amount"], "mode": "AUTO"}, "ACTIVE", "AUTO_CLOSE", 0.90),
     ("P4", "Counterparty Fuzzy Match", "SEED", {"fields": ["counterparty", "amount"], "threshold": 0.85}, "ACTIVE", "SUGGESTION", 0.80),
     ("P5", "Exception Handling / Unmatch", "SEED", {"route_to": "manual_review"}, "ACTIVE", "MANUAL", 0.00),
-    ("P6", "One-to-Many Bank Settlement", "SEED", {"fields": ["pmt_ref", "invoice", "amount_sum"]}, "ACTIVE", "SUGGESTION", 0.85),
+    ("P6", "One-to-Many Bank Settlement", "SEED", {"fields": ["pmt_ref", "invoice", "amount_sum"], "counterparty_threshold": 0.85, "max_group_size": 6, "date_window_days": 3, "variance_subpass_enabled": True, "variance_subpass_max_group_size": 3}, "ACTIVE", "SUGGESTION", 0.85),
     ("P7", "Amount Variance", "SEED", {"fields": ["identity", "amount_variance"], "minor_tolerance": settings.minor_variance_tolerance}, "ACTIVE", "LEDGER_OR_IN_TRANSIT", 0.75),
 ]
 
@@ -55,6 +55,19 @@ def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
         seed_default_patterns(conn)
+        # Idempotent column migrations — safe to run on existing DBs
+        for col, col_def in [("group_id", "TEXT"), ("group_role", "TEXT")]:
+            try:
+                conn.execute(f"ALTER TABLE recon_cases ADD COLUMN {col} {col_def}")
+            except Exception:
+                pass  # column already exists
+        # Ensure P6 seed has the full rule knobs (UPDATE existing rows with the old sparse rule)
+        for pattern_id, _, _, rule, _, _, _ in DEFAULT_PATTERNS:
+            if pattern_id == "P6":
+                conn.execute(
+                    "UPDATE recon_pattern_registry SET pattern_rule_json = ? WHERE pattern_id = 'P6'",
+                    (json.dumps(rule),),
+                )
         conn.commit()
 
 def reset_runtime_tables(conn: sqlite3.Connection) -> None:
