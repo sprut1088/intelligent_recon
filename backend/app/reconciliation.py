@@ -107,6 +107,25 @@ def shared_substring(a: Optional[str], b: Optional[str], min_len: int = 5) -> bo
     return m.size >= min_len
 
 
+_DEFAULT_BATCH_MARKER_REGEX = r"^(BATCH|BULK|CONSOL|RUN|PAYMENT[-_]?RUN)[-_]"
+
+
+def is_bank_batch_marker(end_to_end_id: Optional[str], pattern: str = _DEFAULT_BATCH_MARKER_REGEX) -> bool:
+    """True when a CAMT end_to_end_id looks like an explicit batch settlement marker.
+
+    Used by P6 (post TASK-36) to seed marker-aware grouping: when the bank flags
+    an entry as a batch (e.g. 'BATCH-GRP-A', 'BULK-2026-07'), P6 prefers that
+    entry first and emits a higher-confidence group when the partition matches.
+    """
+    if not end_to_end_id:
+        return False
+    try:
+        return bool(re.match(pattern, end_to_end_id.strip(), re.IGNORECASE))
+    except re.error:
+        logger.warning("Invalid P6.batch_marker_regex %r; falling back to default", pattern)
+        return bool(re.match(_DEFAULT_BATCH_MARKER_REGEX, end_to_end_id.strip(), re.IGNORECASE))
+
+
 def aging_bucket(days: int) -> str:
     if days <= 1: return "0-1 Days"
     if days <= 2: return "2 Days"
@@ -289,6 +308,10 @@ def find_one_to_many_groups(
     date_window  = int(pattern_rule_value(config, "P6", "date_window_days", 3))
     var_subpass  = bool(pattern_rule_value(config, "P6", "variance_subpass_enabled", True))
     var_max_size = int(pattern_rule_value(config, "P6", "variance_subpass_max_group_size", 3))
+    # TASK-36: bank-side batch markers (e.g. end_to_end_id = "BATCH-GRP-A") seed grouping
+    # first and earn a higher confidence (default 92 vs 88 for unflagged subset-sum hits).
+    marker_regex      = str(pattern_rule_value(config, "P6", "batch_marker_regex", _DEFAULT_BATCH_MARKER_REGEX))
+    marker_confidence = int(pattern_rule_value(config, "P6", "marker_seeded_confidence", 92))
 
     groups: List[Dict] = []
     used_psr_ids: set = set()
@@ -303,13 +326,27 @@ def find_one_to_many_groups(
             continue
         partitions.setdefault(key, []).append(p)
 
-    for camt in residual_camts:
+    # TASK-36: put marker-bearing CAMTs at the head of the queue so they get first
+    # refusal on PSRs. Marker is a HINT, not a hard requirement — counterparty
+    # partition still has to align, and subset-sum still has to clear.
+    marker_camts: List[CamtTransaction] = []
+    normal_camts: List[CamtTransaction] = []
+    for c in residual_camts:
+        if is_bank_batch_marker(c.end_to_end_id, marker_regex):
+            marker_camts.append(c)
+        else:
+            normal_camts.append(c)
+    ordered_camts = marker_camts + normal_camts
+
+    for camt in ordered_camts:
         if camt.ntry_id in used_camt_ids or camt.amount is None:
             continue
 
         bank_key = normalise_counterparty(camt.counterparty)
         if not bank_key:
             continue
+
+        marker_seeded = is_bank_batch_marker(camt.end_to_end_id, marker_regex)
 
         # Step 1: locate the matching partition for this bank entry.
         # Prefer exact key match; otherwise allow a high-bar fuzzy match
@@ -351,11 +388,19 @@ def find_one_to_many_groups(
             chosen    = exact_matches[0]
             ambiguous = len(exact_matches) > 1
             alt       = exact_matches[1] if ambiguous else None
-            conf      = 72 if ambiguous else 88
-            rule      = "P6_BANK_BATCH_GROUPING_AMBIGUOUS" if ambiguous else "P6_BANK_BATCH_GROUPING"
-            reason    = "BANK_BATCH_GROUPING_AMBIGUOUS" if ambiguous else "BANK_BATCH_GROUPING"
+            if ambiguous:
+                conf, rule, reason = 72, "P6_BANK_BATCH_GROUPING_AMBIGUOUS", "BANK_BATCH_GROUPING_AMBIGUOUS"
+            elif marker_seeded:
+                conf, rule, reason = marker_confidence, "P6_BANK_BATCH_GROUPING", "BANK_BATCH_GROUPING"
+            else:
+                conf, rule, reason = 88, "P6_BANK_BATCH_GROUPING", "BANK_BATCH_GROUPING"
             psr_ids_str = ", ".join(p.id for p in chosen)
+            marker_prefix = (
+                f"Bank flagged this as batch settlement ({camt.end_to_end_id}). "
+                if marker_seeded and not ambiguous else ""
+            )
             expl = (
+                f"{marker_prefix}"
                 f"{'Ambiguous: multiple valid groupings. Selected by earliest date. ' if ambiguous else ''}"
                 f"{len(chosen)} PSR transactions ({psr_ids_str}) sum to "
                 f"{sum(p.amount for p in chosen):.2f} = CAMT {camt.ntry_id} ({camt.amount:.2f}). "
@@ -377,7 +422,12 @@ def find_one_to_many_groups(
                 group_sum   = sum(p.amount for p in chosen)
                 grp_var     = round(group_sum - camt.amount, 2)
                 psr_ids_str = ", ".join(p.id for p in chosen)
+                marker_prefix = (
+                    f"Bank flagged this as batch settlement ({camt.end_to_end_id}). "
+                    if marker_seeded else ""
+                )
                 expl = (
+                    f"{marker_prefix}"
                     f"{len(chosen)} PSR transactions ({psr_ids_str}) sum to "
                     f"{group_sum:.2f} vs CAMT {camt.ntry_id} ({camt.amount:.2f}). "
                     f"Variance {grp_var:+.2f} is within minor tolerance. "
