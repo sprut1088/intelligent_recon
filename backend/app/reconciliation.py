@@ -19,8 +19,10 @@ class ReconCase:
     internal_amount: Optional[float]; bank_amount: Optional[float]; variance: Optional[float]; currency: str; value_date: str; booking_date: str
     reconciliation_status: str; reason_code: str; match_type: str; match_confidence: int; aging_days: int; aging_bucket: str; rule_applied: str; exception_flag: str
     explanation: str; feature_snapshot: Dict; suggestions: List[Dict]
-    group_id: Optional[str] = None
-    group_role: Optional[str] = None
+    group_id:      Optional[str]        = None
+    group_role:    Optional[str]        = None
+    psr_members:   Optional[List[Dict]] = None
+    camt_members:  Optional[List[Dict]] = None
 
 def amount_equal(left: Optional[float], right: Optional[float]) -> bool:
     return left is not None and right is not None and abs(left - right) <= settings.exact_amount_tolerance
@@ -1041,4 +1043,6 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
 
 def case_to_db_tuple(case: ReconCase) -> tuple:
     p=asdict(case)
-    return (p["case_id"],p["match_key"],p["psr_id"],p["camt_id"],p["reference"],p["invoice"],p["counterparty"],p["internal_amount"],p["bank_amount"],p["variance"],p["currency"],p["value_date"],p["booking_date"],p["reconciliation_status"],p["reason_code"],p["match_type"],p["match_confidence"],p["aging_days"],p["aging_bucket"],p["rule_applied"],p["exception_flag"],p["explanation"],json.dumps(p["feature_snapshot"]),json.dumps(p["suggestions"]),p["group_id"],p["group_role"])
+    return (p["case_id"],p["match_key"],p["psr_id"],p["camt_id"],p["reference"],p["invoice"],p["counterparty"],p["internal_amount"],p["bank_amount"],p["variance"],p["currency"],p["value_date"],p["booking_date"],p["reconciliation_status"],p["reason_code"],p["match_type"],p["match_confidence"],p["aging_days"],p["aging_bucket"],p["rule_applied"],p["exception_flag"],p["explanation"],json.dumps(p["feature_snapshot"]),json.dumps(p["suggestions"]),p["group_id"],p["group_role"],
+            json.dumps(p["psr_members"]) if p["psr_members"] is not None else None,
+            json.dumps(p["camt_members"]) if p["camt_members"] is not None else None)

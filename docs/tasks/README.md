@@ -214,11 +214,11 @@ Rationale:
 
 ### Definition of Done — Recon-correctness branch
 
-- [ ] TASK-34, TASK-35, TASK-36, TASK-37 all complete and verified
-- [ ] `python -m pytest backend/tests/ -v` passes with no regressions
-- [ ] **abc-recon regression** (new fixture `backend/sample_data/regression_abc/`) runs end-to-end and matches expected output: GRP-A `{9007,9008,9009}` and GRP-B `{9017,9018}` form correctly; CASE-000006 (mis-routed 9009) does not appear; no mixed-customer groups exist
-- [ ] No P4 case has `match_confidence > 89`
-- [ ] No P4 case is emitted without a corroborating signal
+- [x] TASK-34, TASK-35, TASK-36, TASK-37 all complete and verified
+- [x] `python -m pytest backend/tests/ -v` passes with no regressions
+- [x] **abc-recon regression** (new fixture `backend/sample_data/regression_abc/`) runs end-to-end and matches expected output: GRP-A `{9007,9008,9009}` and GRP-B `{9017,9018}` form correctly; CASE-000006 (mis-routed 9009) does not appear; no mixed-customer groups exist
+- [x] No P4 case has `match_confidence > 89`
+- [x] No P4 case is emitted without a corroborating signal
 - [ ] Branch merged to `feature/development` via PR with reviewer approval
 
 ### Definition of Done — P10 split-settlement branch
@@ -232,16 +232,16 @@ Rationale:
 ---
 ### Definition of Done — P6 branch
 
-- [ ] All 7 tasks completed and individually verified
-- [ ] `python -m pytest backend/tests/ -v` passes with no regressions
-- [ ] Load `psr_test_50.txt` + `camt_test_50.xml`, run reconcile — P6 cases appear when
+- [x] All 7 tasks completed and individually verified
+- [x] `python -m pytest backend/tests/ -v` passes with no regressions
+- [x] Load `psr_test_50.txt` + `camt_test_50.xml`, run reconcile — P6 cases appear when
       sample data contains batchable transactions
-- [ ] P6 anchor rows have `group_role = "ANCHOR"`, `internal_amount = group sum`,
+- [x] P6 anchor rows have `group_role = "ANCHOR"`, `internal_amount = group sum`,
       `match_type = "N_TO_1"`
-- [ ] P6 member rows have `group_role = "MEMBER"`, `bank_amount = null`, `variance = null`
-- [ ] Resolving a member case_id → all siblings cleared, one resolution row written
-- [ ] `learning_eligible = 0` on all P6-originated resolutions
-- [ ] Frontend shows N→1 badge on P6 rows; EvidenceDrawer shows sibling panel
+- [x] P6 member rows have `group_role = "MEMBER"`, `bank_amount = null`, `variance = null`
+- [x] Resolving a member case_id → all siblings cleared, one resolution row written
+- [x] `learning_eligible = 0` on all P6-originated resolutions
+- [x] Frontend shows N→1 badge on P6 rows; EvidenceDrawer shows sibling panel
 - [ ] Branch merged to `feature/development` via PR with reviewer approval
 
 ---
@@ -317,3 +317,69 @@ All Future State items from `AI_TRIAGE_PLAN.md` (FS-1 through FS-6) are explicit
 - FS-4: Generative audit explainability
 - FS-5: AI suggestion persistence (production durability)
 - FS-6: AI-assisted rule drafting
+
+---
+
+## Dependency Map — Group Case Consolidation (`feat/group-case-consolidation`)
+
+Fixes two structural defects in P6 (N PSR → 1 CAMT) and P10 (1 PSR → N CAMT):
+1. Each group/split emits N separate cases (one per transaction) instead of one consolidated case
+2. The anchor row shows incorrect amounts; P10 member rows show no amount; P10 has no group panel in the UI
+
+```
+TASK-39  DB schema (psr_members_json, camt_members_json) + ReconCase dataclass
+    │
+    ├──► TASK-40  P6: emit one consolidated case per group (N PSR → 1 CAMT)
+    │       │
+    │       └──► TASK-42  Resolve endpoint simplification (remove member routing) ──┐
+    │                                                                                │
+    └──► TASK-41  P10: emit one consolidated case per split (1 PSR → N CAMT)        │
+            │                                                                        │
+            └──► TASK-42 ────────────────────────────────────────────────────────────┤
+                                                                                     │
+                                          TASK-43  Frontend: ResultTable badges ◄───┤
+                                          TASK-44  Frontend: EvidenceDrawer panel ◄─┘
+                                              │
+                                          TASK-45  Tests: update P6 + P10 test suite
+```
+
+TASK-40 and TASK-41 are independent and can run in parallel.
+TASK-43 and TASK-44 are independent and can run in parallel (with or after TASK-42).
+TASK-45 must be last — it validates the full stack.
+
+## Task Summary — Group Case Consolidation (`feat/group-case-consolidation`)
+
+| Task | Title | Type | Depends on | Status |
+|---|---|---|---|---|
+| [TASK-39](TASK-39-group-case-schema-and-dataclass.md) | DB schema + `ReconCase` dataclass (`psr_members`, `camt_members`) | Backend | — | 🔲 Not started |
+| [TASK-40](TASK-40-p6-single-case-consolidation.md) | P6: one consolidated case per group | Backend | TASK-39 | 🔲 Not started |
+| [TASK-41](TASK-41-p10-single-case-consolidation.md) | P10: one consolidated case per split | Backend | TASK-39 | 🔲 Not started |
+| [TASK-42](TASK-42-resolve-endpoint-simplification.md) | Resolve endpoint: remove member routing | Backend | TASK-40, TASK-41 | 🔲 Not started |
+| [TASK-43](TASK-43-frontend-result-table-group-badge.md) | Frontend: ResultTable group/split badges | Frontend | TASK-40, TASK-41 | 🔲 Not started |
+| [TASK-44](TASK-44-frontend-evidence-drawer-group-panel.md) | Frontend: EvidenceDrawer embedded group panel | Frontend | TASK-40, TASK-41 | 🔲 Not started |
+| [TASK-45](TASK-45-tests-group-case-consolidation.md) | Tests: update P6 + P10 test suite | Backend | TASK-40–44 | 🔲 Not started |
+
+### Recommended pickup order
+
+#### Solo developer
+```
+TASK-39 → TASK-40 + TASK-41 (parallel) → TASK-42 + TASK-43 + TASK-44 (parallel) → TASK-45
+```
+
+#### Two developers
+```
+Dev A: TASK-39 → TASK-40 → TASK-42 → TASK-45
+Dev B: TASK-39 → TASK-41 → TASK-43 + TASK-44 (parallel)
+```
+
+### Definition of Done — Group Case Consolidation
+
+- [ ] All 7 tasks completed and individually verified
+- [ ] `python -m pytest backend/tests/ -v` passes with no regressions
+- [ ] Run reconcile with `psr_test_50.txt` + `camt_test_50.xml` — P6 group appears as **one row** in the ResultTable, not N
+- [ ] Run reconcile with abc-recon fixture — P10 split appears as **one row**, badge reads "1→N · 2 CAMTs"
+- [ ] EvidenceDrawer for a P6 case shows the group settlement table with correct individual PSR amounts (not group sum)
+- [ ] EvidenceDrawer for a P10 case shows the split settlement table with correct individual CAMT amounts
+- [ ] No extra API call is made when opening either drawer (members come from the case payload)
+- [ ] Resolving a group/split case resolves in one click with no member-routing indirection
+- [ ] Branch merged to `feature/development` via PR with reviewer approval
