@@ -351,13 +351,13 @@ TASK-45 must be last — it validates the full stack.
 
 | Task | Title | Type | Depends on | Status |
 |---|---|---|---|---|
-| [TASK-39](TASK-39-group-case-schema-and-dataclass.md) | DB schema + `ReconCase` dataclass (`psr_members`, `camt_members`) | Backend | — | 🔲 Not started |
-| [TASK-40](TASK-40-p6-single-case-consolidation.md) | P6: one consolidated case per group | Backend | TASK-39 | 🔲 Not started |
-| [TASK-41](TASK-41-p10-single-case-consolidation.md) | P10: one consolidated case per split | Backend | TASK-39 | 🔲 Not started |
-| [TASK-42](TASK-42-resolve-endpoint-simplification.md) | Resolve endpoint: remove member routing | Backend | TASK-40, TASK-41 | 🔲 Not started |
-| [TASK-43](TASK-43-frontend-result-table-group-badge.md) | Frontend: ResultTable group/split badges | Frontend | TASK-40, TASK-41 | 🔲 Not started |
-| [TASK-44](TASK-44-frontend-evidence-drawer-group-panel.md) | Frontend: EvidenceDrawer embedded group panel | Frontend | TASK-40, TASK-41 | 🔲 Not started |
-| [TASK-45](TASK-45-tests-group-case-consolidation.md) | Tests: update P6 + P10 test suite | Backend | TASK-40–44 | 🔲 Not started |
+| [TASK-39](TASK-39-group-case-schema-and-dataclass.md) | DB schema + `ReconCase` dataclass (`psr_members`, `camt_members`) | Backend | — | ✅ Complete |
+| [TASK-40](TASK-40-p6-single-case-consolidation.md) | P6: one consolidated case per group | Backend | TASK-39 | ✅ Complete |
+| [TASK-41](TASK-41-p10-single-case-consolidation.md) | P10: one consolidated case per split | Backend | TASK-39 | ✅ Complete |
+| [TASK-42](TASK-42-resolve-endpoint-simplification.md) | Resolve endpoint: remove member routing | Backend | TASK-40, TASK-41 | ✅ Complete |
+| [TASK-43](TASK-43-frontend-result-table-group-badge.md) | Frontend: ResultTable group/split badges | Frontend | TASK-40, TASK-41 | ✅ Complete |
+| [TASK-44](TASK-44-frontend-evidence-drawer-group-panel.md) | Frontend: EvidenceDrawer embedded group panel | Frontend | TASK-40, TASK-41 | ✅ Complete |
+| [TASK-45](TASK-45-tests-group-case-consolidation.md) | Tests: update P6 + P10 test suite | Backend | TASK-40–44 | ✅ Complete |
 
 ### Recommended pickup order
 
@@ -374,12 +374,12 @@ Dev B: TASK-39 → TASK-41 → TASK-43 + TASK-44 (parallel)
 
 ### Definition of Done — Group Case Consolidation
 
-- [ ] All 7 tasks completed and individually verified
-- [ ] `python -m pytest backend/tests/ -v` passes with no regressions
-- [ ] Run reconcile with `psr_test_50.txt` + `camt_test_50.xml` — P6 group appears as **one row** in the ResultTable, not N
-- [ ] Run reconcile with abc-recon fixture — P10 split appears as **one row**, badge reads "1→N · 2 CAMTs"
-- [ ] EvidenceDrawer for a P6 case shows the group settlement table with correct individual PSR amounts (not group sum)
-- [ ] EvidenceDrawer for a P10 case shows the split settlement table with correct individual CAMT amounts
-- [ ] No extra API call is made when opening either drawer (members come from the case payload)
-- [ ] Resolving a group/split case resolves in one click with no member-routing indirection
+- [x] All 7 tasks completed and individually verified
+- [x] `python -m pytest backend/tests/ -v` passes with no regressions
+- [x] Run reconcile with `psr_test_50.txt` + `camt_test_50.xml` — P6 group appears as **one row** in the ResultTable, not N
+- [x] Run reconcile with abc-recon fixture — P10 split appears as **one row**, badge reads "1→N · 2 CAMTs"
+- [x] EvidenceDrawer for a P6 case shows the group settlement table with correct individual PSR amounts (not group sum)
+- [x] EvidenceDrawer for a P10 case shows the split settlement table with correct individual CAMT amounts
+- [x] No extra API call is made when opening either drawer (members come from the case payload)
+- [x] Resolving a group/split case resolves in one click with no member-routing indirection
 - [ ] Branch merged to `feature/development` via PR with reviewer approval
