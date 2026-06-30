@@ -60,6 +60,12 @@ export const api = {
   dashboardModel: () => request('/api/workspace/dashboard'),
   createSnapshot: () => request('/api/workspace/snapshot', { method: 'POST' }),
   exportResultsUrl: () => `${API_BASE}/api/workspace/export/reconciliation-results`,
+  exportCasesUrl: ({ search = '', status = '', exceptionOnly = false, filename = 'recon_report' } = {}) => {
+    const qs = new URLSearchParams({ exception_only: exceptionOnly, filename });
+    if (search) qs.set('search', search);
+    if (status) qs.set('status', status);
+    return `${API_BASE}/api/reconcile/cases/export?${qs.toString()}`;
+  },
   counts: async () => {
     const s = await request('/api/reconcile/summary');
     return { psr_transactions: s.psr_count || 0, camt_transactions: s.camt_count || 0, reconciliation_results: s.total_cases || 0 };

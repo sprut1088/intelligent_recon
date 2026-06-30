@@ -582,7 +582,7 @@ function ResultTable({ rows, onSelect }) {
             const age = computeAge(r);
             return (
               <tr key={r.result_id} onClick={() => onSelect?.(r)} className="clickable">
-                <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} /><br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
+                <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} />{r.match_type === "N_TO_1" && <span className="badge badge-group" title={`Group: ${r.group_id}`}>N→1 · {r.psr_members?.length ?? '?'} PSRs</span>}{r.match_type === "1_TO_N" && <span className="badge badge-group" title={`Split: ${r.group_id}`}>1→N · {r.camt_members?.length ?? '?'} CAMTs</span>}<br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
                 <td>{money(r.internal_amount)}</td>
                 <td>{money(r.bank_amount)}</td>
                 <td>{r.reference || '-'}</td>
@@ -611,6 +611,106 @@ function FieldDiff({ item }) {
   const isValidId = (id) => Boolean(id && id.trim() && !['NOT FOUND', 'N/A', 'NONE', 'NULL'].includes(id.trim().toUpperCase()));
   const hasPsr = Boolean(item.psr_id);
   const hasCamtData = item.bank_amount != null;
+  const isGroupP6 = item.match_type === 'N_TO_1' && item.psr_members?.length > 0;
+  const isGroupP10 = item.match_type === '1_TO_N' && item.camt_members?.length > 0;
+  const noVariance = Math.abs(item.variance ?? 0) < 0.005;
+  const colHeaders = ['ID', 'Amount', 'Direction', 'Date', 'Reference', 'Counterparty', 'Invoice', 'Remittance'];
+
+  // P6: N PSRs → 1 CAMT — show each PSR as its own row, then a sum row, then the CAMT row
+  if (isGroupP6) {
+    return (
+      <div className="field-diff field-diff-transposed">
+        <div className="field-diff-scroll">
+          <table className="field-diff-table">
+            <thead>
+              <tr><th>Source</th>{colHeaders.map(h => <th key={h}>{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              {item.psr_members.map(m => (
+                <tr key={m.psr_id} className="group-member-row">
+                  <th scope="row">PSR (Internal)</th>
+                  <td>{isValidId(m.psr_id) ? <a className="source-link" href={`#psr-${m.psr_id}`}>{m.psr_id}</a> : fmt(m.psr_id)}</td>
+                  <td>{Number(m.amount).toFixed(2)}</td>
+                  <td>{fmt(item.psr_direction)}</td>
+                  <td>{fmt(m.date)}</td>
+                  <td>{fmt(m.reference)}</td>
+                  <td>{fmt(item.counterparty)}</td>
+                  <td>{'\u2014'}</td>
+                  <td>{'\u2014'}</td>
+                </tr>
+              ))}
+              <tr className="group-sum-row">
+                <th scope="row">&#8721; PSR Total</th>
+                <td>{'\u2014'}</td>
+                <td className={noVariance ? 'match-exact' : 'mismatch'}>{item.internal_amount != null ? Number(item.internal_amount).toFixed(2) : '\u2014'}</td>
+                <td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td>
+              </tr>
+              <tr>
+                <th scope="row">Bank (CAMT)</th>
+                <td>{hasCamtData && isValidId(item.camt_id) ? <a className="source-link" href={`#camt-${item.camt_id}`}>{item.camt_id}</a> : fmt(hasCamtData ? item.camt_id : null)}</td>
+                <td className={!noVariance ? 'mismatch' : ''}>{fmt(hasCamtData ? item.bank_amount : null)}</td>
+                <td>{fmt(hasCamtData ? item.camt_direction : null)}</td>
+                <td>{fmt(hasCamtData ? item.booking_date : null)}</td>
+                <td>{fmt(hasCamtData ? item.camt_pmt_ref : null)}</td>
+                <td>{fmt(hasCamtData ? item.camt_counterparty : null)}</td>
+                <td>{fmt(hasCamtData ? item.camt_invoice : null)}</td>
+                <td>{fmt(hasCamtData ? item.camt_remittance : null)}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  // P10: 1 PSR → N CAMTs — show the PSR row, then each CAMT as its own row, then a sum row
+  if (isGroupP10) {
+    return (
+      <div className="field-diff field-diff-transposed">
+        <div className="field-diff-scroll">
+          <table className="field-diff-table">
+            <thead>
+              <tr><th>Source</th>{colHeaders.map(h => <th key={h}>{h}</th>)}</tr>
+            </thead>
+            <tbody>
+              <tr>
+                <th scope="row">PSR (Internal)</th>
+                <td>{hasPsr && isValidId(item.psr_id) ? <a className="source-link" href={`#psr-${item.psr_id}`}>{item.psr_id}</a> : fmt(hasPsr ? item.psr_id : null)}</td>
+                <td>{fmt(hasPsr ? item.internal_amount : null)}</td>
+                <td>{fmt(hasPsr ? item.psr_direction : null)}</td>
+                <td>{fmt(hasPsr ? item.value_date : null)}</td>
+                <td>{fmt(hasPsr ? item.reference : null)}</td>
+                <td>{fmt(hasPsr ? item.counterparty : null)}</td>
+                <td>{fmt(hasPsr ? item.invoice : null)}</td>
+                <td>{'\u2014'}</td>
+              </tr>
+              {item.camt_members.map(m => (
+                <tr key={m.ntry_id} className="group-member-row">
+                  <th scope="row">Bank (CAMT)</th>
+                  <td>{isValidId(m.camt_id) ? <a className="source-link" href={`#camt-${m.camt_id}`}>{m.camt_id}</a> : fmt(m.camt_id)}</td>
+                  <td>{Number(m.amount).toFixed(2)}</td>
+                  <td>{'\u2014'}</td>
+                  <td>{fmt(m.date)}</td>
+                  <td>{'\u2014'}</td>
+                  <td>{fmt(item.camt_counterparty)}</td>
+                  <td>{'\u2014'}</td>
+                  <td>{'\u2014'}</td>
+                </tr>
+              ))}
+              <tr className="group-sum-row">
+                <th scope="row">&#8721; Bank Total</th>
+                <td>{'\u2014'}</td>
+                <td className={noVariance ? 'match-exact' : 'mismatch'}>{item.bank_amount != null ? Number(item.bank_amount).toFixed(2) : '\u2014'}</td>
+                <td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td>
+              </tr>
+            </tbody>
+          </table>
+        </div>
+      </div>
+    );
+  }
+
+  // Standard 1:1 case
   const fields = [
     {
       key: 'id',
@@ -701,7 +801,9 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
     setSimilarCases(null);
     setSimilarOpen(false);
     setNoMatchLoading(null);
-    api.caseDetail(selected.result_id).then(d => setDetail(d.case)).catch(() => {});
+    api.caseDetail(selected.result_id).then(d => {
+      setDetail(d.case);
+    }).catch(() => {});
     api.similarCases(selected.result_id).then(setSimilarCases).catch(() => setSimilarCases({ items: [], count: 0 }));
   }, [selected?.result_id]);
 
@@ -909,6 +1011,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
               );
             })()}
           </Panel>
+
 {suggestions.length > 0 && item.reconciliation_status !== 'AI Confirmed — No Match' && (
           <Panel title="Suggested actions" className="nested-panel">
             <div className="action-stack">
@@ -1322,7 +1425,7 @@ function AiTriageLoader() {
   );
 }
 
-function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, onResolve, loading, triageRunning }) {
+function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, onResolve, loading, triageRunning, batchName }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -1373,7 +1476,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
           <h1>Matched, proposed and unresolved records</h1>
           <p>Drill into match evidence, failed fields, confidence and next-best action.</p>
         </div>
-        <div className="toolbar" style={{ flexWrap: 'nowrap', gap: '0.5rem', alignItems: 'center' }}>
+        <div className="toolbar" style={{ flexWrap: 'nowrap', gap: '0.5rem', alignItems: 'flex-start' }}>
           {/* Filter group — allowed to shrink/wrap internally */}
           <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', flex: 1, minWidth: 0 }}>
             <input
@@ -1411,9 +1514,26 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
               /> Exceptions only
             </label>
           </div>
-          {/* AI triage — always anchored to the right, never wraps */}
-          <span style={{ borderLeft: '1px solid var(--border)', height: '1.5rem', flexShrink: 0 }} />
-          <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
+          {/* Action buttons — pinned to top row, never wrap */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+            <span style={{ borderLeft: '1px solid var(--border)', height: '1.5rem' }} />
+            <button
+              className="btn secondary"
+              style={{ flexShrink: 0, whiteSpace: 'nowrap' }}
+              onClick={() => {
+                const a = document.createElement('a');
+                const now = new Date();
+                const d = now.toISOString().slice(0, 10).replace(/-/g, '');
+                const t = now.toISOString().slice(11, 16).replace(':', '');
+                const safeName = (batchName || 'recon').replace(/[^a-zA-Z0-9_-]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '').toLowerCase() || 'recon';
+                const filename = `${safeName}-recon-${d}-${t}`;
+                const url = api.exportCasesUrl({ search, status: selectedStatus, exceptionOnly, filename });
+                a.href = url;
+                a.click();
+              }}
+            >↓ Download Report</button>
+            <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
+          </div>
         </div>
       </div>
       <SummaryBar summary={summary} total={total} activeFilter={activeFilter} onFilter={onFilter} />
@@ -2041,7 +2161,7 @@ export default function App() {
     await safe(() => api.resolveException(item.result_id || item.case_id, {
       final_resolution_type: resolutionType,
       reason_code: reason,
-      psr_transaction_ids: item.psr_id ? [item.psr_id] : [],
+      psr_transaction_ids: item.suggestions?.[0]?.group_psr_ids ?? (item.psr_id ? [item.psr_id] : []),
       bank_transaction_ids: item.camt_id ? [item.camt_id] : [],
       fields_used: fields,
       fields_ignored: ['exact_invoice_format', 'exact_pmt_ref'],
@@ -2062,7 +2182,9 @@ export default function App() {
     if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
-    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} />;
+    const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
+    const activeBatchName = activeBatch?.batch_name || activeBatch?.batch_id || 'recon';
+    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;

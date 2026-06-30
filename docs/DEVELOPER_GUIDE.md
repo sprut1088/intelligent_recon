@@ -191,12 +191,41 @@ P8  Learned invoice suffix + amt   → Suggested Match – Learned Pattern (conf
 P4  Counterparty fuzzy + amount    → Suggested Match – Analyst Review (conf = int(similarity * 100))
     (threshold: similarity ≥ 0.85 via SequenceMatcher on counterparty strings)
 
-P5  No match found                 → Uncleared / In-Transit Payment (conf 45)
+P5  No match found                 → deferred to p5_pending list (not emitted yet)
 ```
 
-### After PSR loop — bank-only residuals
+### After PSR loop — P6 residual pool pass
 
-Any CAMT entry not consumed by the PSR loop becomes a `Bank-only Item – Investigation` (P5, conf 40).
+All PSRs that reached P5 without a match are collected into `p5_pending`. After the PSR loop, `find_one_to_many_groups()` runs against this residual pool and any unconsumed CAMT entries:
+
+```
+P6  One-to-many batch grouping
+    For each CAMT entry not yet matched:
+      1. Find all subsets of residual PSRs (size 2..max_group_size) whose amounts sum
+         within EXACT_AMOUNT_TOLERANCE of the CAMT amount.
+      2. Ambiguity check: if ≥ 2 distinct subsets match, emit AMBIGUOUS group (conf 72).
+      3. Exact match (1 valid subset): emit group (conf 88).
+      4. Variance sub-pass: if no exact subset found, allow minor variance (≤ MINOR_VARIANCE_TOLERANCE)
+         on groups of size ≤ variance_subpass_max_group_size (conf 78).
+
+    ANCHOR case  (one per group):  match_type=N_TO_1, group_role=ANCHOR
+                                    internal_amount = sum of all PSR amounts
+                                    bank_amount = CAMT amount, variance = sum − bank
+    MEMBER cases (one per PSR):   match_type=N_TO_1, group_role=MEMBER
+                                    internal_amount = individual PSR amount
+                                    bank_amount = null, variance = null
+
+    rule_applied values:
+      P6_BANK_BATCH_GROUPING            — exact sum, unambiguous (conf 88)
+      P6_BATCH_MINOR_VARIANCE           — variance sub-pass (conf 78)
+      P6_BANK_BATCH_GROUPING_AMBIGUOUS  — multiple valid subsets (conf 72)
+
+Any PSR still unmatched after P6 → Uncleared / In-Transit Payment (conf 45)
+```
+
+### After P6 — bank-only residuals
+
+Any CAMT entry not consumed by any PSR or P6 group becomes a `Bank-only Item – Investigation` (conf 40).
 
 ### `build_case()` helper
 
@@ -205,9 +234,20 @@ Constructs a `ReconCase` dataclass with all output fields including:
 - `suggestions` list — proposed actions with confidence values
 - `aging_days` / `aging_bucket` — computed from `value_date` vs `booking_date`
 
-### P6 (One-to-Many) — Status: NOT EXECUTED
+### P6 config (from `recon_pattern_registry`)
 
-P6 is seeded in `recon_pattern_registry` but there is no execution logic in `reconcile_transactions`. The matching loop processes PSR transactions individually only. See [Gap #G2](#11-frs-gap-tracker).
+```json
+{
+  "fields": ["pmt_ref", "invoice", "amount_sum"],
+  "counterparty_threshold": 0.85,
+  "max_group_size": 6,
+  "date_window_days": 3,
+  "variance_subpass_enabled": true,
+  "variance_subpass_max_group_size": 3
+}
+```
+
+P6 reads this rule JSON via the `config` dict passed to `find_one_to_many_groups()`. The `max_group_size` cap keeps subset enumeration tractable (worst-case C(n,k) is bounded). See Gap G1 in [Section 11](#11-frs-gap-tracker) for per-counterparty clearing prediction.
 
 ---
 
@@ -221,7 +261,10 @@ Confidence values are set as **constants per rule**, not computed from a weighte
 | 96 (P2) | Matched & Settled (Auto-Close) | N |
 | 92 (P3) | Matched & Settled (Auto-Close) | N |
 | 90–98 (P8 learned) | Suggested Match – Learned Pattern | Y |
+| 88 (P6 exact batch) | Suggested Match – Analyst Review | Y |
 | 86 (P1 + minor variance) | Post to Short or Over Ledger | Y |
+| 78 (P6 variance sub-pass) | Suggested Match – Analyst Review | Y |
+| 72 (P6 ambiguous) | Suggested Match – Analyst Review | Y |
 | 70+ (P4 fuzzy) | Suggested Match – Analyst Review | Y |
 | 70 (P1 + major variance) | Exception – Amount Variance Review | Y |
 | 45 (P5 unmatched PSR) | Uncleared / In-Transit Payment | Y |
@@ -263,10 +306,12 @@ Config env vars `AUTO_CLOSE_CONFIDENCE` (95) and `ASSISTED_CONFIDENCE` (80) are 
 |---|---|---|
 | `REMITTANCE_FORMAT_MISMATCH` or `invoice_suffix` in fields | Invoice Suffix Normalisation Match | P8_LEARNED_INVOICE_SUFFIX |
 | `COUNTERPARTY_ALIAS` or `counterparty_alias` in fields | Counterparty Alias Learned Match | P9_COUNTERPARTY_ALIAS |
-| `BANK_BATCH_AGGREGATION` or `one_to_many` in fields | Bank Batch Settlement Grouping | P10_BANK_BATCH_GROUPING |
+| `BANK_BATCH_AGGREGATION` or `one_to_many` in fields | Bank Batch Settlement — Loosen P6 Parameters | P10_BANK_BATCH_GROUPING |
 | `AMOUNT_VARIANCE_MINOR` | Minor Amount Variance Auto-Categorisation | PX_LEARNED_EXCEPTION_CATEGORY |
 
-> **Note:** P9 and P10 candidate patterns can be approved and registered, but `reconcile_transactions` only has execution logic for P8. Approving P9/P10 currently has no effect on match results.
+> **Note:** P6 batch grouping is now fully wired into the cascade. P9 (counterparty alias) can be approved and registered but `reconcile_transactions` has no execution branch for it — approving P9 has no effect on match results (Gap G7).
+>
+> P10 (Bank Batch Settlement) candidates are emitted with `execution_status: "NOT_WIRED"` — they record the *intent* to loosen P6 parameters but do not auto-apply. A future task will wire parameter relaxation from approved P10 candidates back into `find_one_to_many_groups()` config.
 
 ### Demo shortcut
 
@@ -319,13 +364,16 @@ All tables live in `backend/runtime_data/recon.db` (auto-created; gitignored). *
 | match_key | TEXT | ntry_id or psr_id |
 | psr_id | TEXT | FK → psr_transactions |
 | camt_id | TEXT | FK → camt_transactions |
-| internal_amount | REAL | PSR amount |
-| bank_amount | REAL | CAMT amount |
-| variance | REAL | internal − bank |
+| internal_amount | REAL | PSR amount (ANCHOR: sum of group; MEMBER: individual PSR amount) |
+| bank_amount | REAL | CAMT amount (null for P6 MEMBER rows) |
+| variance | REAL | internal − bank (null for P6 MEMBER rows) |
 | reconciliation_status | TEXT | See Section 4 |
 | reason_code | TEXT | EXACT_MATCH, AMOUNT_MISMATCH, etc. |
 | match_confidence | INTEGER | 0–100 |
-| rule_applied | TEXT | P1_EXACT_END_TO_END_ID, etc. |
+| match_type | TEXT | null for 1:1 cases; `N_TO_1` for P6 group cases |
+| rule_applied | TEXT | P1_EXACT_END_TO_END_ID, P6_BANK_BATCH_GROUPING, etc. |
+| group_id | TEXT | Shared identifier for all cases in a P6 group (GRP-xxxxxxxx) |
+| group_role | TEXT | `ANCHOR` (one per group, holds bank side) or `MEMBER` (PSR-only rows) |
 | exception_flag | TEXT | Y / N |
 | explanation | TEXT | Plain-language rationale |
 | feature_snapshot_json | TEXT | JSON of all match signals |
@@ -470,7 +518,7 @@ All tables live in `backend/runtime_data/recon.db` (auto-created; gitignored). *
 | POST | `/api/load-sample` | Re-parse sample files + re-reconcile. Body: `{reset: bool, amount_divisor: float}` |
 | POST | `/api/reconcile/run` | Re-reconcile from DB (no file re-parse) |
 | GET | `/api/reconcile/summary` | KPIs, status counts, pattern breakdown |
-| GET | `/api/reconcile/cases` | Paginated cases. Query: `status`, `exception_only`, `search`, `limit`, `offset` |
+| GET | `/api/reconcile/cases` | Paginated cases. Query: `status`, `exception_only`, `search`, `group_id`, `limit`, `offset` |
 | GET | `/api/reconcile/cases/{id}` | Single case + events + resolutions |
 | GET | `/api/reconcile/cases/{id}/explanation` | Detailed explainability breakdown for one case |
 | POST | `/api/reconcile/cases/{id}/resolve` | Analyst resolution. Body: `CaseResolveRequest` |
@@ -575,6 +623,7 @@ All UI state lives in `App.jsx`. There is no router — tabs are rendered condit
 - Clicking any result row opens `EvidenceDrawer`
 - Loads `GET /api/reconcile/cases/{id}/explanation` for field-level rationale
 - Shows feature snapshot, suggestions, and resolution history
+- For P6 group cases (`match_type === "N_TO_1"`): loads all sibling cases via `GET /api/reconcile/cases?group_id=...` and renders a **Group settlement panel** listing all PSRs in the group. Clicking a sibling navigates to it. Resolving any member automatically routes to the ANCHOR on the backend.
 
 ---
 
@@ -601,12 +650,12 @@ Priority: **H** = High (FRS Must / key demo differentiator) | **M** = Medium (FR
 | ID | Gap | FRS Ref | Priority | Status |
 |---|---|---|---|---|
 | G1 | **Predictive in-transit clearing** — `IN_TRANSIT_DAYS` is a constant; no per-counterparty clearing probability, no predicted date, no "likely to self-clear vs genuine break" separation | FR-PRD-01–04 / D2 | H | ❌ Not built |
-| G2 | **P6 one-to-many execution** — pattern exists in registry but `reconcile_transactions` only processes PSR lines individually; no sum-of-PSR vs single-bank-entry logic | FR-MAT-04 / P6 | H | ❌ Not built |
+| G2 | **P6 one-to-many execution** — `find_one_to_many_groups()` fully wired into cascade; ANCHOR/MEMBER group rows, group-aware resolve endpoint, frontend sibling panel all complete | FR-MAT-04 / P6 | H | ✅ Complete (`feat/one-2-many`) |
 | G3 | **Short/over ledger allocation records** — status `"Post to Short or Over Ledger"` is produced but no simulated posting record / ledger entry is written | FR-LDG-01 / FR-EXC-02 | H | ❌ Not built |
-| G4 | **CSV / Excel export** — `GET /api/workspace/export/reconciliation-results` endpoint exists; UI export button not confirmed wired end-to-end | FR-RPT-01 / FR-XAI-03 | H | ⚠️ Partial |
+| G4 | **CSV / Excel export** — export endpoint exists in `workspace.py` but has no filter support and is not wired to Results Workbench; TASK-33 adds a filter-aware `/api/reconcile/cases/export` endpoint and a Download Report button in the ResultsWorkbench toolbar | FR-RPT-01 / FR-XAI-03 | H | ✅ TASK-33 |
 | G5 | **File integrity validation** — `POST /api/data-quality/batches/{id}/validate` and `data_quality_issue` table now exist; full quarantine-on-failure behaviour TBC | FR-ING-04 | H | ⚠️ Partial |
 | G6 | **LLM / NER fallback for Ustrd parsing** — only regex; messy free-text remittances that don't match `PMT-REF-\d+` or `INV-\d+` patterns will miss references | FR-CLN-03 / D4 | M | ❌ Not built |
-| G7 | **P9 / P10 learned pattern execution** — can be approved into registry but reconciliation engine has no execution branch for counterparty alias or batch grouping patterns | FR-MAT-06 | M | ❌ Not built |
+| G7 | **P9 / P10 learned pattern execution** — P6 batch grouping now executes (G2 closed). P9 counterparty alias still has no execution branch. P10 emits a `NOT_WIRED` stub candidate describing parameter-relaxation intent but does not auto-apply; wiring P10 approvals back into P6 config is a future task | FR-MAT-06 | M | ⚠️ Partial |
 | G8 | **Idempotent reload** — `POST /api/load-sample` with `reset=true` deletes all manual resolutions and learning signals; a production reload should preserve analyst work | FR-ING-06 | M | ❌ Not built |
 | G9 | **Auto-reverse suspense** — no mechanism to detect a previously short/over-ledger case has been offset by a later CAMT cycle and clear it | FR-LDG-02 | M | ❌ Not built |
 | G10 | **Counterparty alias applied at enrichment** — learned aliases are not fed back into P4 fuzzy matching to raise its score for known aliases | FR-CDM-03 | M | ❌ Not built |
@@ -621,7 +670,7 @@ Priority: **H** = High (FRS Must / key demo differentiator) | **M** = Medium (FR
 ### Gap completion checklist
 
 - [ ] G1 — Predictive in-transit clearing
-- [ ] G2 — P6 one-to-many execution
+- [x] G2 — P6 one-to-many execution ✅
 - [ ] G3 — Short/over ledger allocation records
 - [~] G4 — CSV/Excel export endpoint + UI button *(endpoint exists, verify UI)*
 - [~] G5 — File integrity / quarantine *(DQ endpoint exists, verify quarantine)*
