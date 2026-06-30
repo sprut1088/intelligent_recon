@@ -851,91 +851,70 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
         p10_splits = find_one_to_n_splits(post_p6_residual, residual_camts_for_p10, config)
 
         for split in p10_splits:
-            split_id   = f"SPLIT-{idx:06d}"
-            psr_s      = split["psr"]
-            camts_s    = split["camts"]            # already date-sorted
-            anchor_c   = split["anchor_camt"]
-            conf_s     = split["confidence"]
-            rule_s     = split["rule_applied"]
-            reason_s   = split["reason_code"]
-            expl_s     = split["explanation"]
-            ambig_s    = split["ambiguous"]
-            camts_sum  = round(sum(c.amount for c in camts_s), 2)
+            split_id  = f"SPLIT-{idx:06d}"
+            psr_s     = split["psr"]
+            camts_s   = split["camts"]            # already date-sorted
+            conf_s    = split["confidence"]
+            rule_s    = split["rule_applied"]
+            reason_s  = split["reason_code"]
+            expl_s    = split["explanation"]
+            ambig_s   = split["ambiguous"]
+            camts_sum = round(sum(c.amount for c in camts_s), 2)
 
             status_s = "Suggested Match - Analyst Review" if ambig_s else "Suggested Match - Split Settlement"
 
-            anchor_case_id = f"CASE-{idx:06d}"
+            # All CAMTs embedded as members — one row per split, not per CAMT
+            camt_members_s = [
+                {"camt_id": c.camt_id, "ntry_id": c.ntry_id,
+                 "amount": c.amount, "date": c.booking_date or ""}
+                for c in camts_s
+            ]
+            primary_camt = camts_s[0]
+            days_s = safe_date_diff(psr_s.execution_date or "", primary_camt.booking_date or "")
 
-            for pos, camt_s in enumerate(camts_s):
-                is_anchor = (pos == 0)
-                this_case_id = f"CASE-{idx:06d}"
-                days_s = safe_date_diff(psr_s.execution_date or "", camt_s.booking_date or "")
+            feat = {
+                "split_id": split_id, "group_role": "GROUP",
+                "n_camts_in_split": len(camts_s),
+                "sum_of_camt_amounts": camts_sum,
+                "marker_detected": split["marker_detected"],
+                "is_ambiguous": ambig_s,
+                "score_breakdown": score_breakdown(
+                    {"amount_exact": True, "currency_match": True,
+                     "counterparty_similarity": 0.95, "end_to_end_id_exact": False,
+                     "pmt_ref_exact": True, "invoice_exact": True,
+                     "invoice_suffix_match": False, "amount_variance": 0.0},
+                    rule_s, conf_s),
+            }
+            if ambig_s and split["alternative_camts"]:
+                feat["alternative_split_camt_ids"] = [c.ntry_id for c in split["alternative_camts"]]
 
-                if is_anchor:
-                    feat = {
-                        "split_id": split_id, "group_role": "ANCHOR",
-                        "n_camts_in_split": len(camts_s),
-                        "sum_of_camt_amounts": camts_sum,
-                        "marker_detected": split["marker_detected"],
-                        "is_ambiguous": ambig_s,
-                        "score_breakdown": score_breakdown(
-                            {"amount_exact": True, "currency_match": True,
-                             "counterparty_similarity": 0.95, "end_to_end_id_exact": False,
-                             "pmt_ref_exact": True, "invoice_exact": True,
-                             "invoice_suffix_match": False, "amount_variance": 0.0},
-                            rule_s, conf_s),
-                    }
-                    if ambig_s and split["alternative_camts"]:
-                        feat["alternative_split_camt_ids"] = [c.ntry_id for c in split["alternative_camts"]]
-                    sugg_s = [{"action": "CONFIRM_SPLIT_MATCH", "confidence": conf_s / 100.0,
-                               "split_id": split_id, "psr_id": psr_s.id,
-                               "split_camt_ids": [c.ntry_id for c in camts_s]}]
-                    rc = ReconCase(
-                        case_id=this_case_id, match_key=psr_s.id,
-                        psr_id=psr_s.id, camt_id=camt_s.camt_id,
-                        reference=psr_s.reference, invoice=psr_s.invoice,
-                        counterparty=psr_s.counterparty,
-                        internal_amount=psr_s.amount,
-                        bank_amount=camts_sum,     # aggregated CAMT sum on anchor
-                        variance=round(camts_sum - psr_s.amount, 2),
-                        currency=psr_s.currency,
-                        value_date=psr_s.execution_date or "", booking_date=camt_s.booking_date or "",
-                        reconciliation_status=status_s, reason_code=reason_s,
-                        match_type="1_TO_N", match_confidence=conf_s,
-                        aging_days=days_s, aging_bucket=aging_bucket(days_s),
-                        rule_applied=rule_s, exception_flag="Y",
-                        explanation=expl_s, feature_snapshot=feat, suggestions=sugg_s,
-                        group_id=split_id, group_role="ANCHOR",
-                    )
-                else:
-                    feat = {"split_member": True, "split_id": split_id, "anchor_case_id": anchor_case_id}
-                    mem_expl = (
-                        f"Part of split {split_id} ({len(camts_s)} CAMTs settle PSR "
-                        f"{psr_s.id} {psr_s.amount:.2f}). This CAMT contributes "
-                        f"{camt_s.amount:.2f}. See anchor case {anchor_case_id}."
-                    )
-                    rc = ReconCase(
-                        case_id=this_case_id, match_key=psr_s.id,
-                        psr_id=psr_s.id, camt_id=camt_s.camt_id,
-                        reference=psr_s.reference, invoice=psr_s.invoice,
-                        counterparty=psr_s.counterparty,
-                        internal_amount=None,        # PSR shown on anchor only
-                        bank_amount=camt_s.amount,
-                        variance=None,
-                        currency=psr_s.currency,
-                        value_date=psr_s.execution_date or "", booking_date=camt_s.booking_date or "",
-                        reconciliation_status=status_s, reason_code=reason_s,
-                        match_type="1_TO_N", match_confidence=conf_s,
-                        aging_days=days_s, aging_bucket=aging_bucket(days_s),
-                        rule_applied=rule_s, exception_flag="Y",
-                        explanation=mem_expl, feature_snapshot=feat, suggestions=[],
-                        group_id=split_id, group_role="MEMBER",
-                    )
+            sugg_s = [{"action": "CONFIRM_SPLIT_MATCH", "confidence": conf_s / 100.0,
+                       "split_id": split_id, "psr_id": psr_s.id,
+                       "split_camt_ids": [c.ntry_id for c in camts_s]}]
 
-                cases.append(rc)
-                idx += 1
+            rc = ReconCase(
+                case_id=f"CASE-{idx:06d}", match_key=psr_s.id,
+                psr_id=psr_s.id, camt_id=primary_camt.camt_id,
+                reference=psr_s.reference, invoice=psr_s.invoice,
+                counterparty=psr_s.counterparty,
+                internal_amount=psr_s.amount,
+                bank_amount=camts_sum,
+                variance=round(camts_sum - psr_s.amount, 2),
+                currency=psr_s.currency,
+                value_date=psr_s.execution_date or "", booking_date=primary_camt.booking_date or "",
+                reconciliation_status=status_s, reason_code=reason_s,
+                match_type="1_TO_N", match_confidence=conf_s,
+                aging_days=days_s, aging_bucket=aging_bucket(days_s),
+                rule_applied=rule_s, exception_flag="Y",
+                explanation=expl_s, feature_snapshot=feat, suggestions=sugg_s,
+                group_id=split_id, group_role="GROUP",
+                camt_members=camt_members_s,
+            )
+            cases.append(rc)
+            idx += 1
+
+            for camt_s in camts_s:
                 used.add(camt_s.ntry_id)
-
             p10_consumed_psr_ids.add(psr_s.id)
 
     # ── P4 fuzzy 1-to-1 pass (runs AFTER P6 — TASK-34, hardened TASK-37) ───────
