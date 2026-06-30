@@ -765,15 +765,15 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
         p6_groups = find_one_to_many_groups(p5_pending, residual_camts, config)
 
         for grp in p6_groups:
-            grp_id     = f"GRP-{idx:06d}"
-            camt_b     = grp["camt"]
-            psrs_g     = grp["psrs"]   # anchor-first (sorted by date/id)
-            conf_g     = grp["confidence"]
-            rule_g     = grp["rule_applied"]
-            reason_g   = grp["reason_code"]
-            expl_g     = grp["explanation"]
-            grp_var    = grp["group_variance"]
-            group_sum  = round(sum(p.amount for p in psrs_g), 2)
+            grp_id    = f"GRP-{idx:06d}"
+            camt_b    = grp["camt"]
+            psrs_g    = grp["psrs"]   # primary-first (sorted by date/id)
+            conf_g    = grp["confidence"]
+            rule_g    = grp["rule_applied"]
+            reason_g  = grp["reason_code"]
+            expl_g    = grp["explanation"]
+            grp_var   = grp["group_variance"]
+            group_sum = round(sum(p.amount for p in psrs_g), 2)
 
             if rule_g == "P6_BATCH_MINOR_VARIANCE":
                 status_g = "Post to Short or Over Ledger"
@@ -782,78 +782,61 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
             else:
                 status_g = "Suggested Match - Group Settlement"
 
-            anchor_case_id = f"CASE-{idx:06d}"
+            # All PSRs embedded as members — one row per group, not per PSR
+            psr_members_g = [
+                {"psr_id": p.id, "amount": p.amount,
+                 "reference": p.reference or "", "date": p.execution_date or ""}
+                for p in psrs_g
+            ]
+            primary_psr = psrs_g[0]
+            days_g = safe_date_diff(primary_psr.execution_date or "", camt_b.booking_date or "")
 
-            for pos, psr_g in enumerate(psrs_g):
-                is_anchor  = (pos == 0)
-                this_case_id = f"CASE-{idx:06d}"
-                days_g     = safe_date_diff(psr_g.execution_date or "", camt_b.booking_date or "")
+            feat = {
+                "group_id": grp_id, "group_role": "GROUP",
+                "n_psrs_in_group": len(psrs_g), "sum_of_psr_amounts": group_sum,
+                "counterparty_consensus_similarity": round(
+                    sum(similarity(p.counterparty, camt_b.counterparty) for p in psrs_g) / len(psrs_g), 4),
+                "max_date_spread_days": max(
+                    safe_date_diff(p.execution_date or "", camt_b.booking_date or "") for p in psrs_g),
+                "is_ambiguous": grp["ambiguous"], "group_variance": grp_var,
+                "score_breakdown": score_breakdown(
+                    {"amount_exact": grp_var == 0.0, "currency_match": True,
+                     "counterparty_similarity": 0.9, "end_to_end_id_exact": False,
+                     "pmt_ref_exact": False, "invoice_exact": False,
+                     "invoice_suffix_match": False, "amount_variance": grp_var},
+                    rule_g, conf_g),
+            }
+            if grp["ambiguous"] and grp["alternative_psrs"]:
+                feat["alternative_group_psr_ids"] = [p.id for p in grp["alternative_psrs"]]
 
-                if is_anchor:
-                    feat = {
-                        "group_id": grp_id, "group_role": "ANCHOR",
-                        "n_psrs_in_group": len(psrs_g), "sum_of_psr_amounts": group_sum,
-                        "counterparty_consensus_similarity": round(
-                            sum(similarity(p.counterparty, camt_b.counterparty) for p in psrs_g) / len(psrs_g), 4),
-                        "max_date_spread_days": max(
-                            safe_date_diff(p.execution_date or "", camt_b.booking_date or "") for p in psrs_g),
-                        "is_ambiguous": grp["ambiguous"], "group_variance": grp_var,
-                        "score_breakdown": score_breakdown(
-                            {"amount_exact": grp_var == 0.0, "currency_match": True,
-                             "counterparty_similarity": 0.9, "end_to_end_id_exact": False,
-                             "pmt_ref_exact": False, "invoice_exact": False,
-                             "invoice_suffix_match": False, "amount_variance": grp_var},
-                            rule_g, conf_g),
-                    }
-                    if grp["ambiguous"] and grp["alternative_psrs"]:
-                        feat["alternative_group_psr_ids"] = [p.id for p in grp["alternative_psrs"]]
-                    sugg_g = [{"action": "CONFIRM_GROUP_MATCH", "confidence": conf_g / 100.0,
-                               "group_id": grp_id, "group_psr_ids": [p.id for p in psrs_g],
-                               "camt_id": camt_b.camt_id}]
-                    rc = ReconCase(
-                        case_id=this_case_id, match_key=camt_b.ntry_id,
-                        psr_id=psr_g.id, camt_id=camt_b.camt_id,
-                        reference=psr_g.reference, invoice=psr_g.invoice,
-                        counterparty=psr_g.counterparty,
-                        internal_amount=group_sum,  # group sum on anchor
-                        bank_amount=camt_b.amount,
-                        variance=round(group_sum - (camt_b.amount or 0), 2),
-                        currency=psr_g.currency,
-                        value_date=psr_g.execution_date or "", booking_date=camt_b.booking_date or "",
-                        reconciliation_status=status_g, reason_code=reason_g,
-                        match_type="N_TO_1", match_confidence=conf_g,
-                        aging_days=days_g, aging_bucket=aging_bucket(days_g),
-                        rule_applied=rule_g, exception_flag="Y",
-                        explanation=expl_g, feature_snapshot=feat, suggestions=sugg_g,
-                        group_id=grp_id, group_role="ANCHOR",
-                    )
-                else:
-                    feat = {"group_member": True, "group_id": grp_id, "anchor_case_id": anchor_case_id}
-                    mem_expl = (f"Part of group {grp_id} ({len(psrs_g)} PSRs sum to "
-                                f"{group_sum:.2f} = CAMT {camt_b.ntry_id} {camt_b.amount:.2f}). "
-                                f"See anchor case {anchor_case_id}.")
-                    rc = ReconCase(
-                        case_id=this_case_id, match_key=camt_b.ntry_id,
-                        psr_id=psr_g.id, camt_id=camt_b.camt_id,
-                        reference=psr_g.reference, invoice=psr_g.invoice,
-                        counterparty=psr_g.counterparty,
-                        internal_amount=psr_g.amount,  # individual amount on members
-                        bank_amount=None, variance=None,
-                        currency=psr_g.currency,
-                        value_date=psr_g.execution_date or "", booking_date=camt_b.booking_date or "",
-                        reconciliation_status=status_g, reason_code=reason_g,
-                        match_type="N_TO_1", match_confidence=conf_g,
-                        aging_days=days_g, aging_bucket=aging_bucket(days_g),
-                        rule_applied=rule_g, exception_flag="Y",
-                        explanation=mem_expl, feature_snapshot=feat, suggestions=[],
-                        group_id=grp_id, group_role="MEMBER",
-                    )
+            sugg_g = [{"action": "CONFIRM_GROUP_MATCH", "confidence": conf_g / 100.0,
+                       "group_id": grp_id, "group_psr_ids": [p.id for p in psrs_g],
+                       "camt_id": camt_b.camt_id}]
 
-                cases.append(rc)
-                idx += 1
-                p6_consumed_psr_ids.add(psr_g.id)
+            rc = ReconCase(
+                case_id=f"CASE-{idx:06d}", match_key=camt_b.ntry_id,
+                psr_id=primary_psr.id, camt_id=camt_b.camt_id,
+                reference=primary_psr.reference, invoice=primary_psr.invoice,
+                counterparty=primary_psr.counterparty,
+                internal_amount=group_sum,
+                bank_amount=camt_b.amount,
+                variance=round(group_sum - (camt_b.amount or 0), 2),
+                currency=primary_psr.currency,
+                value_date=primary_psr.execution_date or "", booking_date=camt_b.booking_date or "",
+                reconciliation_status=status_g, reason_code=reason_g,
+                match_type="N_TO_1", match_confidence=conf_g,
+                aging_days=days_g, aging_bucket=aging_bucket(days_g),
+                rule_applied=rule_g, exception_flag="Y",
+                explanation=expl_g, feature_snapshot=feat, suggestions=sugg_g,
+                group_id=grp_id, group_role="GROUP",
+                psr_members=psr_members_g,
+            )
+            cases.append(rc)
+            idx += 1
 
             used.add(camt_b.ntry_id)
+            for psr_g in psrs_g:
+                p6_consumed_psr_ids.add(psr_g.id)
 
     # Post-P6 residual: PSRs that did not land in a P6 group
     post_p6_residual = [psr for psr in p5_pending if psr.id not in p6_consumed_psr_ids]

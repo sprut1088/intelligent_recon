@@ -479,20 +479,31 @@ def resolve_case(case_id: str, request: CaseResolveRequest) -> dict:
         # ── Collect group siblings ────────────────────────────────────────
         group_id       = case["group_id"]
         group_case_ids = []
-        group_psr_ids  = []
         if group_id:
             sibling_rows = conn.execute(
-                "SELECT case_id, psr_id FROM recon_cases WHERE group_id = ?", (group_id,)
+                "SELECT case_id FROM recon_cases WHERE group_id = ?", (group_id,)
             ).fetchall()
             group_case_ids = [r["case_id"] for r in sibling_rows]
-            group_psr_ids  = [r["psr_id"]  for r in sibling_rows if r["psr_id"]]
 
         anchor_case_id = case["case_id"]
 
         # ── PSR / bank IDs for the resolution record ─────────────────────
-        selected_psr  = group_psr_ids if group_psr_ids else (
-            request.selected_psr_ids or ([case["psr_id"]] if case["psr_id"] else []))
-        selected_bank = request.selected_bank_ids or ([case["camt_id"]] if case["camt_id"] else [])
+        # Prefer embedded members list (new consolidated model); fall back to
+        # request body or the single case IDs (1:1 and legacy cases).
+        import json as _json
+        psr_members_raw  = case["psr_members_json"]
+        camt_members_raw = case["camt_members_json"]
+        psr_members_list  = _json.loads(psr_members_raw)  if psr_members_raw  else None
+        camt_members_list = _json.loads(camt_members_raw) if camt_members_raw else None
+
+        selected_psr = (
+            [m["psr_id"] for m in psr_members_list]  if psr_members_list
+            else request.selected_psr_ids or ([case["psr_id"]] if case["psr_id"] else [])
+        )
+        selected_bank = (
+            [m["camt_id"] for m in camt_members_list] if camt_members_list
+            else request.selected_bank_ids or ([case["camt_id"]] if case["camt_id"] else [])
+        )
 
         # ── Override + learning eligibility ──────────────────────────────
         is_override = bool(request.override_reason)
