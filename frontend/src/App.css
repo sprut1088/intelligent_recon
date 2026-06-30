@@ -201,6 +201,10 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .field-diff-table th:first-child { min-width: 150px; }
 .field-diff-table tbody th { background: #f8fbff; font-size: 0.75rem; color: var(--muted); text-transform: uppercase; letter-spacing: 0.04em; }
 .field-diff-table td.mismatch { background: #fffbeb; box-shadow: inset 0 0 0 1px rgba(245,158,11,.35); }
+.field-diff-table .group-member-row td { background: #f8f9ff; }
+.field-diff-table .group-sum-row th,
+.field-diff-table .group-sum-row td { font-weight: 700; border-top: 2px solid #cbd5e1; background: #f1f5f9; }
+.field-diff-table td.match-exact { color: #15803d; font-weight: 600; }
 .field-diff-table th:last-child, .field-diff-table td:last-child { border-right: 0; }
 .source-link { color: var(--primary); text-decoration: none; font-weight: 500; }
 .source-link:hover { text-decoration: underline; }
