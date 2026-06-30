@@ -582,7 +582,7 @@ function ResultTable({ rows, onSelect }) {
             const age = computeAge(r);
             return (
               <tr key={r.result_id} onClick={() => onSelect?.(r)} className="clickable">
-                <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} />{r.match_type === "N_TO_1" && <span className="badge badge-group" title={`Group: ${r.group_id}`}>{r.group_role === "ANCHOR" ? "N→1 anchor" : "N→1 member"}</span>}<br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
+                <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} />{r.match_type === "N_TO_1" && <span className="badge badge-group" title={`Group: ${r.group_id}`}>N→1 · {r.psr_members?.length ?? '?'} PSRs</span>}{r.match_type === "1_TO_N" && <span className="badge badge-group" title={`Split: ${r.group_id}`}>1→N · {r.camt_members?.length ?? '?'} CAMTs</span>}<br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
                 <td>{money(r.internal_amount)}</td>
                 <td>{money(r.bank_amount)}</td>
                 <td>{r.reference || '-'}</td>
@@ -666,7 +666,6 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
   const [overrideLoading, setOverrideLoading] = useState(false);
   const [similarCases, setSimilarCases] = useState(null);
   const [similarOpen, setSimilarOpen] = useState(false);
-  const [siblingCases, setSiblingCases] = useState([]);
   const [noMatchLoading, setNoMatchLoading] = useState(null);
   const [drawerFilter, setDrawerFilter] = useState('all');
   const [shortcutsHidden, setShortcutsHidden] = useState(() => localStorage.getItem('hideDrawerShortcuts') === '1');
@@ -691,7 +690,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
   useEffect(() => {
     if (!selected?.result_id) {
       setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote('');
-      setSimilarCases(null); setSimilarOpen(false); setSiblingCases([]);
+      setSimilarCases(null); setSimilarOpen(false);
       setDrawerFilter('all');
       return;
     }
@@ -701,13 +700,9 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
     setOverrideNote('');
     setSimilarCases(null);
     setSimilarOpen(false);
-    setSiblingCases([]);
     setNoMatchLoading(null);
     api.caseDetail(selected.result_id).then(d => {
       setDetail(d.case);
-      if (d.case.group_id) {
-        api.groupCases(d.case.group_id).then(res => setSiblingCases(res.items || [])).catch(() => setSiblingCases([]));
-      }
     }).catch(() => {});
     api.similarCases(selected.result_id).then(setSimilarCases).catch(() => setSimilarCases({ items: [], count: 0 }));
   }, [selected?.result_id]);
@@ -916,23 +911,35 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
               );
             })()}
           </Panel>
-{item.match_type === "N_TO_1" && siblingCases.length > 0 && (
+{item.match_type === "N_TO_1" && item.psr_members?.length > 0 && (
           <div className="group-panel">
-            <h4>Group settlement — {siblingCases.length} PSR{siblingCases.length !== 1 ? 's' : ''} → 1 bank entry</h4>
+            <h4>Group settlement — {item.psr_members.length} PSR{item.psr_members.length !== 1 ? 's' : ''} → 1 bank entry</h4>
             <table className="group-sibling-table">
-              <thead><tr><th>Case</th><th>PSR ID</th><th>Amount</th><th>Date</th><th>Role</th></tr></thead>
+              <thead><tr><th>PSR ID</th><th>Amount</th><th>Reference</th><th>Date</th></tr></thead>
               <tbody>
-                {siblingCases.map(sib => (
-                  <tr
-                    key={sib.result_id}
-                    className={sib.result_id === item.result_id ? "current-row" : "sibling-row"}
-                    onClick={() => sib.result_id !== item.result_id && onSelect?.(sib)}
-                  >
-                    <td>{sib.result_id === item.result_id ? `${sib.result_id} (this)` : sib.result_id}</td>
-                    <td>{sib.psr_id || '-'}</td>
-                    <td>{sib.internal_amount != null ? Number(sib.internal_amount).toFixed(2) : '-'}</td>
-                    <td>{sib.value_date || '-'}</td>
-                    <td><span className="badge badge-group">{sib.group_role}</span></td>
+                {item.psr_members.map(m => (
+                  <tr key={m.psr_id}>
+                    <td>{m.psr_id}</td>
+                    <td>{Number(m.amount).toFixed(2)}</td>
+                    <td>{m.reference || '—'}</td>
+                    <td>{m.date || '—'}</td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+{item.match_type === "1_TO_N" && item.camt_members?.length > 0 && (
+          <div className="group-panel">
+            <h4>Split settlement — 1 PSR → {item.camt_members.length} bank entr{item.camt_members.length !== 1 ? 'ies' : 'y'}</h4>
+            <table className="group-sibling-table">
+              <thead><tr><th>CAMT ID</th><th>Amount</th><th>Date</th></tr></thead>
+              <tbody>
+                {item.camt_members.map(m => (
+                  <tr key={m.ntry_id}>
+                    <td>{m.camt_id}</td>
+                    <td>{Number(m.amount).toFixed(2)}</td>
+                    <td>{m.date || '—'}</td>
                   </tr>
                 ))}
               </tbody>
