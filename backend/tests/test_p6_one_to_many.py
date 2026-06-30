@@ -175,38 +175,37 @@ def test_p6_does_not_steal_p1_matched_psrs():
                 and c.match_type == "UNMATCHED_PSR"]
 
     assert len(p1_cases) == 1 and p1_cases[0].psr_id == "TX-E"
-    assert len(p6_cases) == 2, f"Expected 2 P6 cases (anchor+member), got {len(p6_cases)}"
+    assert len(p6_cases) == 1, f"Expected 1 consolidated P6 case, got {len(p6_cases)}"
     assert len(p5_cases) == 1 and p5_cases[0].psr_id == "TX-H"
 
-    anchor = next(c for c in p6_cases if c.group_role == "ANCHOR")
-    member = next(c for c in p6_cases if c.group_role == "MEMBER")
+    group_case = p6_cases[0]
+    assert group_case.group_role == "GROUP"
+    assert group_case.group_id.startswith("GRP-")
 
-    # Anchor: internal_amount = group sum; bank_amount = CAMT amount
-    assert abs(anchor.internal_amount - 500.0) < 0.01
-    assert anchor.bank_amount == 500.0
-    assert abs(anchor.variance) < 0.01
+    # Group sum = 200 + 300 = 500; bank amount = CAMT amount; variance = 0
+    assert abs(group_case.internal_amount - 500.0) < 0.01
+    assert group_case.bank_amount == 500.0
+    assert abs(group_case.variance) < 0.01
 
-    # Member: individual PSR amount; bank_amount and variance null
-    assert member.internal_amount in (200.0, 300.0)
-    assert member.bank_amount is None
-    assert member.variance is None
-
-    # Both share same group_id
-    assert anchor.group_id == member.group_id
-    assert anchor.group_id.startswith("GRP-")
+    # Both PSRs embedded in psr_members with correct individual amounts
+    assert group_case.psr_members is not None
+    assert len(group_case.psr_members) == 2
+    member_amounts = {m["psr_id"]: m["amount"] for m in group_case.psr_members}
+    assert set(member_amounts.keys()) == {"TX-F", "TX-G"}
+    assert member_amounts["TX-F"] in (200.0, 300.0)
+    assert member_amounts["TX-G"] in (200.0, 300.0)
 
 
 # ── Test 6: Resolve routing — member case_id → anchor ────────────────────────
 
-def test_p6_resolve_member_routes_to_anchor(tmp_path, monkeypatch):
-    """Resolving a MEMBER case_id must update all group cases and write one resolution row."""
+def test_p6_resolve_group_case(tmp_path, monkeypatch):
+    """Resolving a group case writes one resolution row with all PSR IDs and learning_eligible=0."""
     from app import config as cfg_module
     from app.config import Settings
     db_path = tmp_path / "test_p6.db"
     test_settings = Settings(database_path=db_path)
     monkeypatch.setattr(cfg_module, "settings", test_settings)
 
-    # Also patch settings in all modules that cache it at import time
     import app.db as db_mod
     import app.reconciliation as recon_mod
     import app.loader as loader_mod
@@ -228,47 +227,43 @@ def test_p6_resolve_member_routes_to_anchor(tmp_path, monkeypatch):
         conn.commit()
 
     p6_cases = [c for c in cases if c.match_type == "N_TO_1"]
-    assert len(p6_cases) == 2, f"Expected 2 P6 cases, got {len(p6_cases)}: {[(c.psr_id, c.group_role) for c in cases]}"
-
-    anchor = next(c for c in p6_cases if c.group_role == "ANCHOR")
-    member = next(c for c in p6_cases if c.group_role == "MEMBER")
+    assert len(p6_cases) == 1, f"Expected 1 group case, got {len(p6_cases)}"
+    group_case = p6_cases[0]
+    assert group_case.group_role == "GROUP"
 
     from fastapi.testclient import TestClient
     from app.main import app as fastapi_app
     client = TestClient(fastapi_app)
 
     resp = client.post(
-        f"/api/reconcile/cases/{member.case_id}/resolve",
+        f"/api/reconcile/cases/{group_case.case_id}/resolve",
         json={
             "resolution_type": "MATCHED_MANUAL",
             "reason_code": "BANK_BATCH_AGGREGATION",
-            "selected_psr_ids": ["TX-R1", "TX-R2"],
-            "selected_bank_ids": ["NTRY-R"],
+            "selected_psr_ids": [],
+            "selected_bank_ids": [],
             "fields_used": ["amount_sum", "counterparty"],
             "fields_ignored": [],
             "accepted_variance": 0,
-            "comment": "Test group resolve via member",
+            "comment": "Test group resolve",
             "learning_eligible": False,
         },
     )
     assert resp.status_code == 200, resp.text
     body = resp.json()
-    assert body["resolved_via_anchor"] == anchor.case_id
-    assert body["group_id"] == anchor.group_id
-    assert member.case_id in body.get("member_case_ids", [body.get("resolved_via_anchor")])
+    assert body["group_id"] == group_case.group_id
 
     with get_conn() as conn:
-        updated = rows_to_dicts(conn.execute(
-            "SELECT case_id, reconciliation_status FROM recon_cases WHERE group_id = ?",
-            (anchor.group_id,),
-        ).fetchall())
-    assert all(r["reconciliation_status"] == "Resolved Manually" for r in updated), \
-        f"Not all resolved: {updated}"
+        row = conn.execute(
+            "SELECT reconciliation_status FROM recon_cases WHERE case_id = ?",
+            (group_case.case_id,),
+        ).fetchone()
+    assert row["reconciliation_status"] == "Resolved Manually"
 
     with get_conn() as conn:
         resolutions = conn.execute(
             "SELECT * FROM recon_manual_resolution WHERE case_id = ?",
-            (anchor.case_id,),
+            (group_case.case_id,),
         ).fetchall()
     assert len(resolutions) == 1
     psr_ids_in_res = json.loads(resolutions[0]["psr_transaction_ids_json"])

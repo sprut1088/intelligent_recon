@@ -240,24 +240,26 @@ def test_abc_recon_split_settlement_full_pipeline():
     p5_unmatched = [c for c in cases if c.rule_applied == "P5_EXCEPTION_HANDLING"]
     assert p5_unmatched == [], f"Split should consume the PSR + CAMTs; got {p5_unmatched}"
 
-    # Exactly one 1_TO_N group, anchor + member
+    # Exactly one 1_TO_N consolidated case
     split_cases = [c for c in cases if c.match_type == "1_TO_N"]
-    assert len(split_cases) == 2
-    assert {c.group_role for c in split_cases} == {"ANCHOR", "MEMBER"}
-
-    anchor = next(c for c in split_cases if c.group_role == "ANCHOR")
-    member = next(c for c in split_cases if c.group_role == "MEMBER")
-    assert anchor.psr_id == "TX-2026-9010"
-    assert member.psr_id == "TX-2026-9010"
-    assert anchor.internal_amount == 3300.0
-    assert anchor.bank_amount == 3300.0
-    assert anchor.variance == 0.0
-    assert anchor.match_confidence == 92
-    assert anchor.rule_applied == "P10_SPLIT_SHARED_REFERENCE"
-    assert anchor.group_id == member.group_id
-    assert anchor.group_id.startswith("SPLIT-")
-    # Marker text appears in the anchor explanation
-    assert "1/2" in anchor.explanation and "2/2" in anchor.explanation
+    assert len(split_cases) == 1
+    split_case = split_cases[0]
+    assert split_case.group_role == "GROUP"
+    assert split_case.psr_id == "TX-2026-9010"
+    assert split_case.internal_amount == 3300.0
+    assert split_case.bank_amount == 3300.0
+    assert split_case.variance == 0.0
+    assert split_case.match_confidence == 92
+    assert split_case.rule_applied == "P10_SPLIT_SHARED_REFERENCE"
+    assert split_case.group_id.startswith("SPLIT-")
+    # Both CAMTs embedded in camt_members with correct amounts
+    assert split_case.camt_members is not None
+    assert len(split_case.camt_members) == 2
+    camt_amounts = {m["camt_id"]: m["amount"] for m in split_case.camt_members}
+    assert camt_amounts.get("PARTIAL-9010-A") == 2000.0
+    assert camt_amounts.get("PARTIAL-9010-B") == 1300.0
+    # Marker text appears in the explanation
+    assert "1/2" in split_case.explanation and "2/2" in split_case.explanation
 
 
 def test_split_does_not_steal_p1_matched_camt():
@@ -286,4 +288,8 @@ def test_split_does_not_steal_p1_matched_camt():
 
     # TX-SPLIT must still get its 2-CAMT split (C-PART-1 + C-PART-2)
     split_cases = [c for c in cases if c.psr_id == "TX-SPLIT" and c.match_type == "1_TO_N"]
-    assert len(split_cases) == 2
+    assert len(split_cases) == 1
+    split_case = split_cases[0]
+    assert split_case.group_role == "GROUP"
+    camt_ids = {m["camt_id"] for m in split_case.camt_members}
+    assert camt_ids == {"C-PART-1", "C-PART-2"}

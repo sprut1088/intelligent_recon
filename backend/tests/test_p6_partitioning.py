@@ -106,20 +106,22 @@ def test_p6_never_mixes_distinct_partitions():
     ]
     cases = reconcile_transactions(psrs, camts, SEED_PATTERNS)
 
-    by_psr = {c.psr_id: c for c in cases if c.psr_id}
+    # Two distinct group cases must form (one per customer)
+    p6_cases = [c for c in cases if c.match_type == "N_TO_1"]
+    assert len(p6_cases) == 2, f"Expected 2 group cases, got {len(p6_cases)}"
 
-    # Two distinct groups must form
-    grp_a = {by_psr[t].group_id for t in ("TX-A1", "TX-A2", "TX-A3")}
-    grp_b = {by_psr[t].group_id for t in ("TX-B1", "TX-B2")}
-    assert len(grp_a) == 1 and None not in grp_a, f"Customer A group split or missing: {grp_a}"
-    assert len(grp_b) == 1 and None not in grp_b, f"Customer B group split or missing: {grp_b}"
-    assert grp_a != grp_b, "Customer A and Customer B must be in DIFFERENT groups"
+    # Each case must have group_role GROUP and embed the right PSR members
+    grp_a_case = next(c for c in p6_cases if c.camt_id == "NTRY-A")
+    grp_b_case = next(c for c in p6_cases if c.camt_id == "NTRY-B")
 
-    # CAMT amounts must land on the right anchors
-    anchor_a = next(c for c in cases if c.group_id in grp_a and c.group_role == "ANCHOR")
-    anchor_b = next(c for c in cases if c.group_id in grp_b and c.group_role == "ANCHOR")
-    assert anchor_a.camt_id == "NTRY-A"
-    assert anchor_b.camt_id == "NTRY-B"
+    assert grp_a_case.group_role == "GROUP"
+    assert grp_b_case.group_role == "GROUP"
+    assert grp_a_case.group_id != grp_b_case.group_id, "Must be in DIFFERENT groups"
+
+    psr_ids_a = {m["psr_id"] for m in grp_a_case.psr_members}
+    psr_ids_b = {m["psr_id"] for m in grp_b_case.psr_members}
+    assert psr_ids_a == {"TX-A1", "TX-A2", "TX-A3"}, f"Customer A members wrong: {psr_ids_a}"
+    assert psr_ids_b == {"TX-B1", "TX-B2"}, f"Customer B members wrong: {psr_ids_b}"
 
 
 def test_p6_legal_suffix_variations_match():

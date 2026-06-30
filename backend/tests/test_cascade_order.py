@@ -57,20 +57,21 @@ def test_p4_does_not_cannibalise_p6_batch_member():
     ]
     cases = reconcile_transactions(psrs, camts, SEED_PATTERNS)
 
-    by_psr = {c.psr_id: c for c in cases if c.psr_id}
+    p6_cases = [c for c in cases if c.match_type == "N_TO_1"]
+    assert len(p6_cases) == 1, f"Expected 1 consolidated P6 group case, got {len(p6_cases)}"
+    group_case = p6_cases[0]
 
-    # All three PSRs must land in the P6 group, not the P4 trap.
-    assert by_psr["TX-9009"].rule_applied.startswith("P6_"), (
-        f"TX-9009 should be a P6 member but got rule={by_psr['TX-9009'].rule_applied}, "
-        f"camt_id={by_psr['TX-9009'].camt_id}"
+    # All three PSRs must be in the P6 group, not stolen by P4.
+    assert group_case.rule_applied.startswith("P6_"), (
+        f"Group case should be P6 but got rule={group_case.rule_applied}"
     )
-    assert by_psr["TX-9009"].match_type == "N_TO_1"
-    assert by_psr["TX-9009"].group_role in {"ANCHOR", "MEMBER"}
+    assert group_case.match_type == "N_TO_1"
+    assert group_case.group_role == "GROUP"
 
-    # All three PSRs share the same group_id.
-    group_ids = {by_psr[t].group_id for t in ("TX-9007", "TX-9008", "TX-9009")}
-    assert len(group_ids) == 1 and None not in group_ids, (
-        f"All three PSRs should be in one group, got group_ids={group_ids}"
+    # All three PSR IDs appear in psr_members.
+    member_psr_ids = {m["psr_id"] for m in group_case.psr_members}
+    assert member_psr_ids == {"TX-9007", "TX-9008", "TX-9009"}, (
+        f"All three PSRs should be group members, got {member_psr_ids}"
     )
 
     # NTRY-016 was never matched by P4 — it should appear as a bank-only item.
