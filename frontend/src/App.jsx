@@ -47,19 +47,23 @@ function Metric({ label, value, hint, tone = 'neutral' }) {
   );
 }
 
-function Panel({ title, subtitle, children, actions, className = '' }) {
+function Panel({ title, subtitle, children, actions, className = '', collapsible = false, defaultCollapsed = false }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   return (
     <section className={`panel ${className}`}>
       {(title || actions) && (
-        <div className="panel-head">
+        <div
+          className={`panel-head${collapsible ? ' panel-head-collapsible' : ''}`}
+          onClick={collapsible ? () => setCollapsed(c => !c) : undefined}
+        >
           <div>
-            {title && <h3>{title}</h3>}
-            {subtitle && <p>{subtitle}</p>}
+            {title && <h3>{title}{collapsible && <span className="panel-collapse-icon">{collapsed ? ' \u25b8' : ' \u25be'}</span>}</h3>}
+            {subtitle && !collapsed && <p>{subtitle}</p>}
           </div>
           {actions && <div className="panel-actions">{actions}</div>}
         </div>
       )}
-      {children}
+      {(!collapsible || !collapsed) && children}
     </section>
   );
 }
@@ -760,6 +764,7 @@ function FieldDiff({ item }) {
 
 function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
   const [expanded, setExpanded] = useState(false);
+  const [showScoreInfo, setShowScoreInfo] = useState(false);
   const fmt = (v) => (v == null || v === '') ? '\u2014' : String(v);
   // LLM pick always first, then rest in original ranking order
   const sorted = [...candidates].sort((a, b) => {
@@ -780,7 +785,19 @@ function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
               <th>Counterparty</th>
               <th>Amount</th>
               <th>Date</th>
-              <th title="Rule-based pattern score (amount, date, reference). The LLM also uses remittance text, semantic similarity and business context \u2014 so its pick may differ from this score.">Rule Score {'\u24d8'}</th>
+              <th style={{ position: 'relative' }}>
+                Rule Score{'\u00a0'}
+                <button
+                  className="score-info-btn"
+                  onClick={e => { e.stopPropagation(); setShowScoreInfo(s => !s); }}
+                  title="Click for details"
+                >{'\u24d8'}</button>
+                {showScoreInfo && (
+                  <div className="score-info-popover">
+                    Rule-based pattern score (amount, date, reference). The LLM also uses remittance text, semantic similarity and business context {'\u2014'} so its pick may differ from this score.
+                  </div>
+                )}
+              </th>
               <th></th>
             </tr>
           </thead>
@@ -962,7 +979,19 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
             {item.variance != null && <><dt>Variance</dt><dd>{money(item.variance)}</dd></>}
           </dl>
           {hasMatch && <FieldDiff item={item} />}
-          <Panel title="Why this decision?" className="nested-panel">
+          {(() => {
+            const aicands = item.feature_snapshot?.candidates_reviewed;
+            const isAiMatchCase = ['AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required'].includes(item.reconciliation_status);
+            if (!isAiMatchCase || !aicands?.length) return null;
+            return (
+              <AiCandidatesPanel
+                candidates={aicands}
+                activeCamtId={item.camt_id}
+                onUseCandidate={handleCandidatePick}
+              />
+            );
+          })()}
+          <Panel title="Why this decision?" className="nested-panel" collapsible>
             {(() => {
               const NO_COMPARISON_STATUSES = ['Uncleared / In-Transit Payment', 'Bank-only Item - Investigation'];
               const isAiConfirmedNoMatch = item.reconciliation_status === 'AI Confirmed — No Match';
@@ -1057,18 +1086,6 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
               );
             })()}
           </Panel>
-{(() => {
-  const aicands = item.feature_snapshot?.candidates_reviewed;
-  const isAiMatchCase = ['AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required'].includes(item.reconciliation_status);
-  if (!isAiMatchCase || !aicands?.length) return null;
-  return (
-    <AiCandidatesPanel
-      candidates={aicands}
-      activeCamtId={item.camt_id}
-      onUseCandidate={handleCandidatePick}
-    />
-  );
-})()}
 {suggestions.length > 0 && item.reconciliation_status !== 'AI Confirmed — No Match' && (
           <Panel title="Suggested actions" className="nested-panel">
             <div className="action-stack">

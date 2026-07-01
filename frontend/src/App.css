@@ -217,6 +217,14 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .btn-use-candidate { font-size: 0.72rem; padding: 2px 8px; background: #6366f1; color: white; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; }
 .btn-use-candidate:hover { background: #4f46e5; }
 .candidate-pick-banner { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 6px 10px; font-size: 0.78rem; color: #1e40af; margin-bottom: 10px; }
+/* Panel collapsible */
+.panel-head-collapsible { cursor: pointer; user-select: none; }
+.panel-head-collapsible:hover { background: #f8fafc; border-radius: 6px; }
+.panel-collapse-icon { margin-left: 6px; font-size: 0.78rem; color: #94a3b8; }
+/* Rule Score info popover */
+.score-info-btn { background: none; border: none; cursor: pointer; color: #6366f1; font-size: 0.82rem; padding: 0 2px; vertical-align: middle; line-height: 1; }
+.score-info-btn:hover { color: #4f46e5; }
+.score-info-popover { position: absolute; z-index: 100; background: white; border: 1px solid #e2e8f0; border-radius: 6px; padding: 8px 10px; font-size: 0.73rem; color: #475569; width: 230px; right: 0; top: 100%; box-shadow: 0 4px 12px rgba(0,0,0,0.12); font-weight: 400; text-transform: none; letter-spacing: 0; line-height: 1.45; white-space: normal; }
 .field-diff-table th:last-child, .field-diff-table td:last-child { border-right: 0; }
 .source-link { color: var(--primary); text-decoration: none; font-weight: 500; }
 .source-link:hover { text-decoration: underline; }
