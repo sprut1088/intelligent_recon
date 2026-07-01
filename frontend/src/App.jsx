@@ -1508,9 +1508,10 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
   const aiProcessedCount = aiSuggestedCount + aiReviewCount + aiNoMatchCount + (summary.ai_verified_count || 0);
   const inTransitCount   = statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) + aiNoMatchCount;
   const bankOnlyCount    = statusCount(s => s === 'Bank-only Item - Investigation');
-  // Exceptions = all exception_flag='Y' rows minus In-Transit (non-AI) and Bank-only;
+  // Exceptions = all exception_flag='Y' rows minus In-Transit (non-AI), Bank-only, and
+  // AI Confirmed No Match (those are moved into In-Transit to avoid double-counting).
   // AI Suggested + AI Review ARE included as they need analyst action.
-  const baseExceptions   = Math.max(0, exceptionCount - statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) - bankOnlyCount);
+  const baseExceptions   = Math.max(0, exceptionCount - statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) - bankOnlyCount - aiNoMatchCount);
   const chips = [
     { label: 'Total',      value: total,          filter: '' },
     { label: 'Matched',    value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close') || s === 'Resolved Manually'), filter: 'matched' },
