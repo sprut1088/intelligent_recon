@@ -586,7 +586,7 @@ function ResultTable({ rows, onSelect }) {
             const age = computeAge(r);
             return (
               <tr key={r.result_id} onClick={() => onSelect?.(r)} className="clickable">
-                <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} />{r.match_type === "N_TO_1" && <span className="badge badge-group" title={`Group: ${r.group_id}`}>N→1 · {r.psr_members?.length ?? '?'} PSRs</span>}{r.match_type === "1_TO_N" && <span className="badge badge-group" title={`Split: ${r.group_id}`}>1→N · {r.camt_members?.length ?? '?'} CAMTs</span>}<br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
+                <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} />{r.feature_snapshot?.ai_verification && <span className="ai-pill accent" title="AI second opinion applied">AI</span>}{r.match_type === "N_TO_1" && <span className="badge badge-group" title={`Group: ${r.group_id}`}>N→1 · {r.psr_members?.length ?? '?'} PSRs</span>}{r.match_type === "1_TO_N" && <span className="badge badge-group" title={`Split: ${r.group_id}`}>1→N · {r.camt_members?.length ?? '?'} CAMTs</span>}<br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
                 <td>{money(r.internal_amount)}</td>
                 <td>{money(r.bank_amount)}</td>
                 <td>{r.reference || '-'}</td>
@@ -1496,7 +1496,7 @@ const STATUS_OPTIONS = [
   'Post to Short or Over Ledger',
 ];
 
-function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
+function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter, aiVerifiedCount = 0 }) {
   const statuses = summary.statuses || [];
   const statusCount = (match) => statuses
     .filter(s => match(s.reconciliation_status || ''))
@@ -1505,7 +1505,7 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
   const aiSuggestedCount = statusCount(s => s === 'AI-Assisted Suggested Match');
   const aiReviewCount    = statusCount(s => s === 'AI - Analyst Adjudication Required');
   const aiNoMatchCount   = statusCount(s => s === 'AI Confirmed — No Match');
-  const aiProcessedCount = aiSuggestedCount + aiReviewCount + aiNoMatchCount;
+  const aiProcessedCount = aiSuggestedCount + aiReviewCount + aiNoMatchCount + aiVerifiedCount;
   const inTransitCount   = statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) + aiNoMatchCount;
   const bankOnlyCount    = statusCount(s => s === 'Bank-only Item - Investigation');
   // Exceptions = all exception_flag='Y' rows minus In-Transit (non-AI) and Bank-only;
@@ -1739,7 +1739,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
           </div>
         </div>
       </div>
-      <SummaryBar summary={summary} total={total} activeFilter={activeFilter} onFilter={onFilter} />
+      <SummaryBar summary={summary} total={total} activeFilter={activeFilter} onFilter={onFilter} aiVerifiedCount={results.filter(r => r.feature_snapshot?.ai_verification && !r.rule_applied?.startsWith('TIER2C')).length} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.25rem 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <button
