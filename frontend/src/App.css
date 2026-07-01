@@ -233,8 +233,8 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .btn-exit { font-size: 0.8rem; padding: 5px 12px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; color: #475569; cursor: pointer; }
 .btn-exit:hover { border-color: #94a3b8; background: #f8fafc; }
 .btn-exit:disabled { opacity: 0.5; cursor: not-allowed; }
-/* AI Verdict tag in results table */
-.tag-verdict { display: block; margin-top: 4px; font-size: 0.68rem; padding: 1px 6px; }
+/* AI Verdict tag in results table — inline beside status */
+.tag-verdict { display: inline-block; margin-left: 6px; font-size: 0.68rem; vertical-align: middle; }
 /* AI Verification panel in EvidenceDrawer */
 .ai-verification-panel { padding: 4px 0; }
 .ai-verification-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
