@@ -611,19 +611,23 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
     from datetime import datetime
 
     VERIFIABLE_STATUSES = [
-        "Suggested Match \u2013 Analyst Review",
-        "Suggested Match \u2013 Enhanced Fuzzy",
-        "Exception \u2013 Amount Variance Review",
+        "Suggested Match - Analyst Review",
+        "Exception - Amount Variance Review",
     ]
 
     provider = settings.llm_provider
     model    = settings.llm_model
     max_tok  = settings.llm_max_tokens
 
+    logger.info(
+        "AI verifier starting | provider=%s model=%s target_statuses=%s",
+        provider, model, VERIFIABLE_STATUSES,
+    )
+
     if provider == "anthropic":
         api_key = os.getenv("ANTHROPIC_API_KEY")
         if not api_key:
-            logger.warning("ANTHROPIC_API_KEY not set — AI verifier skipped.")
+            logger.warning("AI verifier skipped — ANTHROPIC_API_KEY not set.")
             return []
         import anthropic as _anthropic
         _anthropic_client = _anthropic.Anthropic(api_key=api_key)
@@ -631,7 +635,7 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
     else:
         api_key = os.getenv("OPENROUTER_API_KEY")
         if not api_key:
-            logger.warning("OPENROUTER_API_KEY not set — AI verifier skipped.")
+            logger.warning("AI verifier skipped — OPENROUTER_API_KEY not set.")
             return []
         from openai import OpenAI
         _openai_client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
@@ -644,6 +648,7 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
                 f"SELECT * FROM recon_cases WHERE case_id IN ({placeholders})",
                 case_ids,
             ).fetchall())
+            logger.info("AI verifier: %d cases requested by ID", len(rows))
         else:
             status_ph = ",".join("?" * len(VERIFIABLE_STATUSES))
             rows = rows_to_dicts(conn.execute(
@@ -653,8 +658,14 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
                       AND camt_id IS NOT NULL AND camt_id != ''""",
                 VERIFIABLE_STATUSES,
             ).fetchall())
+            by_status = {}
+            for r in rows:
+                s = r["reconciliation_status"]
+                by_status[s] = by_status.get(s, 0) + 1
+            logger.info("AI verifier: found %d eligible cases — %s", len(rows), by_status)
 
     if not rows:
+        logger.info("AI verifier: no eligible cases found — nothing to do.")
         return []
 
     system_prompt = (
@@ -674,6 +685,12 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
     results: List[Dict] = []
 
     def _verify_case(case: Dict) -> Optional[Dict]:
+        case_id = case["case_id"]
+        logger.info(
+            "AI verifier: processing %s | status=%s rule=%s psr=%s camt=%s",
+            case_id, case.get("reconciliation_status"), case.get("rule_applied"),
+            case.get("psr_id"), case.get("camt_id"),
+        )
         user_prompt = (
             f"Rule applied: {case.get('rule_applied', '')} "
             f"(confidence {case.get('match_confidence', '')}%)\n\n"
@@ -734,11 +751,14 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
                 )
                 conn.commit()
 
-            logger.info("AI verifier: %s -> %s (%s%%)", case["case_id"], verdict, result.get("confidence_pct"))
-            return {"case_id": case["case_id"], **annotation}
+            logger.info(
+                "AI verifier: %s -> verdict=%s confidence=%s%% note=%r",
+                case_id, verdict, result.get("confidence_pct"), result.get("note", ""),
+            )
+            return {"case_id": case_id, **annotation}
 
         except Exception as exc:
-            logger.error("AI verifier failed for %s: %s", case["case_id"], exc)
+            logger.error("AI verifier: FAILED for %s (%s: %s)", case_id, type(exc).__name__, exc)
             return None
 
     with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
