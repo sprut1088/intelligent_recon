@@ -780,7 +780,7 @@ function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
               <th>Counterparty</th>
               <th>Amount</th>
               <th>Date</th>
-              <th title="Rule-based pattern score (amount, date, reference). The LLM also uses remittance text, semantic similarity and business context — so its pick may differ from this score.">Rule Score \u24d8</th>
+              <th title="Rule-based pattern score (amount, date, reference). The LLM also uses remittance text, semantic similarity and business context \u2014 so its pick may differ from this score.">Rule Score {'\u24d8'}</th>
               <th></th>
             </tr>
           </thead>
