@@ -764,7 +764,7 @@ function FieldDiff({ item }) {
 
 function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
   const [expanded, setExpanded] = useState(true);
-  const [showScoreInfo, setShowScoreInfo] = useState(false);
+  const [scoreInfoAnchor, setScoreInfoAnchor] = useState(null);
   const fmt = (v) => (v == null || v === '') ? '\u2014' : String(v);
   // LLM pick always first, then rest in original ranking order
   const sorted = [...candidates].sort((a, b) => {
@@ -772,6 +772,12 @@ function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
     const bActive = activeCamtId && b.camt_id === activeCamtId ? -1 : 0;
     return aActive - bActive;
   });
+  const toggleScoreInfo = (e) => {
+    e.stopPropagation();
+    if (scoreInfoAnchor) { setScoreInfoAnchor(null); return; }
+    const r = e.currentTarget.getBoundingClientRect();
+    setScoreInfoAnchor({ top: r.bottom + 6, left: Math.max(8, r.left - 180) });
+  };
   return (
     <div className="ai-candidates-panel">
       <button className="ai-candidates-toggle" onClick={() => setExpanded(e => !e)}>
@@ -785,16 +791,19 @@ function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
               <th>Counterparty</th>
               <th>Amount</th>
               <th>Date</th>
-              <th style={{ position: 'relative' }}>
+              <th>
                 Rule Score{'\u00a0'}
-                <button
-                  className="score-info-btn"
-                  onClick={e => { e.stopPropagation(); setShowScoreInfo(s => !s); }}
-                  title="Click for details"
-                >{'\u24d8'}</button>
-                {showScoreInfo && (
-                  <div className="score-info-popover">
+                <button className="score-info-btn" onClick={toggleScoreInfo} title="What is Rule Score?">
+                  {'\u24d8'}
+                </button>
+                {scoreInfoAnchor && (
+                  <div
+                    className="score-info-popover"
+                    style={{ position: 'fixed', top: scoreInfoAnchor.top, left: scoreInfoAnchor.left }}
+                    onClick={e => e.stopPropagation()}
+                  >
                     Rule-based pattern score (amount, date, reference). The LLM also uses remittance text, semantic similarity and business context {'\u2014'} so its pick may differ from this score.
+                    <button className="score-info-close" onClick={() => setScoreInfoAnchor(null)}>Dismiss</button>
                   </div>
                 )}
               </th>
