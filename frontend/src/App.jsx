@@ -758,6 +758,40 @@ function FieldDiff({ item }) {
   );
 }
 
+function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
+  const [expanded, setExpanded] = useState(false);
+  const fmt = (v) => (v == null || v === '') ? '—' : String(v);
+  return (
+    <div className="ai-candidates-panel">
+      <button className="ai-candidates-toggle" onClick={() => setExpanded(e => !e)}>
+        {expanded ? '▾' : '▸'} AI considered {candidates.length} candidate{candidates.length !== 1 ? 's' : ''}
+      </button>
+      {expanded && (
+        <table className="ai-candidates-table">
+          <thead>
+            <tr><th>CAMT ID</th><th>Counterparty</th><th>Amount</th><th>Date</th><th>Score</th><th></th></tr>
+          </thead>
+          <tbody>
+            {candidates.map((c, i) => {
+              const isActive = activeCamtId && c.camt_id === activeCamtId;
+              return (
+                <tr key={c.camt_id || i} className={isActive ? 'ai-candidate-active' : ''}>
+                  <td>{fmt(c.camt_id)}{isActive && <span className="ai-pick-label">LLM pick</span>}</td>
+                  <td>{fmt(c.counterparty)}</td>
+                  <td>{c.amount != null ? Number(c.amount).toFixed(2) : '—'}</td>
+                  <td>{fmt(c.date)}</td>
+                  <td>{c.domain_score != null ? `${Math.round(c.domain_score * 100)}%` : '—'}</td>
+                  <td><button className="btn-use-candidate" onClick={() => onUseCandidate(c)}>Use this</button></td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], selectedIndex = -1, onPrev, onNext, onSelect, batchAvg = null }) {
   const [detail, setDetail] = useState(null);
   const [overrideMode, setOverrideMode] = useState(false);
@@ -767,6 +801,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
   const [similarCases, setSimilarCases] = useState(null);
   const [similarOpen, setSimilarOpen] = useState(false);
   const [noMatchLoading, setNoMatchLoading] = useState(null);
+  const [candidatePick, setCandidatePick] = useState(null);
   const [drawerFilter, setDrawerFilter] = useState('all');
   const [shortcutsHidden, setShortcutsHidden] = useState(() => localStorage.getItem('hideDrawerShortcuts') === '1');
 
@@ -789,7 +824,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
 
   useEffect(() => {
     if (!selected?.result_id) {
-      setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote('');
+      setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote(''); setCandidatePick(null);
       setSimilarCases(null); setSimilarOpen(false);
       setDrawerFilter('all');
       return;
@@ -798,6 +833,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
     setOverrideMode(false);
     setOverrideReason('');
     setOverrideNote('');
+    setCandidatePick(null);
     setSimilarCases(null);
     setSimilarOpen(false);
     setNoMatchLoading(null);
@@ -841,11 +877,22 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
       setNoMatchLoading(null);
     }
   };
+  const handleCandidatePick = (candidate) => {
+    setCandidatePick(candidate);
+    setOverrideMode(true);
+    setOverrideReason('ai_candidate_override');
+    setOverrideNote(
+      `Analyst selected CAMT ${candidate.camt_id} ` +
+      `(domain score ${Math.round((candidate.domain_score || 0) * 100)}%) ` +
+      `over AI decision. Counterparty: ${candidate.counterparty || '\u2014'}.`
+    );
+  };
   const submitOverride = async () => {
     if (!overrideReason) return;
     setOverrideLoading(true);
     try {
       await api.overrideResolve(selected.result_id, overrideReason, overrideNote);
+      setCandidatePick(null);
       onClose();
       onRefresh?.();
     } finally {
@@ -929,25 +976,11 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
                       {item.invoice && <div style={{ marginTop: '0.1rem', color: 'var(--muted)', fontSize: '0.72rem' }}>Invoice: {item.invoice}</div>}
                     </div>
                     {candidatesReviewed.length > 0 && (
-                      <div style={{ marginTop: '0.75rem' }}>
-                        <p style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted, #64748b)', marginBottom: '0.5rem' }}>Candidates reviewed ({candidatesReviewed.length})</p>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                          {candidatesReviewed.map((c, i) => (
-                            <div key={i} style={{ background: 'var(--bg, #f8fafc)', border: '1px solid var(--line, #e2e8f0)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem' }}>
-                                <span style={{ fontWeight: 600, fontFamily: 'monospace', color: '#475569' }}>{c.camt_id}</span>
-                                <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>domain score {c.domain_score != null ? (c.domain_score * 100).toFixed(0) : '—'}%</span>
-                              </div>
-                              <div style={{ marginTop: '0.2rem', color: '#334155' }}>
-                                {c.counterparty || <em style={{color:'var(--muted)'}}>no counterparty</em>}
-                                {c.amount != null && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)' }}>{c.currency} {Number(c.amount).toLocaleString('en-EU', {minimumFractionDigits:2})}</span>}
-                                {c.date && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)' }}>{c.date}</span>}
-                              </div>
-                              {c.remittance && <div style={{ marginTop: '0.15rem', color: 'var(--muted)', fontStyle: 'italic', fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.remittance}</div>}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                      <AiCandidatesPanel
+                        candidates={candidatesReviewed}
+                        activeCamtId={null}
+                        onUseCandidate={handleCandidatePick}
+                      />
                     )}
                   </>
                 );
@@ -1011,7 +1044,18 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
               );
             })()}
           </Panel>
-
+{(() => {
+  const aicands = item.feature_snapshot?.candidates_reviewed;
+  const isAiMatchCase = ['AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required'].includes(item.reconciliation_status);
+  if (!isAiMatchCase || !aicands?.length) return null;
+  return (
+    <AiCandidatesPanel
+      candidates={aicands}
+      activeCamtId={item.camt_id}
+      onUseCandidate={handleCandidatePick}
+    />
+  );
+})()}
 {suggestions.length > 0 && item.reconciliation_status !== 'AI Confirmed — No Match' && (
           <Panel title="Suggested actions" className="nested-panel">
             <div className="action-stack">
@@ -1073,6 +1117,12 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
               return (
                 <div className="drawer-footer">
                   <div className="override-panel">
+                    {candidatePick && (
+                      <div className="candidate-pick-banner">
+                        Using: <strong>{candidatePick.camt_id}</strong>
+                        {candidatePick.counterparty && <> — {candidatePick.counterparty}</>}
+                      </div>
+                    )}
                     <label className="override-label">Reason for override</label>
                     <select
                       className="override-select"
@@ -1080,6 +1130,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
                       onChange={e => setOverrideReason(e.target.value)}
                     >
                       <option value="">— Select a reason —</option>
+                      <option value="ai_candidate_override">Selected different AI candidate</option>
                       <option value="same_entity_diff_name">Same entity, different name format</option>
                       <option value="known_alias">Known counterparty alias</option>
                       <option value="data_entry_error">Data entry error in source system</option>
@@ -1102,7 +1153,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
                     >
                       {overrideLoading ? 'Submitting\u2026' : 'Submit Override'}
                     </button>
-                    <button className="btn link" onClick={() => setOverrideMode(false)}>\u2190 Back</button>
+                    <button className="btn link" onClick={() => { setOverrideMode(false); setCandidatePick(null); }}>\u2190 Back</button>
                   </div>
                 </div>
               );
@@ -1118,6 +1169,49 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           }
 
           if (isAiNoMatch) {
+            if (overrideMode) {
+              return (
+                <div className="drawer-footer">
+                  <div className="override-panel">
+                    {candidatePick && (
+                      <div className="candidate-pick-banner">
+                        Using: <strong>{candidatePick.camt_id}</strong>
+                        {candidatePick.counterparty && <> \u2014 {candidatePick.counterparty}</>}
+                      </div>
+                    )}
+                    <label className="override-label">Reason for manual match</label>
+                    <select
+                      className="override-select"
+                      value={overrideReason}
+                      onChange={e => setOverrideReason(e.target.value)}
+                    >
+                      <option value="">\u2014 Select a reason \u2014</option>
+                      <option value="ai_candidate_override">Selected AI candidate as match</option>
+                      <option value="same_entity_diff_name">Same entity, different name format</option>
+                      <option value="known_alias">Known counterparty alias</option>
+                      <option value="other">Other</option>
+                    </select>
+                    {overrideReason === 'other' && (
+                      <textarea
+                        className="override-note"
+                        placeholder="Describe the reason..."
+                        value={overrideNote}
+                        onChange={e => setOverrideNote(e.target.value)}
+                        rows={3}
+                      />
+                    )}
+                    <button
+                      className="btn primary full"
+                      onClick={submitOverride}
+                      disabled={!overrideReason || (overrideReason === 'other' && !overrideNote.trim()) || overrideLoading}
+                    >
+                      {overrideLoading ? 'Submitting\u2026' : 'Submit Match'}
+                    </button>
+                    <button className="btn link" onClick={() => { setOverrideMode(false); setCandidatePick(null); }}>\u2190 Back</button>
+                  </div>
+                </div>
+              );
+            }
             return (
               <div className="drawer-footer no-match-footer">
                 <p className="no-match-hint">Route to exception queue — AI found no match; monitor for next CAMT cycle:</p>

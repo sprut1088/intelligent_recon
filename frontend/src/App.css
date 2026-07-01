@@ -205,6 +205,18 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .field-diff-table .group-sum-row th,
 .field-diff-table .group-sum-row td { font-weight: 700; border-top: 2px solid #cbd5e1; background: #f1f5f9; }
 .field-diff-table td.match-exact { color: #15803d; font-weight: 600; }
+/* AI Candidates Panel (TASK-47) */
+.ai-candidates-panel { margin: 12px 0; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+.ai-candidates-toggle { width: 100%; text-align: left; background: #f8fafc; border: none; border-bottom: 1px solid #e2e8f0; padding: 8px 12px; font-size: 0.82rem; font-weight: 600; color: #475569; cursor: pointer; }
+.ai-candidates-toggle:hover { background: #f1f5f9; }
+.ai-candidates-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.ai-candidates-table th, .ai-candidates-table td { padding: 6px 10px; border-bottom: 1px solid #f1f5f9; }
+.ai-candidates-table thead th { background: #f8fafc; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: #94a3b8; font-weight: 600; }
+.ai-candidate-active td { background: #f0fdf4; }
+.ai-pick-label { margin-left: 6px; font-size: 0.68rem; background: #dcfce7; color: #15803d; padding: 1px 5px; border-radius: 4px; font-weight: 600; }
+.btn-use-candidate { font-size: 0.72rem; padding: 2px 8px; background: #6366f1; color: white; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.btn-use-candidate:hover { background: #4f46e5; }
+.candidate-pick-banner { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 6px 10px; font-size: 0.78rem; color: #1e40af; margin-bottom: 10px; }
 .field-diff-table th:last-child, .field-diff-table td:last-child { border-right: 0; }
 .source-link { color: var(--primary); text-decoration: none; font-weight: 500; }
 .source-link:hover { text-decoration: underline; }
