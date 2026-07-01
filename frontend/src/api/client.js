@@ -86,6 +86,10 @@ export const api = {
   loadSampleData: (amountDivisor = null) => request('/api/load-sample', { method: 'POST', body: JSON.stringify({ reset: true, ...(amountDivisor != null ? { amount_divisor: amountDivisor } : {}) }) }),
   runRecon: () => request('/api/reconcile/run', { method: 'POST' }),
   aiTriage: () => request('/api/reconcile/ai-triage', { method: 'POST' }),
+  aiVerify: (caseIds = null) => request('/api/reconcile/ai-verify', {
+    method: 'POST',
+    body: JSON.stringify(caseIds ? { case_ids: caseIds } : {}),
+  }),
   summary: async () => mapSummary(await request('/api/reconcile/summary')),
   results: async ({ limit = 100, offset = 0, exceptionOnly = false, search = '', status = '' } = {}) => {
     const qs = new URLSearchParams({ limit, offset, exception_only: exceptionOnly });

@@ -592,7 +592,13 @@ function ResultTable({ rows, onSelect }) {
                 <td>{r.reference || '-'}</td>
                 <td>{r.counterparty || '-'}</td>
                 <td className={varianceTone(r.variance)}>{r.variance != null ? money(r.variance) : '-'}</td>
-                <td><Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag></td>
+                <td>
+                  <Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag>
+                  {r.feature_snapshot?.ai_verification && (() => {
+                    const v = r.feature_snapshot.ai_verification.verdict;
+                    return <span className={`ai-verdict-icon ai-verdict-${v?.toLowerCase()}`} title={`AI: ${v} — ${r.feature_snapshot.ai_verification.note || ''}`}>{v === 'AGREE' ? '\u2705' : v === 'CAUTION' ? '\u26a0\ufe0f' : '\u274c'}</span>;
+                  })()}
+                </td>
                 <td>
                   {age
                     ? <Tag tone={agingTone(age.bucket)} title={age.bucket}>{age.days}d</Tag>
@@ -1000,6 +1006,23 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
                 activeCamtId={item.camt_id}
                 onUseCandidate={handleCandidatePick}
               />
+            );
+          })()}
+          {item.feature_snapshot?.ai_verification && (() => {
+            const av = item.feature_snapshot.ai_verification;
+            const tone = av.verdict === 'AGREE' ? 'success' : av.verdict === 'DISAGREE' ? 'danger' : 'warning';
+            const label = av.verdict === 'AGREE' ? 'AI: Agree' : av.verdict === 'DISAGREE' ? 'AI: Disagree' : 'AI: Caution';
+            return (
+              <Panel title="AI Verification" className="nested-panel">
+                <div className="ai-verification-panel">
+                  <div className="ai-verification-header">
+                    <Tag tone={tone}>{label}</Tag>
+                    {av.confidence_pct != null && <span className="ai-verification-conf">{av.confidence_pct}% confidence</span>}
+                  </div>
+                  {av.note && <p className="ai-verification-note">{av.note}</p>}
+                  <p className="ai-verification-disclaimer">AI second opinion on rule-proposed match \u2014 does not change status</p>
+                </div>
+              </Panel>
             );
           })()}
           <Panel title="Why this decision?" className="nested-panel" collapsible>
@@ -1588,7 +1611,7 @@ function AiTriageLoader() {
   );
 }
 
-function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, onResolve, loading, triageRunning, batchName }) {
+function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, onAiVerify, onResolve, loading, triageRunning, batchName }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -1696,6 +1719,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
               }}
             >↓ Download Report</button>
             <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
+            <button className="btn secondary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiVerify} title="AI second-opinion pass on P4/P7 exception cases">Verify exceptions</button>
           </div>
         </div>
       </div>
@@ -2292,6 +2316,20 @@ export default function App() {
     setTriageRunning(false);
   };
 
+  const runAiVerify = async () => {
+    let result;
+    await safe(
+      async () => {
+        result = await api.aiVerify();
+        await refreshResults({ search: '', exceptionOnly: false, status: '' });
+      },
+      () => {
+        const count = result?.verified_count ?? 0;
+        return `AI verification complete \u2014 ${count} exception case${count !== 1 ? 's' : ''} annotated`;
+      },
+    );
+  };
+
   const tunePattern = async (patternId, draft) => {
     await safe(() => api.updatePattern(patternId, {
       execution_mode: draft.execution_mode,
@@ -2347,7 +2385,7 @@ export default function App() {
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
     const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
     const activeBatchName = activeBatch?.batch_name || activeBatch?.batch_id || 'recon';
-    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;
+    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onAiVerify={runAiVerify} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;

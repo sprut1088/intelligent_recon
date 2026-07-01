@@ -1,6 +1,9 @@
 from typing import Any, Dict, List, Optional
 from pydantic import BaseModel, Field
 
+class AiVerifyRequest(BaseModel):
+    case_ids: Optional[List[str]] = None
+
 class CaseResolveRequest(BaseModel):
     resolution_type: str = Field(..., examples=["MATCHED_MANUAL"])
     reason_code: str = Field(..., examples=["REMITTANCE_FORMAT_MISMATCH"])

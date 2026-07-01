@@ -1,6 +1,6 @@
 from __future__ import annotations
 import csv, io, json, logging, re, time, uuid
-from typing import Optional
+from typing import List, Optional
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -12,8 +12,8 @@ from .loader import load_samples_and_reconcile, rerun_reconciliation_only
 from .quality import get_quality_report, validate_batch
 from .workflow import get_exception_workflow, list_exception_workflow, mark_workflow_resolved, update_exception_workflow
 from .workspace import create_snapshot, export_reconciliation_results, get_dashboard_model, get_data_preview, get_no_code_rules, get_workspace_overview, get_workflow_rules, list_submissions, predict_match_fields
-from .schemas import CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
-from .ai_triage import build_ai_snapshot, find_candidates, run_tier2c
+from .schemas import AiVerifyRequest, CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
+from .ai_triage import build_ai_snapshot, find_candidates, run_tier2c, verify_exception_cases
 
 # Module-level logger — format applied in startup() after uvicorn finishes its own logging setup
 logger = logging.getLogger(__name__)
@@ -141,6 +141,14 @@ INSERT OR REPLACE INTO recon_cases
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 """
+
+
+@app.post("/api/reconcile/ai-verify")
+def run_ai_verify(body: AiVerifyRequest = None) -> dict:
+    """AI second-opinion pass for static-rule exception cases."""
+    case_ids = body.case_ids if body else None
+    results = verify_exception_cases(case_ids=case_ids)
+    return {"status": "ok", "verified_count": len(results)}
 
 
 @app.post("/api/reconcile/ai-triage")

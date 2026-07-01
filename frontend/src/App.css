@@ -233,6 +233,14 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .btn-exit { font-size: 0.8rem; padding: 5px 12px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; color: #475569; cursor: pointer; }
 .btn-exit:hover { border-color: #94a3b8; background: #f8fafc; }
 .btn-exit:disabled { opacity: 0.5; cursor: not-allowed; }
+/* AI Verdict icon in results table */
+.ai-verdict-icon { margin-left: 5px; font-size: 0.78rem; vertical-align: middle; cursor: default; }
+/* AI Verification panel in EvidenceDrawer */
+.ai-verification-panel { padding: 4px 0; }
+.ai-verification-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ai-verification-conf { font-size: 0.78rem; color: #64748b; }
+.ai-verification-note { font-size: 0.82rem; color: #334155; margin: 0 0 8px; }
+.ai-verification-disclaimer { font-size: 0.72rem; color: #94a3b8; font-style: italic; margin: 0; }
 .field-diff-table th:last-child, .field-diff-table td:last-child { border-right: 0; }
 .source-link { color: var(--primary); text-decoration: none; font-weight: 500; }
 .source-link:hover { text-decoration: underline; }
