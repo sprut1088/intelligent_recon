@@ -668,12 +668,45 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
         logger.info("AI verifier: no eligible cases found — nothing to do.")
         return []
 
+    # Enrich each row with CAMT fields from camt_transactions (not stored in recon_cases).
+    # Mirror the same lookup logic used in main.py get_case().
+    with get_conn() as conn:
+        for row in rows:
+            camt_id = row.get("camt_id")
+            if camt_id:
+                match_key = row.get("match_key", "")
+                camt_row = conn.execute(
+                    "SELECT counterparty, pmt_ref, invoice, remittance FROM camt_transactions WHERE ntry_id = ?",
+                    (match_key,),
+                ).fetchone()
+                if not camt_row:
+                    camt_row = conn.execute(
+                        "SELECT counterparty, pmt_ref, invoice, remittance FROM camt_transactions WHERE camt_id = ?",
+                        (camt_id,),
+                    ).fetchone()
+                if camt_row:
+                    row["camt_counterparty"] = camt_row["counterparty"]
+                    row["camt_pmt_ref"]      = camt_row["pmt_ref"]
+                    row["camt_invoice"]      = camt_row["invoice"]
+                    row["camt_remittance"]   = camt_row["remittance"]
+                    logger.debug(
+                        "AI verifier: enriched %s with CAMT data — counterparty=%r pmt_ref=%r invoice=%r remittance=%r",
+                        row.get("case_id"), camt_row["counterparty"], camt_row["pmt_ref"],
+                        camt_row["invoice"], camt_row["remittance"],
+                    )
+                else:
+                    logger.warning(
+                        "AI verifier: no camt_transactions row found for case %s (camt_id=%s match_key=%s)",
+                        row.get("case_id"), camt_id, match_key,
+                    )
+
     system_prompt = (
         "You are a cash reconciliation auditor. A deterministic rule has proposed a match "
         "between a PSR payment record and a bank CAMT entry.\n"
         "Your job: review the IDENTITY signals and give a second opinion.\n"
-        "Focus only on whether these two records describe the same real-world payment.\n"
-        "Do NOT re-examine amount or date — those were checked by the rule already.\n\n"
+        "Focus on whether these two records describe the same real-world payment.\n"
+        "Identity signals: counterparty name, payment reference, invoice number, remittance text.\n"
+        "Note: counterparty names may differ by legal suffix (Ltd, plc, GmbH) — treat those as matching.\n\n"
         "Return raw JSON only — no markdown:\n"
         '{"verdict":"AGREE|CAUTION|DISAGREE","confidence_pct":0-100,"note":"string"}\n'
         "- AGREE: identity signals clearly support the match\n"
