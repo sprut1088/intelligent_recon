@@ -411,7 +411,9 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
             "ambiguous. No filler phrases. Max 20 words.\n\n"
             "Reply with RAW JSON only. Do not use markdown blocks:\n"
             '{"psr_id":"string","matched_camt_id":"string or null",'
-            '"confidence_pct":"integer 0-100","reason":"string","suggested_action":"CONFIRM_AI_MATCH|ROUTE_TO_ANALYST|NO_MATCH"}'
+            '"confidence_pct":"integer 0-100","reason":"string","suggested_action":"CONFIRM_AI_MATCH|ROUTE_TO_ANALYST|NO_MATCH",'
+            '"candidate_scores":[{"camt_id":"string","confidence_pct":"integer 0-100"}]}'
+            " — candidate_scores must include one entry per candidate with your identity-match confidence for each."
         )
 
         user_prompt = (
@@ -449,7 +451,7 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
                 )
                 raw_content = response.choices[0].message.content
             result = json.loads(raw_content)
-            result["_candidates"] = top_candidates[:3]
+            result["_candidates"] = top_candidates[:5]
             return result
         except json.JSONDecodeError:
             # Strip markdown fences if the model wraps output despite instructions
@@ -458,7 +460,7 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
             raw = re.sub(r'\s*```$', '', raw)
             try:
                 result = json.loads(raw)
-                result["_candidates"] = top_candidates[:3]
+                result["_candidates"] = top_candidates[:5]
                 return result
             except Exception:
                 logger.error("Tier 2c JSON parse failed for PSR %s after strip", psr_id)
@@ -523,6 +525,11 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
                 "evidence": f"LLM confidence: {conf}%",
             },
         ]
+        per_cand_scores = {
+            s["camt_id"]: s.get("confidence_pct")
+            for s in result.get("candidate_scores") or []
+            if s.get("camt_id")
+        }
         candidates_reviewed = [
             {
                 "camt_id": c.get("camt_id"),
@@ -530,8 +537,11 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
                 "amount": c.get("camt_amount"),
                 "currency": c.get("camt_currency") or "",
                 "date": c.get("camt_booking_date") or "",
+                "pmt_ref": c.get("camt_pmt_ref") or "",
+                "invoice": c.get("camt_invoice") or "",
                 "remittance": c.get("camt_remittance") or "",
                 "domain_score": c.get("candidate_score"),
+                "llm_confidence": per_cand_scores.get(c.get("camt_id")),
             }
             for c in result.get("_candidates", [])
         ]
@@ -580,3 +590,230 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
             conn.commit()
 
     return decisions
+
+
+# ---------------------------------------------------------------------------
+# AI Verifier — second-opinion pass for static-rule exception cases
+# ---------------------------------------------------------------------------
+
+def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
+    """
+    AI second-opinion pass for exception cases produced by static rules.
+
+    For each case the LLM reviews the already-proposed PSR<->CAMT pair and
+    returns AGREE / CAUTION / DISAGREE.  Result is merged into the existing
+    feature_snapshot_json under 'ai_verification'. reconciliation_status is
+    NOT changed — this is an annotation only.
+    """
+    import os
+    import json
+    import concurrent.futures
+    from datetime import datetime
+
+    VERIFIABLE_STATUSES = [
+        "Suggested Match - Analyst Review",
+        "Exception - Amount Variance Review",
+    ]
+
+    provider = settings.llm_provider
+    model    = settings.llm_model
+    max_tok  = settings.llm_max_tokens
+
+    logger.info(
+        "AI verifier starting | provider=%s model=%s target_statuses=%s",
+        provider, model, VERIFIABLE_STATUSES,
+    )
+
+    if provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            logger.warning("AI verifier skipped — ANTHROPIC_API_KEY not set.")
+            return []
+        import anthropic as _anthropic
+        _anthropic_client = _anthropic.Anthropic(api_key=api_key)
+        _openai_client = None
+    else:
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            logger.warning("AI verifier skipped — OPENROUTER_API_KEY not set.")
+            return []
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+        _anthropic_client = None
+
+    with get_conn() as conn:
+        if case_ids:
+            placeholders = ",".join("?" * len(case_ids))
+            rows = rows_to_dicts(conn.execute(
+                f"SELECT * FROM recon_cases WHERE case_id IN ({placeholders})",
+                case_ids,
+            ).fetchall())
+            logger.info("AI verifier: %d cases requested by ID", len(rows))
+        else:
+            status_ph = ",".join("?" * len(VERIFIABLE_STATUSES))
+            rows = rows_to_dicts(conn.execute(
+                f"""SELECT * FROM recon_cases
+                    WHERE reconciliation_status IN ({status_ph})
+                      AND psr_id IS NOT NULL AND psr_id != ''
+                      AND camt_id IS NOT NULL AND camt_id != ''""",
+                VERIFIABLE_STATUSES,
+            ).fetchall())
+            by_status = {}
+            for r in rows:
+                s = r["reconciliation_status"]
+                by_status[s] = by_status.get(s, 0) + 1
+            logger.info("AI verifier: found %d eligible cases — %s", len(rows), by_status)
+
+    if not rows:
+        logger.info("AI verifier: no eligible cases found — nothing to do.")
+        return []
+
+    # Enrich each row with CAMT fields from camt_transactions (not stored in recon_cases).
+    # Mirror the same lookup logic used in main.py get_case().
+    with get_conn() as conn:
+        for row in rows:
+            camt_id = row.get("camt_id")
+            if camt_id:
+                match_key = row.get("match_key", "")
+                camt_row = conn.execute(
+                    "SELECT counterparty, pmt_ref, invoice, remittance FROM camt_transactions WHERE ntry_id = ?",
+                    (match_key,),
+                ).fetchone()
+                if not camt_row:
+                    camt_row = conn.execute(
+                        "SELECT counterparty, pmt_ref, invoice, remittance FROM camt_transactions WHERE camt_id = ?",
+                        (camt_id,),
+                    ).fetchone()
+                if camt_row:
+                    row["camt_counterparty"] = camt_row["counterparty"]
+                    row["camt_pmt_ref"]      = camt_row["pmt_ref"]
+                    row["camt_invoice"]      = camt_row["invoice"]
+                    row["camt_remittance"]   = camt_row["remittance"]
+                    logger.debug(
+                        "AI verifier: enriched %s with CAMT data — counterparty=%r pmt_ref=%r invoice=%r remittance=%r",
+                        row.get("case_id"), camt_row["counterparty"], camt_row["pmt_ref"],
+                        camt_row["invoice"], camt_row["remittance"],
+                    )
+                else:
+                    logger.warning(
+                        "AI verifier: no camt_transactions row found for case %s (camt_id=%s match_key=%s)",
+                        row.get("case_id"), camt_id, match_key,
+                    )
+
+    system_prompt = (
+        "You are a cash reconciliation auditor. A deterministic rule has proposed a match "
+        "between a PSR payment record and a bank CAMT entry.\n"
+        "Your job: review the IDENTITY signals and give a second opinion.\n"
+        "Focus on whether these two records describe the same real-world payment.\n"
+        "Identity signals: counterparty name, payment reference, invoice number, remittance text.\n"
+        "Note: counterparty names may differ by legal suffix (Ltd, plc, GmbH) — treat those as matching.\n\n"
+        "Return raw JSON only — no markdown:\n"
+        '{"verdict":"AGREE|CAUTION|DISAGREE","confidence_pct":0-100,"note":"string"}\n'
+        "- AGREE: identity signals clearly support the match\n"
+        "- CAUTION: some overlap but signals are ambiguous or mixed\n"
+        "- DISAGREE: identity signals suggest these are different payments\n"
+        "Max 20 words in note."
+    )
+
+    results: List[Dict] = []
+
+    def _verify_case(case: Dict) -> Optional[Dict]:
+        case_id = case["case_id"]
+        logger.info(
+            "AI verifier: processing %s | status=%s rule=%s psr=%s camt=%s",
+            case_id, case.get("reconciliation_status"), case.get("rule_applied"),
+            case.get("psr_id"), case.get("camt_id"),
+        )
+        user_prompt = (
+            f"Rule applied: {case.get('rule_applied', '')} "
+            f"(confidence {case.get('match_confidence', '')}%)\n\n"
+            f"PSR:\n"
+            f"- ID: {case.get('psr_id', '')}\n"
+            f"- Reference: {case.get('reference', '') or ''}\n"
+            f"- Invoice: {case.get('invoice', '') or ''}\n"
+            f"- Counterparty: {case.get('counterparty', '') or ''}\n\n"
+            f"CAMT:\n"
+            f"- ID: {case.get('camt_id', '')}\n"
+            f"- PMT Reference: {case.get('camt_pmt_ref', '') or ''}\n"
+            f"- Invoice: {case.get('camt_invoice', '') or ''}\n"
+            f"- Counterparty: {case.get('camt_counterparty', '') or ''}\n"
+            f"- Remittance: {case.get('camt_remittance', '') or ''}"
+        )
+        try:
+            if provider == "anthropic":
+                response = _anthropic_client.messages.create(
+                    model=model, system=system_prompt,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    temperature=0, max_tokens=max_tok,
+                )
+                raw = response.content[0].text
+            else:
+                response = _openai_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0, max_tokens=max_tok,
+                )
+                raw = response.choices[0].message.content
+
+            # Strip markdown fences — Anthropic often wraps despite instructions
+            raw = raw.strip()
+            raw = re.sub(r'^```(?:json)?\s*', '', raw)
+            raw = re.sub(r'\s*```$', '', raw).strip()
+            logger.debug("AI verifier: %s raw response: %s", case_id, raw[:200])
+
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError as e:
+                logger.error(
+                    "AI verifier: %s JSON parse failed — %s | raw=%r",
+                    case_id, e, raw[:300],
+                )
+                return None
+
+            verdict = result.get("verdict", "CAUTION")
+            if verdict not in ("AGREE", "CAUTION", "DISAGREE"):
+                verdict = "CAUTION"
+
+            annotation = {
+                "verdict": verdict,
+                "confidence_pct": result.get("confidence_pct"),
+                "note": result.get("note", ""),
+                "verified_at": datetime.utcnow().isoformat(),
+            }
+
+            with get_conn() as conn:
+                existing_row = conn.execute(
+                    "SELECT feature_snapshot_json FROM recon_cases WHERE case_id = ?",
+                    (case["case_id"],),
+                ).fetchone()
+                snapshot = json.loads(existing_row["feature_snapshot_json"] or "{}") if existing_row else {}
+                snapshot["ai_verification"] = annotation
+                conn.execute(
+                    "UPDATE recon_cases SET feature_snapshot_json = ?, updated_at = CURRENT_TIMESTAMP WHERE case_id = ?",
+                    (json_dumps(snapshot), case["case_id"]),
+                )
+                conn.commit()
+
+            logger.info(
+                "AI verifier: %s -> verdict=%s confidence=%s%% note=%r",
+                case_id, verdict, result.get("confidence_pct"), result.get("note", ""),
+            )
+            return {"case_id": case_id, **annotation}
+
+        except Exception as exc:
+            logger.error("AI verifier: FAILED for %s (%s: %s)", case_id, type(exc).__name__, exc)
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(_verify_case, row): row for row in rows}
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res:
+                results.append(res)
+
+    logger.info("AI verifier complete: %d/%d cases annotated", len(results), len(rows))
+    return results

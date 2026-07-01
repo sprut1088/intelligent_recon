@@ -205,6 +205,42 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .field-diff-table .group-sum-row th,
 .field-diff-table .group-sum-row td { font-weight: 700; border-top: 2px solid #cbd5e1; background: #f1f5f9; }
 .field-diff-table td.match-exact { color: #15803d; font-weight: 600; }
+/* AI Candidates Panel (TASK-47) */
+.ai-candidates-panel { margin: 12px 0; border: 1px solid #e2e8f0; border-radius: 8px; overflow: hidden; }
+.ai-candidates-toggle { width: 100%; text-align: left; background: #f8fafc; border: none; border-bottom: 1px solid #e2e8f0; padding: 8px 12px; font-size: 0.82rem; font-weight: 600; color: #475569; cursor: pointer; }
+.ai-candidates-toggle:hover { background: #f1f5f9; }
+.ai-candidates-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; }
+.ai-candidates-table th, .ai-candidates-table td { padding: 6px 10px; border-bottom: 1px solid #f1f5f9; }
+.ai-candidates-table thead th { background: #f8fafc; font-size: 0.7rem; text-transform: uppercase; letter-spacing: 0.04em; color: #94a3b8; font-weight: 600; }
+.ai-candidate-active td { background: #f0fdf4; }
+.ai-pick-label { margin-left: 6px; font-size: 0.68rem; background: #dcfce7; color: #15803d; padding: 1px 5px; border-radius: 4px; font-weight: 600; }
+.btn-use-candidate { font-size: 0.72rem; padding: 2px 8px; background: #6366f1; color: white; border: none; border-radius: 4px; cursor: pointer; white-space: nowrap; }
+.btn-use-candidate:hover { background: #4f46e5; }
+.candidate-pick-banner { background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 6px; padding: 6px 10px; font-size: 0.78rem; color: #1e40af; margin-bottom: 10px; }
+/* Panel collapsible */
+.panel-head-collapsible { cursor: pointer; user-select: none; }
+.panel-head-collapsible:hover { background: #f8fafc; border-radius: 6px; }
+.panel-collapse-icon { margin-left: 6px; font-size: 0.78rem; color: #94a3b8; }
+/* Rule Score info popover */
+.score-info-btn { background: none; border: none; cursor: pointer; color: #6366f1; font-size: 0.82rem; padding: 0 2px; vertical-align: middle; line-height: 1; }
+.score-info-btn:hover { color: #4f46e5; }
+.score-info-popover { z-index: 9999; background: white; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; font-size: 0.73rem; color: #475569; width: 250px; box-shadow: 0 4px 16px rgba(0,0,0,0.14); font-weight: 400; text-transform: none; letter-spacing: 0; line-height: 1.5; white-space: normal; }
+.score-info-close { display: block; margin-top: 8px; font-size: 0.7rem; color: #6366f1; background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline; }
+/* No-match exit actions (TASK-48) */
+.no-match-exits { margin: 14px 0; padding: 12px 14px; background: #fafafa; border: 1px solid #e2e8f0; border-radius: 8px; }
+.no-match-exits-label { font-size: 0.8rem; color: #64748b; margin: 0 0 10px; }
+.no-match-exits-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn-exit { font-size: 0.8rem; padding: 5px 12px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; color: #475569; cursor: pointer; }
+.btn-exit:hover { border-color: #94a3b8; background: #f8fafc; }
+.btn-exit:disabled { opacity: 0.5; cursor: not-allowed; }
+/* AI Verdict tag in results table — inline beside status */
+.tag-verdict { display: inline-block; margin-left: 6px; font-size: 0.68rem; vertical-align: middle; }
+/* AI Verification panel in EvidenceDrawer */
+.ai-verification-panel { padding: 4px 0; }
+.ai-verification-header { display: flex; align-items: center; gap: 10px; margin-bottom: 8px; }
+.ai-verification-conf { font-size: 0.78rem; color: #64748b; }
+.ai-verification-note { font-size: 0.82rem; color: #334155; margin: 0 0 8px; }
+.ai-verification-disclaimer { font-size: 0.72rem; color: #94a3b8; font-style: italic; margin: 0; }
 .field-diff-table th:last-child, .field-diff-table td:last-child { border-right: 0; }
 .source-link { color: var(--primary); text-decoration: none; font-weight: 500; }
 .source-link:hover { text-decoration: underline; }

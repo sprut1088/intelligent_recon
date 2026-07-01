@@ -1,6 +1,6 @@
 from __future__ import annotations
 import csv, io, json, logging, re, time, uuid
-from typing import Optional
+from typing import List, Optional
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
@@ -12,8 +12,8 @@ from .loader import load_samples_and_reconcile, rerun_reconciliation_only
 from .quality import get_quality_report, validate_batch
 from .workflow import get_exception_workflow, list_exception_workflow, mark_workflow_resolved, update_exception_workflow
 from .workspace import create_snapshot, export_reconciliation_results, get_dashboard_model, get_data_preview, get_no_code_rules, get_workspace_overview, get_workflow_rules, list_submissions, predict_match_fields
-from .schemas import CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
-from .ai_triage import build_ai_snapshot, find_candidates, run_tier2c
+from .schemas import AiVerifyRequest, CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
+from .ai_triage import build_ai_snapshot, find_candidates, run_tier2c, verify_exception_cases
 
 # Module-level logger — format applied in startup() after uvicorn finishes its own logging setup
 logger = logging.getLogger(__name__)
@@ -141,6 +141,33 @@ INSERT OR REPLACE INTO recon_cases
 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
         CURRENT_TIMESTAMP, CURRENT_TIMESTAMP)
 """
+
+
+@app.post("/api/reconcile/ai-verify")
+def run_ai_verify(body: AiVerifyRequest = None) -> dict:
+    """AI second-opinion pass for static-rule exception cases."""
+    case_ids = body.case_ids if body else None
+    results = verify_exception_cases(case_ids=case_ids)
+    return {"status": "ok", "verified_count": len(results)}
+
+
+@app.post("/api/reconcile/ai-pass")
+def run_ai_pass() -> dict:
+    """
+    Combined AI full pass: triage unmatched PSRs then verify exception cases.
+    Equivalent to calling ai-triage followed by ai-verify in sequence.
+    Returns combined stats: {triaged_count, verified_count}.
+    """
+    logger.info("AI full pass requested")
+    # Phase 1 — triage (reuses same logic as /ai-triage endpoint)
+    triage_result = run_ai_triage()
+    triaged = triage_result.get("inserted_count", 0)
+    logger.info("AI full pass: triage complete — %d candidates inserted", triaged)
+    # Phase 2 — verify exception cases
+    verify_results = verify_exception_cases()
+    verified = len(verify_results)
+    logger.info("AI full pass: verify complete — %d cases annotated", verified)
+    return {"status": "ok", "triaged_count": triaged, "verified_count": verified}
 
 
 @app.post("/api/reconcile/ai-triage")
@@ -279,7 +306,7 @@ def summary() -> dict:
         pattern_rows=rows_to_dicts(conn.execute("SELECT rule_applied, COUNT(*) AS count FROM recon_cases GROUP BY rule_applied ORDER BY count DESC").fetchall())
         manual_resolution_count=conn.execute("SELECT COUNT(*) AS cnt FROM recon_manual_resolution").fetchone()["cnt"]
         learning_candidate_count=conn.execute("SELECT COUNT(*) AS cnt FROM recon_pattern_candidate").fetchone()["cnt"]
-        kpi=row_to_dict(conn.execute("SELECT COALESCE(SUM(COALESCE(internal_amount,0)),0) AS internal_amount, COALESCE(SUM(COALESCE(bank_amount,0)),0) AS bank_amount, COALESCE(SUM(ABS(COALESCE(variance,0))),0) AS absolute_variance, COALESCE(AVG(match_confidence),0) AS average_confidence, SUM(CASE WHEN exception_flag='Y' THEN 1 ELSE 0 END) AS exception_count, SUM(CASE WHEN reconciliation_status LIKE 'Matched%' OR reconciliation_status = 'Resolved Manually' THEN 1 ELSE 0 END) AS auto_matched_count FROM recon_cases").fetchone())
+        kpi=row_to_dict(conn.execute("SELECT COALESCE(SUM(COALESCE(internal_amount,0)),0) AS internal_amount, COALESCE(SUM(COALESCE(bank_amount,0)),0) AS bank_amount, COALESCE(SUM(ABS(COALESCE(variance,0))),0) AS absolute_variance, COALESCE(AVG(match_confidence),0) AS average_confidence, SUM(CASE WHEN exception_flag='Y' THEN 1 ELSE 0 END) AS exception_count, SUM(CASE WHEN reconciliation_status LIKE 'Matched%' OR reconciliation_status = 'Resolved Manually' THEN 1 ELSE 0 END) AS auto_matched_count, SUM(CASE WHEN json_extract(feature_snapshot_json, '$.ai_verification') IS NOT NULL AND rule_applied NOT LIKE 'TIER2C%' THEN 1 ELSE 0 END) AS ai_verified_count FROM recon_cases").fetchone())
     return {"total_cases":total,"psr_count":psr_count,"camt_count":camt_count,"manual_resolution_count":manual_resolution_count,"learning_candidate_count":learning_candidate_count,"kpi":kpi,"by_status":status_rows,"by_reason":reason_rows,"by_rule":pattern_rows}
 
 
@@ -369,7 +396,7 @@ def list_cases(status: Optional[str]=None, exception_only: bool=False, search: O
     clauses=[]; params=[]
     if group_id: clauses.append("group_id = ?"); params.append(group_id)
     if status == 'ai_processed':
-        clauses.append("reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
+        clauses.append("(reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match') OR (json_extract(feature_snapshot_json, '$.ai_verification') IS NOT NULL AND rule_applied NOT LIKE 'TIER2C%'))")
     elif status == 'in_transit':
         clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
     elif status == 'matched':

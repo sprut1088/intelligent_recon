@@ -33,8 +33,8 @@ function classForStatus(value = '') {
   return 'neutral';
 }
 
-function Tag({ children, tone = 'neutral' }) {
-  return <span className={`tag ${tone}`}>{children}</span>;
+function Tag({ children, tone = 'neutral', className = '', title }) {
+  return <span className={`tag ${tone}${className ? ' ' + className : ''}`} title={title}>{children}</span>;
 }
 
 function Metric({ label, value, hint, tone = 'neutral' }) {
@@ -47,19 +47,23 @@ function Metric({ label, value, hint, tone = 'neutral' }) {
   );
 }
 
-function Panel({ title, subtitle, children, actions, className = '' }) {
+function Panel({ title, subtitle, children, actions, className = '', collapsible = false, defaultCollapsed = false }) {
+  const [collapsed, setCollapsed] = useState(defaultCollapsed);
   return (
     <section className={`panel ${className}`}>
       {(title || actions) && (
-        <div className="panel-head">
+        <div
+          className={`panel-head${collapsible ? ' panel-head-collapsible' : ''}`}
+          onClick={collapsible ? () => setCollapsed(c => !c) : undefined}
+        >
           <div>
-            {title && <h3>{title}</h3>}
-            {subtitle && <p>{subtitle}</p>}
+            {title && <h3>{title}{collapsible && <span className="panel-collapse-icon">{collapsed ? ' \u25b8' : ' \u25be'}</span>}</h3>}
+            {subtitle && !collapsed && <p>{subtitle}</p>}
           </div>
           {actions && <div className="panel-actions">{actions}</div>}
         </div>
       )}
-      {children}
+      {(!collapsible || !collapsed) && children}
     </section>
   );
 }
@@ -582,13 +586,21 @@ function ResultTable({ rows, onSelect }) {
             const age = computeAge(r);
             return (
               <tr key={r.result_id} onClick={() => onSelect?.(r)} className="clickable">
-                <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} />{r.match_type === "N_TO_1" && <span className="badge badge-group" title={`Group: ${r.group_id}`}>N→1 · {r.psr_members?.length ?? '?'} PSRs</span>}{r.match_type === "1_TO_N" && <span className="badge badge-group" title={`Split: ${r.group_id}`}>1→N · {r.camt_members?.length ?? '?'} CAMTs</span>}<br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
+                <td><strong>{r.result_id}</strong><AiPill rule={r.rule_applied} />{r.feature_snapshot?.ai_verification && <span className="ai-pill accent" title="AI second opinion applied">AI</span>}{r.match_type === "N_TO_1" && <span className="badge badge-group" title={`Group: ${r.group_id}`}>N→1 · {r.psr_members?.length ?? '?'} PSRs</span>}{r.match_type === "1_TO_N" && <span className="badge badge-group" title={`Split: ${r.group_id}`}>1→N · {r.camt_members?.length ?? '?'} CAMTs</span>}<br/><span className="muted">{r.psr_id || '-'} / {r.camt_id || '-'}</span></td>
                 <td>{money(r.internal_amount)}</td>
                 <td>{money(r.bank_amount)}</td>
                 <td>{r.reference || '-'}</td>
                 <td>{r.counterparty || '-'}</td>
                 <td className={varianceTone(r.variance)}>{r.variance != null ? money(r.variance) : '-'}</td>
-                <td><Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag></td>
+                <td>
+                  <Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag>
+                  {r.feature_snapshot?.ai_verification && (() => {
+                    const v = r.feature_snapshot.ai_verification.verdict;
+                    const tone = v === 'AGREE' ? 'success' : v === 'DISAGREE' ? 'danger' : 'warning';
+                    const label = v === 'AGREE' ? 'AI: Agree' : v === 'DISAGREE' ? 'AI: Disagree' : 'AI: Caution';
+                    return <Tag tone={tone} className="tag-verdict" title={r.feature_snapshot.ai_verification.note || ''}>{label}</Tag>;
+                  })()}
+                </td>
                 <td>
                   {age
                     ? <Tag tone={agingTone(age.bucket)} title={age.bucket}>{age.days}d</Tag>
@@ -758,6 +770,77 @@ function FieldDiff({ item }) {
   );
 }
 
+function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
+  const [expanded, setExpanded] = useState(true);
+  const [scoreInfoAnchor, setScoreInfoAnchor] = useState(null);
+  const fmt = (v) => (v == null || v === '') ? '\u2014' : String(v);
+  // LLM pick always first, then rest in original ranking order
+  const sorted = [...candidates].sort((a, b) => {
+    const aActive = activeCamtId && a.camt_id === activeCamtId ? -1 : 0;
+    const bActive = activeCamtId && b.camt_id === activeCamtId ? -1 : 0;
+    return aActive - bActive;
+  });
+  const toggleScoreInfo = (e) => {
+    e.stopPropagation();
+    if (scoreInfoAnchor) { setScoreInfoAnchor(null); return; }
+    const r = e.currentTarget.getBoundingClientRect();
+    setScoreInfoAnchor({ top: r.bottom + 6, left: Math.max(8, r.left - 180) });
+  };
+  return (
+    <div className="ai-candidates-panel">
+      <button className="ai-candidates-toggle" onClick={() => setExpanded(e => !e)}>
+        {expanded ? '\u25be' : '\u25b8'} AI considered {candidates.length} candidate{candidates.length !== 1 ? 's' : ''}
+      </button>
+      {expanded && (
+        <table className="ai-candidates-table">
+          <thead>
+            <tr>
+              <th>CAMT ID</th>
+              <th>Counterparty</th>
+              <th>Amount</th>
+              <th>Date</th>
+              <th>
+                Rule Score{'\u00a0'}
+                <button className="score-info-btn" onClick={toggleScoreInfo} title="What is Rule Score?">
+                  {'\u24d8'}
+                </button>
+                {scoreInfoAnchor && (
+                  <div
+                    className="score-info-popover"
+                    style={{ position: 'fixed', top: scoreInfoAnchor.top, left: scoreInfoAnchor.left }}
+                    onClick={e => e.stopPropagation()}
+                  >
+                    Rule-based pattern score (amount, date, reference). The LLM also uses remittance text, semantic similarity and business context {'\u2014'} so its pick may differ from this score.
+                    <button className="score-info-close" onClick={() => setScoreInfoAnchor(null)}>Dismiss</button>
+                  </div>
+                )}
+              </th>
+              <th>LLM Conf.</th>
+              <th></th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map((c, i) => {
+              const isActive = activeCamtId && c.camt_id === activeCamtId;
+              return (
+                <tr key={c.camt_id || i} className={isActive ? 'ai-candidate-active' : ''}>
+                  <td>{fmt(c.camt_id)}{isActive && <span className="ai-pick-label">LLM pick</span>}</td>
+                  <td>{fmt(c.counterparty)}</td>
+                  <td>{c.amount != null ? Number(c.amount).toFixed(2) : '\u2014'}</td>
+                  <td>{fmt(c.date)}</td>
+                  <td>{c.domain_score != null ? `${Math.round(c.domain_score * 100)}%` : '\u2014'}</td>
+                  <td>{c.llm_confidence != null ? `${c.llm_confidence}%` : '\u2014'}</td>
+                  <td>{!isActive && <button className="btn-use-candidate" onClick={() => onUseCandidate(c)}>Use this</button>}</td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      )}
+    </div>
+  );
+}
+
 function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], selectedIndex = -1, onPrev, onNext, onSelect, batchAvg = null }) {
   const [detail, setDetail] = useState(null);
   const [overrideMode, setOverrideMode] = useState(false);
@@ -767,6 +850,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
   const [similarCases, setSimilarCases] = useState(null);
   const [similarOpen, setSimilarOpen] = useState(false);
   const [noMatchLoading, setNoMatchLoading] = useState(null);
+  const [candidatePick, setCandidatePick] = useState(null);
   const [drawerFilter, setDrawerFilter] = useState('all');
   const [shortcutsHidden, setShortcutsHidden] = useState(() => localStorage.getItem('hideDrawerShortcuts') === '1');
 
@@ -789,7 +873,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
 
   useEffect(() => {
     if (!selected?.result_id) {
-      setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote('');
+      setDetail(null); setOverrideMode(false); setOverrideReason(''); setOverrideNote(''); setCandidatePick(null);
       setSimilarCases(null); setSimilarOpen(false);
       setDrawerFilter('all');
       return;
@@ -798,6 +882,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
     setOverrideMode(false);
     setOverrideReason('');
     setOverrideNote('');
+    setCandidatePick(null);
     setSimilarCases(null);
     setSimilarOpen(false);
     setNoMatchLoading(null);
@@ -841,11 +926,22 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
       setNoMatchLoading(null);
     }
   };
+  const handleCandidatePick = (candidate) => {
+    setCandidatePick(candidate);
+    setOverrideMode(true);
+    setOverrideReason('ai_candidate_override');
+    setOverrideNote(
+      `Analyst selected CAMT ${candidate.camt_id} ` +
+      `(domain score ${Math.round((candidate.domain_score || 0) * 100)}%) ` +
+      `over AI decision. Counterparty: ${candidate.counterparty || '\u2014'}.`
+    );
+  };
   const submitOverride = async () => {
     if (!overrideReason) return;
     setOverrideLoading(true);
     try {
       await api.overrideResolve(selected.result_id, overrideReason, overrideNote);
+      setCandidatePick(null);
       onClose();
       onRefresh?.();
     } finally {
@@ -902,7 +998,36 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
             {item.variance != null && <><dt>Variance</dt><dd>{money(item.variance)}</dd></>}
           </dl>
           {hasMatch && <FieldDiff item={item} />}
-          <Panel title="Why this decision?" className="nested-panel">
+          {(() => {
+            const aicands = item.feature_snapshot?.candidates_reviewed;
+            const isAiMatchCase = ['AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required'].includes(item.reconciliation_status);
+            if (!isAiMatchCase || !aicands?.length) return null;
+            return (
+              <AiCandidatesPanel
+                candidates={aicands}
+                activeCamtId={item.camt_id}
+                onUseCandidate={handleCandidatePick}
+              />
+            );
+          })()}
+          {item.feature_snapshot?.ai_verification && (() => {
+            const av = item.feature_snapshot.ai_verification;
+            const tone = av.verdict === 'AGREE' ? 'success' : av.verdict === 'DISAGREE' ? 'danger' : 'warning';
+            const label = av.verdict === 'AGREE' ? 'AI: Agree' : av.verdict === 'DISAGREE' ? 'AI: Disagree' : 'AI: Caution';
+            return (
+              <Panel title="AI Verification" className="nested-panel">
+                <div className="ai-verification-panel">
+                  <div className="ai-verification-header">
+                    <Tag tone={tone}>{label}</Tag>
+                    {av.confidence_pct != null && <span className="ai-verification-conf">{av.confidence_pct}% confidence</span>}
+                  </div>
+                  {av.note && <p className="ai-verification-note">{av.note}</p>}
+                  <p className="ai-verification-disclaimer">AI second opinion on rule-proposed match \u2014 does not change status</p>
+                </div>
+              </Panel>
+            );
+          })()}
+          <Panel title="Why this decision?" className="nested-panel" collapsible>
             {(() => {
               const NO_COMPARISON_STATUSES = ['Uncleared / In-Transit Payment', 'Bank-only Item - Investigation'];
               const isAiConfirmedNoMatch = item.reconciliation_status === 'AI Confirmed — No Match';
@@ -929,25 +1054,11 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
                       {item.invoice && <div style={{ marginTop: '0.1rem', color: 'var(--muted)', fontSize: '0.72rem' }}>Invoice: {item.invoice}</div>}
                     </div>
                     {candidatesReviewed.length > 0 && (
-                      <div style={{ marginTop: '0.75rem' }}>
-                        <p style={{ fontSize: '0.75rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted, #64748b)', marginBottom: '0.5rem' }}>Candidates reviewed ({candidatesReviewed.length})</p>
-                        <div style={{ display: 'flex', flexDirection: 'column', gap: '0.4rem' }}>
-                          {candidatesReviewed.map((c, i) => (
-                            <div key={i} style={{ background: 'var(--bg, #f8fafc)', border: '1px solid var(--line, #e2e8f0)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
-                              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', gap: '0.5rem' }}>
-                                <span style={{ fontWeight: 600, fontFamily: 'monospace', color: '#475569' }}>{c.camt_id}</span>
-                                <span style={{ color: 'var(--muted)', fontSize: '0.72rem' }}>domain score {c.domain_score != null ? (c.domain_score * 100).toFixed(0) : '—'}%</span>
-                              </div>
-                              <div style={{ marginTop: '0.2rem', color: '#334155' }}>
-                                {c.counterparty || <em style={{color:'var(--muted)'}}>no counterparty</em>}
-                                {c.amount != null && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)' }}>{c.currency} {Number(c.amount).toLocaleString('en-EU', {minimumFractionDigits:2})}</span>}
-                                {c.date && <span style={{ marginLeft: '0.75rem', color: 'var(--muted)' }}>{c.date}</span>}
-                              </div>
-                              {c.remittance && <div style={{ marginTop: '0.15rem', color: 'var(--muted)', fontStyle: 'italic', fontSize: '0.72rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>{c.remittance}</div>}
-                            </div>
-                          ))}
-                        </div>
-                      </div>
+                      <AiCandidatesPanel
+                        candidates={candidatesReviewed}
+                        activeCamtId={null}
+                        onUseCandidate={handleCandidatePick}
+                      />
                     )}
                   </>
                 );
@@ -1011,8 +1122,35 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
               );
             })()}
           </Panel>
-
-{suggestions.length > 0 && item.reconciliation_status !== 'AI Confirmed — No Match' && (
+{item.reconciliation_status === 'AI Confirmed \u2014 No Match' && (
+  <div className="no-match-exits">
+    <p className="no-match-exits-label">AI found no suitable match. Choose how to handle this case:</p>
+    <div className="no-match-exits-buttons">
+      <button
+        className="btn-exit"
+        disabled={noMatchLoading != null}
+        onClick={() => submitNoMatch('POST_TO_LEDGER', 'SUSPENSE_LEDGER')}
+      >
+        {noMatchLoading === 'POST_TO_LEDGER' ? 'Posting\u2026' : 'Post to Suspense Ledger'}
+      </button>
+      <button
+        className="btn-exit"
+        disabled={noMatchLoading != null}
+        onClick={() => submitNoMatch('SNOOZED', 'SNOOZED_NEXT_CYCLE')}
+      >
+        {noMatchLoading === 'SNOOZED' ? 'Snoozing\u2026' : 'Snooze \u2014 revisit next cycle'}
+      </button>
+      <button
+        className="btn-exit"
+        disabled={noMatchLoading != null}
+        onClick={() => submitNoMatch('MANUAL_INVESTIGATION', 'MANUAL_INVESTIGATION')}
+      >
+        {noMatchLoading === 'MANUAL_INVESTIGATION' ? 'Flagging\u2026' : 'Flag for Manual Investigation'}
+      </button>
+    </div>
+  </div>
+)}
+{suggestions.length > 0 && item.reconciliation_status !== 'AI Confirmed \u2014 No Match' && (
           <Panel title="Suggested actions" className="nested-panel">
             <div className="action-stack">
               {suggestions.map((s, idx) => {
@@ -1073,6 +1211,12 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
               return (
                 <div className="drawer-footer">
                   <div className="override-panel">
+                    {candidatePick && (
+                      <div className="candidate-pick-banner">
+                        Using: <strong>{candidatePick.camt_id}</strong>
+                        {candidatePick.counterparty && <> — {candidatePick.counterparty}</>}
+                      </div>
+                    )}
                     <label className="override-label">Reason for override</label>
                     <select
                       className="override-select"
@@ -1080,6 +1224,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
                       onChange={e => setOverrideReason(e.target.value)}
                     >
                       <option value="">— Select a reason —</option>
+                      <option value="ai_candidate_override">Selected different AI candidate</option>
                       <option value="same_entity_diff_name">Same entity, different name format</option>
                       <option value="known_alias">Known counterparty alias</option>
                       <option value="data_entry_error">Data entry error in source system</option>
@@ -1102,7 +1247,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
                     >
                       {overrideLoading ? 'Submitting\u2026' : 'Submit Override'}
                     </button>
-                    <button className="btn link" onClick={() => setOverrideMode(false)}>\u2190 Back</button>
+                    <button className="btn link" onClick={() => { setOverrideMode(false); setCandidatePick(null); }}>\u2190 Back</button>
                   </div>
                 </div>
               );
@@ -1118,6 +1263,49 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           }
 
           if (isAiNoMatch) {
+            if (overrideMode) {
+              return (
+                <div className="drawer-footer">
+                  <div className="override-panel">
+                    {candidatePick && (
+                      <div className="candidate-pick-banner">
+                        Using: <strong>{candidatePick.camt_id}</strong>
+                        {candidatePick.counterparty && <> \u2014 {candidatePick.counterparty}</>}
+                      </div>
+                    )}
+                    <label className="override-label">Reason for manual match</label>
+                    <select
+                      className="override-select"
+                      value={overrideReason}
+                      onChange={e => setOverrideReason(e.target.value)}
+                    >
+                      <option value="">\u2014 Select a reason \u2014</option>
+                      <option value="ai_candidate_override">Selected AI candidate as match</option>
+                      <option value="same_entity_diff_name">Same entity, different name format</option>
+                      <option value="known_alias">Known counterparty alias</option>
+                      <option value="other">Other</option>
+                    </select>
+                    {overrideReason === 'other' && (
+                      <textarea
+                        className="override-note"
+                        placeholder="Describe the reason..."
+                        value={overrideNote}
+                        onChange={e => setOverrideNote(e.target.value)}
+                        rows={3}
+                      />
+                    )}
+                    <button
+                      className="btn primary full"
+                      onClick={submitOverride}
+                      disabled={!overrideReason || (overrideReason === 'other' && !overrideNote.trim()) || overrideLoading}
+                    >
+                      {overrideLoading ? 'Submitting\u2026' : 'Submit Match'}
+                    </button>
+                    <button className="btn link" onClick={() => { setOverrideMode(false); setCandidatePick(null); }}>\u2190 Back</button>
+                  </div>
+                </div>
+              );
+            }
             return (
               <div className="drawer-footer no-match-footer">
                 <p className="no-match-hint">Route to exception queue — AI found no match; monitor for next CAMT cycle:</p>
@@ -1317,12 +1505,13 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
   const aiSuggestedCount = statusCount(s => s === 'AI-Assisted Suggested Match');
   const aiReviewCount    = statusCount(s => s === 'AI - Analyst Adjudication Required');
   const aiNoMatchCount   = statusCount(s => s === 'AI Confirmed — No Match');
-  const aiProcessedCount = aiSuggestedCount + aiReviewCount + aiNoMatchCount;
+  const aiProcessedCount = aiSuggestedCount + aiReviewCount + aiNoMatchCount + (summary.ai_verified_count || 0);
   const inTransitCount   = statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) + aiNoMatchCount;
   const bankOnlyCount    = statusCount(s => s === 'Bank-only Item - Investigation');
-  // Exceptions = all exception_flag='Y' rows minus In-Transit (non-AI) and Bank-only;
+  // Exceptions = all exception_flag='Y' rows minus In-Transit (non-AI), Bank-only, and
+  // AI Confirmed No Match (those are moved into In-Transit to avoid double-counting).
   // AI Suggested + AI Review ARE included as they need analyst action.
-  const baseExceptions   = Math.max(0, exceptionCount - statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) - bankOnlyCount);
+  const baseExceptions   = Math.max(0, exceptionCount - statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) - bankOnlyCount - aiNoMatchCount);
   const chips = [
     { label: 'Total',      value: total,          filter: '' },
     { label: 'Matched',    value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close') || s === 'Resolved Manually'), filter: 'matched' },
@@ -1372,10 +1561,11 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
 
 function AiTriageLoader() {
   const steps = [
-    { label: 'Scanning unmatched PSR records', duration: 0 },
-    { label: 'Running embedding similarity (Tier 2b)', duration: 3000 },
-    { label: 'Sending candidates to LLM for adjudication (Tier 2c)', duration: 7000 },
-    { label: 'Updating cases and refreshing results', duration: 18000 },
+    { label: 'Scanning unmatched PSR records', duration: 0, phase: 'triage' },
+    { label: 'Scoring candidates (Tier 2b)', duration: 3000, phase: 'triage' },
+    { label: 'LLM adjudication — finding matches (Tier 2c)', duration: 7000, phase: 'triage' },
+    { label: 'Reviewing exception cases for second opinion', duration: 20000, phase: 'verify' },
+    { label: 'Updating cases and refreshing results', duration: 35000, phase: 'verify' },
   ];
   const [stepIdx, setStepIdx] = useState(0);
   const [dots, setDots] = useState('');
@@ -1387,6 +1577,8 @@ function AiTriageLoader() {
     const dotTimer = setInterval(() => setDots(d => d.length >= 3 ? '' : d + '.'), 500);
     return () => { timers.forEach(clearTimeout); clearInterval(dotTimer); };
   }, []);
+
+  const currentPhase = steps[stepIdx]?.phase;
 
   return (
     <div style={{
@@ -1402,30 +1594,42 @@ function AiTriageLoader() {
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/>
           </svg>
-          <strong style={{ fontSize: '1rem', color: 'var(--ink)' }}>AI triage running{dots}</strong>
+          <strong style={{ fontSize: '1rem', color: 'var(--ink)' }}>
+            {currentPhase === 'verify' ? 'Verifying exceptions' : 'AI triage'}{dots}
+          </strong>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-          {steps.map((s, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', opacity: i > stepIdx ? 0.35 : 1 }}>
-              {i < stepIdx
-                ? <span style={{ color: 'var(--good)', fontSize: '1rem', lineHeight: 1 }}>✓</span>
-                : i === stepIdx
-                  ? <span style={{ width: '14px', height: '14px', border: '2.5px solid var(--primary)', borderTopColor: 'transparent', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
-                  : <span style={{ width: '14px', height: '14px', border: '2px solid var(--line)', borderRadius: '50%', display: 'inline-block' }} />
-              }
-              <span style={{ fontSize: '0.85rem', color: i === stepIdx ? 'var(--ink)' : 'var(--muted)', fontWeight: i === stepIdx ? 600 : 400 }}>{s.label}</span>
-            </div>
-          ))}
+          {steps.map((s, i) => {
+            const isPhaseBreak = i > 0 && s.phase !== steps[i - 1].phase;
+            return (
+              <>
+                {isPhaseBreak && (
+                  <div key={`divider-${i}`} style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: '0.25rem' }}>
+                    Verify pass
+                  </div>
+                )}
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', opacity: i > stepIdx ? 0.35 : 1 }}>
+                  {i < stepIdx
+                    ? <span style={{ color: 'var(--good)', fontSize: '1rem', lineHeight: 1 }}>✓</span>
+                    : i === stepIdx
+                      ? <span style={{ width: '14px', height: '14px', border: '2.5px solid var(--primary)', borderTopColor: 'transparent', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
+                      : <span style={{ width: '14px', height: '14px', border: '2px solid var(--line)', borderRadius: '50%', display: 'inline-block' }} />
+                  }
+                  <span style={{ fontSize: '0.85rem', color: i === stepIdx ? 'var(--ink)' : 'var(--muted)', fontWeight: i === stepIdx ? 600 : 400 }}>{s.label}</span>
+                </div>
+              </>
+            );
+          })}
         </div>
         <p style={{ fontSize: '0.75rem', color: 'var(--muted)', margin: 0 }}>
-          LLM adjudication typically takes 10–30 seconds. Results will load automatically.
+          Triage + exception review typically takes 30–60 seconds. Results will load automatically.
         </p>
       </div>
     </div>
   );
 }
 
-function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, onResolve, loading, triageRunning, batchName }) {
+function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiPass, onResolve, loading, triageRunning, batchName }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -1532,7 +1736,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
                 a.click();
               }}
             >↓ Download Report</button>
-            <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
+            <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiPass}>Run AI Pass</button>
           </div>
         </div>
       </div>
@@ -2112,18 +2316,18 @@ export default function App() {
     }, () => `Uploaded batch reconciled (divisor: ${result?.amount_divisor ?? 'default'})`);
   };
 
-  const runAiTriage = async () => {
+  const runAiPass = async () => {
     let result;
     setTriageRunning(true);
     await safe(
       async () => {
-        result = await api.aiTriage();
+        result = await api.aiPass();
         await refreshResults({ search: '', exceptionOnly: false, status: '' });
       },
       () => {
-        const inserted = result?.inserted_count ?? 0;
-        const adjudicated = result?.llm_adjudicated_count ?? 0;
-        return `AI triage complete — ${inserted} candidate${inserted !== 1 ? 's' : ''} found, ${adjudicated} LLM-reviewed`;
+        const triaged = result?.triaged_count ?? 0;
+        const verified = result?.verified_count ?? 0;
+        return `AI Pass complete — ${triaged} candidate${triaged !== 1 ? 's' : ''} triaged, ${verified} exception${verified !== 1 ? 's' : ''} verified`;
       },
     );
     setTriageRunning(false);
@@ -2184,7 +2388,7 @@ export default function App() {
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
     const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
     const activeBatchName = activeBatch?.batch_name || activeBatch?.batch_id || 'recon';
-    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;
+    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiPass={runAiPass} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;
