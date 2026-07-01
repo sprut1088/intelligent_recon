@@ -726,7 +726,21 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
                 )
                 raw = response.choices[0].message.content
 
-            result = json.loads(raw)
+            # Strip markdown fences — Anthropic often wraps despite instructions
+            raw = raw.strip()
+            raw = re.sub(r'^```(?:json)?\s*', '', raw)
+            raw = re.sub(r'\s*```$', '', raw).strip()
+            logger.debug("AI verifier: %s raw response: %s", case_id, raw[:200])
+
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError as e:
+                logger.error(
+                    "AI verifier: %s JSON parse failed — %s | raw=%r",
+                    case_id, e, raw[:300],
+                )
+                return None
+
             verdict = result.get("verdict", "CAUTION")
             if verdict not in ("AGREE", "CAUTION", "DISAGREE"):
                 verdict = "CAUTION"
