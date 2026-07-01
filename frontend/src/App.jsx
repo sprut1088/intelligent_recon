@@ -1560,10 +1560,11 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
 
 function AiTriageLoader() {
   const steps = [
-    { label: 'Scanning unmatched PSR records', duration: 0 },
-    { label: 'Running embedding similarity (Tier 2b)', duration: 3000 },
-    { label: 'Sending candidates to LLM for adjudication (Tier 2c)', duration: 7000 },
-    { label: 'Updating cases and refreshing results', duration: 18000 },
+    { label: 'Scanning unmatched PSR records', duration: 0, phase: 'triage' },
+    { label: 'Scoring candidates (Tier 2b)', duration: 3000, phase: 'triage' },
+    { label: 'LLM adjudication — finding matches (Tier 2c)', duration: 7000, phase: 'triage' },
+    { label: 'Reviewing exception cases for second opinion', duration: 20000, phase: 'verify' },
+    { label: 'Updating cases and refreshing results', duration: 35000, phase: 'verify' },
   ];
   const [stepIdx, setStepIdx] = useState(0);
   const [dots, setDots] = useState('');
@@ -1575,6 +1576,8 @@ function AiTriageLoader() {
     const dotTimer = setInterval(() => setDots(d => d.length >= 3 ? '' : d + '.'), 500);
     return () => { timers.forEach(clearTimeout); clearInterval(dotTimer); };
   }, []);
+
+  const currentPhase = steps[stepIdx]?.phase;
 
   return (
     <div style={{
@@ -1590,23 +1593,35 @@ function AiTriageLoader() {
           <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="var(--primary)" strokeWidth="2.2" strokeLinecap="round" strokeLinejoin="round">
             <path d="M12 2a10 10 0 1 0 10 10"/><path d="M12 6v6l4 2"/>
           </svg>
-          <strong style={{ fontSize: '1rem', color: 'var(--ink)' }}>AI triage running{dots}</strong>
+          <strong style={{ fontSize: '1rem', color: 'var(--ink)' }}>
+            {currentPhase === 'verify' ? 'Verifying exceptions' : 'AI triage'}{dots}
+          </strong>
         </div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
-          {steps.map((s, i) => (
-            <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', opacity: i > stepIdx ? 0.35 : 1 }}>
-              {i < stepIdx
-                ? <span style={{ color: 'var(--good)', fontSize: '1rem', lineHeight: 1 }}>✓</span>
-                : i === stepIdx
-                  ? <span style={{ width: '14px', height: '14px', border: '2.5px solid var(--primary)', borderTopColor: 'transparent', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
-                  : <span style={{ width: '14px', height: '14px', border: '2px solid var(--line)', borderRadius: '50%', display: 'inline-block' }} />
-              }
-              <span style={{ fontSize: '0.85rem', color: i === stepIdx ? 'var(--ink)' : 'var(--muted)', fontWeight: i === stepIdx ? 600 : 400 }}>{s.label}</span>
-            </div>
-          ))}
+          {steps.map((s, i) => {
+            const isPhaseBreak = i > 0 && s.phase !== steps[i - 1].phase;
+            return (
+              <React.Fragment key={i}>
+                {isPhaseBreak && (
+                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: '0.25rem' }}>
+                    Verify pass
+                  </div>
+                )}
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', opacity: i > stepIdx ? 0.35 : 1 }}>
+                  {i < stepIdx
+                    ? <span style={{ color: 'var(--good)', fontSize: '1rem', lineHeight: 1 }}>✓</span>
+                    : i === stepIdx
+                      ? <span style={{ width: '14px', height: '14px', border: '2.5px solid var(--primary)', borderTopColor: 'transparent', borderRadius: '50%', display: 'inline-block', animation: 'spin 0.7s linear infinite' }} />
+                      : <span style={{ width: '14px', height: '14px', border: '2px solid var(--line)', borderRadius: '50%', display: 'inline-block' }} />
+                  }
+                  <span style={{ fontSize: '0.85rem', color: i === stepIdx ? 'var(--ink)' : 'var(--muted)', fontWeight: i === stepIdx ? 600 : 400 }}>{s.label}</span>
+                </div>
+              </React.Fragment>
+            );
+          })}
         </div>
         <p style={{ fontSize: '0.75rem', color: 'var(--muted)', margin: 0 }}>
-          LLM adjudication typically takes 10–30 seconds. Results will load automatically.
+          Triage + exception review typically takes 30–60 seconds. Results will load automatically.
         </p>
       </div>
     </div>
