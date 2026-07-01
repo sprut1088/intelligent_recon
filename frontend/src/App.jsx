@@ -1739,7 +1739,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
           </div>
         </div>
       </div>
-      <SummaryBar summary={summary} total={total} activeFilter={activeFilter} onFilter={onFilter} aiVerifiedCount={results.filter(r => r.feature_snapshot?.ai_verification && !r.rule_applied?.startsWith('TIER2C')).length} />
+      <SummaryBar summary={summary} total={total} activeFilter={activeFilter} onFilter={onFilter} aiVerifiedCount={(results.items || []).filter(r => r.feature_snapshot?.ai_verification && !r.rule_applied?.startsWith('TIER2C')).length} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.25rem 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <button
