@@ -1496,7 +1496,7 @@ const STATUS_OPTIONS = [
   'Post to Short or Over Ledger',
 ];
 
-function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter, aiVerifiedCount = 0 }) {
+function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
   const statuses = summary.statuses || [];
   const statusCount = (match) => statuses
     .filter(s => match(s.reconciliation_status || ''))
@@ -1505,7 +1505,7 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter, aiVerifie
   const aiSuggestedCount = statusCount(s => s === 'AI-Assisted Suggested Match');
   const aiReviewCount    = statusCount(s => s === 'AI - Analyst Adjudication Required');
   const aiNoMatchCount   = statusCount(s => s === 'AI Confirmed — No Match');
-  const aiProcessedCount = aiSuggestedCount + aiReviewCount + aiNoMatchCount + aiVerifiedCount;
+  const aiProcessedCount = aiSuggestedCount + aiReviewCount + aiNoMatchCount + (summary.ai_verified_count || 0);
   const inTransitCount   = statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) + aiNoMatchCount;
   const bankOnlyCount    = statusCount(s => s === 'Bank-only Item - Investigation');
   // Exceptions = all exception_flag='Y' rows minus In-Transit (non-AI) and Bank-only;
@@ -1739,7 +1739,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
           </div>
         </div>
       </div>
-      <SummaryBar summary={summary} total={total} activeFilter={activeFilter} onFilter={onFilter} aiVerifiedCount={(results.items || []).filter(r => r.feature_snapshot?.ai_verification && !r.rule_applied?.startsWith('TIER2C')).length} />
+      <SummaryBar summary={summary} total={total} activeFilter={activeFilter} onFilter={onFilter} />
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.25rem 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <button

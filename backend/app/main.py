@@ -306,7 +306,7 @@ def summary() -> dict:
         pattern_rows=rows_to_dicts(conn.execute("SELECT rule_applied, COUNT(*) AS count FROM recon_cases GROUP BY rule_applied ORDER BY count DESC").fetchall())
         manual_resolution_count=conn.execute("SELECT COUNT(*) AS cnt FROM recon_manual_resolution").fetchone()["cnt"]
         learning_candidate_count=conn.execute("SELECT COUNT(*) AS cnt FROM recon_pattern_candidate").fetchone()["cnt"]
-        kpi=row_to_dict(conn.execute("SELECT COALESCE(SUM(COALESCE(internal_amount,0)),0) AS internal_amount, COALESCE(SUM(COALESCE(bank_amount,0)),0) AS bank_amount, COALESCE(SUM(ABS(COALESCE(variance,0))),0) AS absolute_variance, COALESCE(AVG(match_confidence),0) AS average_confidence, SUM(CASE WHEN exception_flag='Y' THEN 1 ELSE 0 END) AS exception_count, SUM(CASE WHEN reconciliation_status LIKE 'Matched%' OR reconciliation_status = 'Resolved Manually' THEN 1 ELSE 0 END) AS auto_matched_count FROM recon_cases").fetchone())
+        kpi=row_to_dict(conn.execute("SELECT COALESCE(SUM(COALESCE(internal_amount,0)),0) AS internal_amount, COALESCE(SUM(COALESCE(bank_amount,0)),0) AS bank_amount, COALESCE(SUM(ABS(COALESCE(variance,0))),0) AS absolute_variance, COALESCE(AVG(match_confidence),0) AS average_confidence, SUM(CASE WHEN exception_flag='Y' THEN 1 ELSE 0 END) AS exception_count, SUM(CASE WHEN reconciliation_status LIKE 'Matched%' OR reconciliation_status = 'Resolved Manually' THEN 1 ELSE 0 END) AS auto_matched_count, SUM(CASE WHEN json_extract(feature_snapshot_json, '$.ai_verification') IS NOT NULL AND rule_applied NOT LIKE 'TIER2C%' THEN 1 ELSE 0 END) AS ai_verified_count FROM recon_cases").fetchone())
     return {"total_cases":total,"psr_count":psr_count,"camt_count":camt_count,"manual_resolution_count":manual_resolution_count,"learning_candidate_count":learning_candidate_count,"kpi":kpi,"by_status":status_rows,"by_reason":reason_rows,"by_rule":pattern_rows}
 
 
@@ -396,7 +396,7 @@ def list_cases(status: Optional[str]=None, exception_only: bool=False, search: O
     clauses=[]; params=[]
     if group_id: clauses.append("group_id = ?"); params.append(group_id)
     if status == 'ai_processed':
-        clauses.append("reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
+        clauses.append("(reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match') OR (json_extract(feature_snapshot_json, '$.ai_verification') IS NOT NULL AND rule_applied NOT LIKE 'TIER2C%'))")
     elif status == 'in_transit':
         clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
     elif status == 'matched':
