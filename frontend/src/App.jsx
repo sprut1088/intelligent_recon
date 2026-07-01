@@ -33,8 +33,8 @@ function classForStatus(value = '') {
   return 'neutral';
 }
 
-function Tag({ children, tone = 'neutral' }) {
-  return <span className={`tag ${tone}`}>{children}</span>;
+function Tag({ children, tone = 'neutral', className = '', title }) {
+  return <span className={`tag ${tone}${className ? ' ' + className : ''}`} title={title}>{children}</span>;
 }
 
 function Metric({ label, value, hint, tone = 'neutral' }) {
@@ -596,7 +596,9 @@ function ResultTable({ rows, onSelect }) {
                   <Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag>
                   {r.feature_snapshot?.ai_verification && (() => {
                     const v = r.feature_snapshot.ai_verification.verdict;
-                    return <span className={`ai-verdict-icon ai-verdict-${v?.toLowerCase()}`} title={`AI: ${v} — ${r.feature_snapshot.ai_verification.note || ''}`}>{v === 'AGREE' ? '\u2705' : v === 'CAUTION' ? '\u26a0\ufe0f' : '\u274c'}</span>;
+                    const tone = v === 'AGREE' ? 'success' : v === 'DISAGREE' ? 'danger' : 'warning';
+                    const label = v === 'AGREE' ? 'AI: Agree' : v === 'DISAGREE' ? 'AI: Disagree' : 'AI: Caution';
+                    return <Tag tone={tone} className="tag-verdict" title={r.feature_snapshot.ai_verification.note || ''}>{label}</Tag>;
                   })()}
                 </td>
                 <td>
