@@ -760,28 +760,41 @@ function FieldDiff({ item }) {
 
 function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
   const [expanded, setExpanded] = useState(false);
-  const fmt = (v) => (v == null || v === '') ? '—' : String(v);
+  const fmt = (v) => (v == null || v === '') ? '\u2014' : String(v);
+  // LLM pick always first, then rest in original ranking order
+  const sorted = [...candidates].sort((a, b) => {
+    const aActive = activeCamtId && a.camt_id === activeCamtId ? -1 : 0;
+    const bActive = activeCamtId && b.camt_id === activeCamtId ? -1 : 0;
+    return aActive - bActive;
+  });
   return (
     <div className="ai-candidates-panel">
       <button className="ai-candidates-toggle" onClick={() => setExpanded(e => !e)}>
-        {expanded ? '▾' : '▸'} AI considered {candidates.length} candidate{candidates.length !== 1 ? 's' : ''}
+        {expanded ? '\u25be' : '\u25b8'} AI considered {candidates.length} candidate{candidates.length !== 1 ? 's' : ''}
       </button>
       {expanded && (
         <table className="ai-candidates-table">
           <thead>
-            <tr><th>CAMT ID</th><th>Counterparty</th><th>Amount</th><th>Date</th><th>Score</th><th></th></tr>
+            <tr>
+              <th>CAMT ID</th>
+              <th>Counterparty</th>
+              <th>Amount</th>
+              <th>Date</th>
+              <th title="Rule-based pattern score (amount, date, reference). The LLM also uses remittance text, semantic similarity and business context — so its pick may differ from this score.">Rule Score \u24d8</th>
+              <th></th>
+            </tr>
           </thead>
           <tbody>
-            {candidates.map((c, i) => {
+            {sorted.map((c, i) => {
               const isActive = activeCamtId && c.camt_id === activeCamtId;
               return (
                 <tr key={c.camt_id || i} className={isActive ? 'ai-candidate-active' : ''}>
                   <td>{fmt(c.camt_id)}{isActive && <span className="ai-pick-label">LLM pick</span>}</td>
                   <td>{fmt(c.counterparty)}</td>
-                  <td>{c.amount != null ? Number(c.amount).toFixed(2) : '—'}</td>
+                  <td>{c.amount != null ? Number(c.amount).toFixed(2) : '\u2014'}</td>
                   <td>{fmt(c.date)}</td>
-                  <td>{c.domain_score != null ? `${Math.round(c.domain_score * 100)}%` : '—'}</td>
-                  <td><button className="btn-use-candidate" onClick={() => onUseCandidate(c)}>Use this</button></td>
+                  <td>{c.domain_score != null ? `${Math.round(c.domain_score * 100)}%` : '\u2014'}</td>
+                  <td>{!isActive && <button className="btn-use-candidate" onClick={() => onUseCandidate(c)}>Use this</button>}</td>
                 </tr>
               );
             })}
