@@ -449,7 +449,7 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
                 )
                 raw_content = response.choices[0].message.content
             result = json.loads(raw_content)
-            result["_candidates"] = top_candidates[:3]
+            result["_candidates"] = top_candidates[:5]
             return result
         except json.JSONDecodeError:
             # Strip markdown fences if the model wraps output despite instructions
@@ -458,7 +458,7 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
             raw = re.sub(r'\s*```$', '', raw)
             try:
                 result = json.loads(raw)
-                result["_candidates"] = top_candidates[:3]
+                result["_candidates"] = top_candidates[:5]
                 return result
             except Exception:
                 logger.error("Tier 2c JSON parse failed for PSR %s after strip", psr_id)
@@ -530,6 +530,8 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
                 "amount": c.get("camt_amount"),
                 "currency": c.get("camt_currency") or "",
                 "date": c.get("camt_booking_date") or "",
+                "pmt_ref": c.get("camt_pmt_ref") or "",
+                "invoice": c.get("camt_invoice") or "",
                 "remittance": c.get("camt_remittance") or "",
                 "domain_score": c.get("candidate_score"),
             }

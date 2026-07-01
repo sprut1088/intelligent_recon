@@ -383,3 +383,85 @@ Dev B: TASK-39 → TASK-41 → TASK-43 + TASK-44 (parallel)
 - [x] No extra API call is made when opening either drawer (members come from the case payload)
 - [x] Resolving a group/split case resolves in one click with no member-routing indirection
 - [ ] Branch merged to `feature/development` via PR with reviewer approval
+
+---
+
+## Dependency Map — AI Candidate Picker (`feat/ai-candidate-picker`)
+
+Addresses three UX gaps in the existing AI triage pipeline:
+1. Analyst can only see the LLM's top pick — alternatives are hidden
+2. `"AI Confirmed — No Match"` cases are dead ends with no action path
+3. Even "no match" cases have candidates worth surfacing as selectable options
+
+```
+TASK-46  Backend: enrich candidates_reviewed (top 5 + pmt_ref/invoice fields)
+    │
+    └──► TASK-47  Frontend: AI candidate alternatives panel + "Use this" buttons
+              │
+              └──► TASK-48  Frontend: No Match exit actions (Suspense / Snooze / Manual)
+```
+
+TASK-47 and TASK-48 can run in parallel once TASK-46 is merged.
+
+## Task Summary — AI Candidate Picker (`feat/ai-candidate-picker`)
+
+| Task | Title | Type | Depends on | Status |
+|---|---|---|---|---|
+| [TASK-46](TASK-46-ai-enrich-candidates-reviewed.md) | Backend: enrich `candidates_reviewed` (top 5 + missing fields) | Backend | TASK-04 | 🔲 Not started |
+| [TASK-47](TASK-47-ai-candidate-alternatives-panel.md) | Frontend: AI candidate alternatives panel + "Use this" | Frontend | TASK-46 | 🔲 Not started |
+| [TASK-48](TASK-48-ai-no-match-exit-actions.md) | Frontend: No Match exit actions (Suspense / Snooze / Manual) | Frontend | TASK-47 | 🔲 Not started |
+
+### Recommended pickup order
+
+```
+TASK-46 → TASK-47 + TASK-48 (parallel)
+```
+
+### Definition of Done — AI Candidate Picker
+
+- [ ] All 3 tasks completed and individually verified
+- [ ] Run AI triage, open an `AI-Assisted Suggested Match` case — "AI considered N candidates" toggle appears and expands to show a table with up to 5 rows
+- [ ] Each row has a "Use this" button; clicking one pre-fills the Resolve modal with that candidate's CAMT ID
+- [ ] The LLM-picked row is highlighted with a "LLM pick" label
+- [ ] Open an `AI Confirmed — No Match` case — candidate table is present AND three exit-action buttons appear (Post to Suspense, Snooze, Flag for Manual Investigation)
+- [ ] Each exit action resolves the case and refreshes the table
+- [ ] `python -m pytest backend/tests/ -v` passes with no regressions (backend change is metadata-only)
+- [ ] Branch merged to `feature/development` via PR with reviewer approval
+
+---
+
+## Dependency Map — AI Exception Verifier (`feat/ai-exception-verifier`)
+
+Extends AI coverage to cases that Pass 1 static rules *did* match but flagged as uncertain.
+Instead of searching for a match (triage), the AI reviews the existing proposed pair and
+gives a second opinion: AGREE / CAUTION / DISAGREE.
+
+```
+TASK-49  Backend: verify_exception_cases() + POST /api/reconcile/ai-verify
+    │
+    └──► TASK-50  Frontend: "Verify exceptions" button + verdict icon + EvidenceDrawer panel
+```
+
+## Task Summary — AI Exception Verifier (`feat/ai-exception-verifier`)
+
+| Task | Title | Type | Depends on | Status |
+|---|---|---|---|---|
+| [TASK-49](TASK-49-ai-exception-verifier-backend.md) | Backend: `verify_exception_cases()` + `/api/reconcile/ai-verify` endpoint | Backend | TASK-04 | 🔲 Not started |
+| [TASK-50](TASK-50-ai-verifier-frontend.md) | Frontend: "Verify exceptions" button + verdict icon + EvidenceDrawer panel | Frontend | TASK-49 | 🔲 Not started |
+
+### Recommended pickup order
+
+```
+TASK-49 → TASK-50
+```
+
+### Definition of Done — AI Exception Verifier
+
+- [ ] All 2 tasks completed and individually verified
+- [ ] Run reconcile → P4/P7 exception cases exist; click "Verify exceptions" → toast confirms N cases annotated
+- [ ] ResultTable: P4/P7 rows show a small coloured verdict icon (green/amber/red) alongside their status badge
+- [ ] EvidenceDrawer for a verified exception case shows the "AI Verification" panel with verdict badge, confidence %, and the LLM's one-sentence note
+- [ ] `reconciliation_status` is NOT changed by verification — deterministic rule result preserved
+- [ ] Endpoint handles missing API key gracefully (`{"status": "skipped", "reason": "no_api_key"}`)
+- [ ] `python -m pytest backend/tests/ -v` passes with no regressions
+- [ ] Branch merged to `feature/development` via PR with reviewer approval
