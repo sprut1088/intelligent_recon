@@ -534,6 +534,7 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
                 "invoice": c.get("camt_invoice") or "",
                 "remittance": c.get("camt_remittance") or "",
                 "domain_score": c.get("candidate_score"),
+                "llm_confidence": conf if c.get("camt_id") == matched_camt else None,
             }
             for c in result.get("_candidates", [])
         ]

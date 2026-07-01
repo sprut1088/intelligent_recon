@@ -807,6 +807,7 @@ function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
                   </div>
                 )}
               </th>
+              <th>LLM Conf.</th>
               <th></th>
             </tr>
           </thead>
@@ -820,6 +821,7 @@ function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
                   <td>{c.amount != null ? Number(c.amount).toFixed(2) : '\u2014'}</td>
                   <td>{fmt(c.date)}</td>
                   <td>{c.domain_score != null ? `${Math.round(c.domain_score * 100)}%` : '\u2014'}</td>
+                  <td>{c.llm_confidence != null ? `${c.llm_confidence}%` : '\u2014'}</td>
                   <td>{!isActive && <button className="btn-use-candidate" onClick={() => onUseCandidate(c)}>Use this</button>}</td>
                 </tr>
               );
