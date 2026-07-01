@@ -1097,7 +1097,35 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
               );
             })()}
           </Panel>
-{suggestions.length > 0 && item.reconciliation_status !== 'AI Confirmed — No Match' && (
+{item.reconciliation_status === 'AI Confirmed \u2014 No Match' && (
+  <div className="no-match-exits">
+    <p className="no-match-exits-label">AI found no suitable match. Choose how to handle this case:</p>
+    <div className="no-match-exits-buttons">
+      <button
+        className="btn-exit"
+        disabled={noMatchLoading != null}
+        onClick={() => submitNoMatch('POST_TO_LEDGER', 'SUSPENSE_LEDGER')}
+      >
+        {noMatchLoading === 'POST_TO_LEDGER' ? 'Posting\u2026' : 'Post to Suspense Ledger'}
+      </button>
+      <button
+        className="btn-exit"
+        disabled={noMatchLoading != null}
+        onClick={() => submitNoMatch('SNOOZED', 'SNOOZED_NEXT_CYCLE')}
+      >
+        {noMatchLoading === 'SNOOZED' ? 'Snoozing\u2026' : 'Snooze \u2014 revisit next cycle'}
+      </button>
+      <button
+        className="btn-exit"
+        disabled={noMatchLoading != null}
+        onClick={() => submitNoMatch('MANUAL_INVESTIGATION', 'MANUAL_INVESTIGATION')}
+      >
+        {noMatchLoading === 'MANUAL_INVESTIGATION' ? 'Flagging\u2026' : 'Flag for Manual Investigation'}
+      </button>
+    </div>
+  </div>
+)}
+{suggestions.length > 0 && item.reconciliation_status !== 'AI Confirmed \u2014 No Match' && (
           <Panel title="Suggested actions" className="nested-panel">
             <div className="action-stack">
               {suggestions.map((s, idx) => {

@@ -226,6 +226,13 @@ code { color: #475569; font-size: 12px; white-space: pre-wrap; }
 .score-info-btn:hover { color: #4f46e5; }
 .score-info-popover { z-index: 9999; background: white; border: 1px solid #e2e8f0; border-radius: 6px; padding: 10px 12px; font-size: 0.73rem; color: #475569; width: 250px; box-shadow: 0 4px 16px rgba(0,0,0,0.14); font-weight: 400; text-transform: none; letter-spacing: 0; line-height: 1.5; white-space: normal; }
 .score-info-close { display: block; margin-top: 8px; font-size: 0.7rem; color: #6366f1; background: none; border: none; cursor: pointer; padding: 0; text-decoration: underline; }
+/* No-match exit actions (TASK-48) */
+.no-match-exits { margin: 14px 0; padding: 12px 14px; background: #fafafa; border: 1px solid #e2e8f0; border-radius: 8px; }
+.no-match-exits-label { font-size: 0.8rem; color: #64748b; margin: 0 0 10px; }
+.no-match-exits-buttons { display: flex; gap: 8px; flex-wrap: wrap; }
+.btn-exit { font-size: 0.8rem; padding: 5px 12px; background: white; border: 1px solid #cbd5e1; border-radius: 6px; color: #475569; cursor: pointer; }
+.btn-exit:hover { border-color: #94a3b8; background: #f8fafc; }
+.btn-exit:disabled { opacity: 0.5; cursor: not-allowed; }
 .field-diff-table th:last-child, .field-diff-table td:last-child { border-right: 0; }
 .source-link { color: var(--primary); text-decoration: none; font-weight: 500; }
 .source-link:hover { text-decoration: underline; }
