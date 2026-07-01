@@ -763,7 +763,7 @@ function FieldDiff({ item }) {
 }
 
 function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
-  const [expanded, setExpanded] = useState(false);
+  const [expanded, setExpanded] = useState(true);
   const [showScoreInfo, setShowScoreInfo] = useState(false);
   const fmt = (v) => (v == null || v === '') ? '\u2014' : String(v);
   // LLM pick always first, then rest in original ranking order
