@@ -1613,7 +1613,7 @@ function AiTriageLoader() {
   );
 }
 
-function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, onAiVerify, onResolve, loading, triageRunning, batchName }) {
+function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiPass, onResolve, loading, triageRunning, batchName }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -1720,8 +1720,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
                 a.click();
               }}
             >↓ Download Report</button>
-            <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
-            <button className="btn secondary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiVerify} title="AI second-opinion pass on P4/P7 exception cases">Verify exceptions</button>
+            <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiPass}>Run AI Pass</button>
           </div>
         </div>
       </div>
@@ -2301,35 +2300,21 @@ export default function App() {
     }, () => `Uploaded batch reconciled (divisor: ${result?.amount_divisor ?? 'default'})`);
   };
 
-  const runAiTriage = async () => {
+  const runAiPass = async () => {
     let result;
     setTriageRunning(true);
     await safe(
       async () => {
-        result = await api.aiTriage();
+        result = await api.aiPass();
         await refreshResults({ search: '', exceptionOnly: false, status: '' });
       },
       () => {
-        const inserted = result?.inserted_count ?? 0;
-        const adjudicated = result?.llm_adjudicated_count ?? 0;
-        return `AI triage complete — ${inserted} candidate${inserted !== 1 ? 's' : ''} found, ${adjudicated} LLM-reviewed`;
+        const triaged = result?.triaged_count ?? 0;
+        const verified = result?.verified_count ?? 0;
+        return `AI Pass complete — ${triaged} candidate${triaged !== 1 ? 's' : ''} triaged, ${verified} exception${verified !== 1 ? 's' : ''} verified`;
       },
     );
     setTriageRunning(false);
-  };
-
-  const runAiVerify = async () => {
-    let result;
-    await safe(
-      async () => {
-        result = await api.aiVerify();
-        await refreshResults({ search: '', exceptionOnly: false, status: '' });
-      },
-      () => {
-        const count = result?.verified_count ?? 0;
-        return `AI verification complete \u2014 ${count} exception case${count !== 1 ? 's' : ''} annotated`;
-      },
-    );
   };
 
   const tunePattern = async (patternId, draft) => {
@@ -2387,7 +2372,7 @@ export default function App() {
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
     const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
     const activeBatchName = activeBatch?.batch_name || activeBatch?.batch_id || 'recon';
-    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onAiVerify={runAiVerify} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;
+    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiPass={runAiPass} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;

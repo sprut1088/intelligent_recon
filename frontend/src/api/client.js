@@ -90,6 +90,7 @@ export const api = {
     method: 'POST',
     body: JSON.stringify(caseIds ? { case_ids: caseIds } : {}),
   }),
+  aiPass: () => request('/api/reconcile/ai-pass', { method: 'POST' }),
   summary: async () => mapSummary(await request('/api/reconcile/summary')),
   results: async ({ limit = 100, offset = 0, exceptionOnly = false, search = '', status = '' } = {}) => {
     const qs = new URLSearchParams({ limit, offset, exception_only: exceptionOnly });

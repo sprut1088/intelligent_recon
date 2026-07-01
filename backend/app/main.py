@@ -151,6 +151,25 @@ def run_ai_verify(body: AiVerifyRequest = None) -> dict:
     return {"status": "ok", "verified_count": len(results)}
 
 
+@app.post("/api/reconcile/ai-pass")
+def run_ai_pass() -> dict:
+    """
+    Combined AI full pass: triage unmatched PSRs then verify exception cases.
+    Equivalent to calling ai-triage followed by ai-verify in sequence.
+    Returns combined stats: {triaged_count, verified_count}.
+    """
+    logger.info("AI full pass requested")
+    # Phase 1 — triage (reuses same logic as /ai-triage endpoint)
+    triage_result = run_ai_triage()
+    triaged = triage_result.get("inserted_count", 0)
+    logger.info("AI full pass: triage complete — %d candidates inserted", triaged)
+    # Phase 2 — verify exception cases
+    verify_results = verify_exception_cases()
+    verified = len(verify_results)
+    logger.info("AI full pass: verify complete — %d cases annotated", verified)
+    return {"status": "ok", "triaged_count": triaged, "verified_count": verified}
+
+
 @app.post("/api/reconcile/ai-triage")
 def run_ai_triage() -> dict:
     """
