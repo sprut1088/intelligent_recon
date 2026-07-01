@@ -1601,13 +1601,13 @@ function AiTriageLoader() {
           {steps.map((s, i) => {
             const isPhaseBreak = i > 0 && s.phase !== steps[i - 1].phase;
             return (
-              <React.Fragment key={i}>
+              <>
                 {isPhaseBreak && (
-                  <div style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: '0.25rem' }}>
+                  <div key={`divider-${i}`} style={{ fontSize: '0.7rem', fontWeight: 700, color: 'var(--muted)', textTransform: 'uppercase', letterSpacing: '0.06em', marginTop: '0.25rem' }}>
                     Verify pass
                   </div>
                 )}
-                <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', opacity: i > stepIdx ? 0.35 : 1 }}>
+                <div key={i} style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', opacity: i > stepIdx ? 0.35 : 1 }}>
                   {i < stepIdx
                     ? <span style={{ color: 'var(--good)', fontSize: '1rem', lineHeight: 1 }}>✓</span>
                     : i === stepIdx
@@ -1616,7 +1616,7 @@ function AiTriageLoader() {
                   }
                   <span style={{ fontSize: '0.85rem', color: i === stepIdx ? 'var(--ink)' : 'var(--muted)', fontWeight: i === stepIdx ? 600 : 400 }}>{s.label}</span>
                 </div>
-              </React.Fragment>
+              </>
             );
           })}
         </div>
