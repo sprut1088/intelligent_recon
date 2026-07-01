@@ -411,7 +411,9 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
             "ambiguous. No filler phrases. Max 20 words.\n\n"
             "Reply with RAW JSON only. Do not use markdown blocks:\n"
             '{"psr_id":"string","matched_camt_id":"string or null",'
-            '"confidence_pct":"integer 0-100","reason":"string","suggested_action":"CONFIRM_AI_MATCH|ROUTE_TO_ANALYST|NO_MATCH"}'
+            '"confidence_pct":"integer 0-100","reason":"string","suggested_action":"CONFIRM_AI_MATCH|ROUTE_TO_ANALYST|NO_MATCH",'
+            '"candidate_scores":[{"camt_id":"string","confidence_pct":"integer 0-100"}]}'
+            " — candidate_scores must include one entry per candidate with your identity-match confidence for each."
         )
 
         user_prompt = (
@@ -523,6 +525,11 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
                 "evidence": f"LLM confidence: {conf}%",
             },
         ]
+        per_cand_scores = {
+            s["camt_id"]: s.get("confidence_pct")
+            for s in result.get("candidate_scores") or []
+            if s.get("camt_id")
+        }
         candidates_reviewed = [
             {
                 "camt_id": c.get("camt_id"),
@@ -534,7 +541,7 @@ def run_tier2c(candidates: List[Dict]) -> List[Dict]:
                 "invoice": c.get("camt_invoice") or "",
                 "remittance": c.get("camt_remittance") or "",
                 "domain_score": c.get("candidate_score"),
-                "llm_confidence": conf if c.get("camt_id") == matched_camt else None,
+                "llm_confidence": per_cand_scores.get(c.get("camt_id")),
             }
             for c in result.get("_candidates", [])
         ]
