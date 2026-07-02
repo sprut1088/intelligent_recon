@@ -773,6 +773,7 @@ function FieldDiff({ item }) {
 function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
   const [expanded, setExpanded] = useState(true);
   const [scoreInfoAnchor, setScoreInfoAnchor] = useState(null);
+  const [headerInfoAnchor, setHeaderInfoAnchor] = useState(null);
   const fmt = (v) => (v == null || v === '') ? '\u2014' : String(v);
   // LLM pick always first, then rest in original ranking order
   const sorted = [...candidates].sort((a, b) => {
@@ -786,11 +787,30 @@ function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
     const r = e.currentTarget.getBoundingClientRect();
     setScoreInfoAnchor({ top: r.bottom + 6, left: Math.max(8, r.left - 180) });
   };
+  const toggleHeaderInfo = (e) => {
+    e.stopPropagation();
+    if (headerInfoAnchor) { setHeaderInfoAnchor(null); return; }
+    const r = e.currentTarget.getBoundingClientRect();
+    setHeaderInfoAnchor({ top: r.bottom + 6, left: Math.max(8, r.left - 220) });
+  };
   return (
     <div className="ai-candidates-panel">
-      <button className="ai-candidates-toggle" onClick={() => setExpanded(e => !e)}>
-        {expanded ? '\u25be' : '\u25b8'} AI considered {candidates.length} candidate{candidates.length !== 1 ? 's' : ''}
-      </button>
+      <div style={{ display: 'flex', alignItems: 'center', borderBottom: '1px solid #e2e8f0', background: '#f8fafc' }}>
+        <button className="ai-candidates-toggle" style={{ flex: 1, borderBottom: 'none' }} onClick={() => setExpanded(e => !e)}>
+          {expanded ? '\u25be' : '\u25b8'} AI considered {candidates.length} candidate{candidates.length !== 1 ? 's' : ''}
+        </button>
+        <button className="score-info-btn" onClick={toggleHeaderInfo} title="How are candidates selected?" style={{ marginRight: '8px', flexShrink: 0 }}>{'ⓘ'}</button>
+      </div>
+      {headerInfoAnchor && (
+        <div
+          className="score-info-popover"
+          style={{ position: 'fixed', top: headerInfoAnchor.top, left: headerInfoAnchor.left }}
+          onClick={e => e.stopPropagation()}
+        >
+          Candidates are shortlisted by an AI that checks amount, direction and date, then ranks entries by how well the counterparty, invoice and reference align. A second AI pass reads the shortlist and either confirms the best match or routes it to you for review.
+          <button className="score-info-close" onClick={() => setHeaderInfoAnchor(null)}>Dismiss</button>
+        </div>
+      )}
       {expanded && (
         <table className="ai-candidates-table">
           <thead>
@@ -810,7 +830,7 @@ function AiCandidatesPanel({ candidates, activeCamtId, onUseCandidate }) {
                     style={{ position: 'fixed', top: scoreInfoAnchor.top, left: scoreInfoAnchor.left }}
                     onClick={e => e.stopPropagation()}
                   >
-                    Rule-based pattern score (amount, date, reference). The LLM also uses remittance text, semantic similarity and business context {'\u2014'} so its pick may differ from this score.
+                    Rule-based pattern score (amount, date, reference). The LLM also uses remittance text, semantic similarity and business context {'—'} so its pick may differ from this score.
                     <button className="score-info-close" onClick={() => setScoreInfoAnchor(null)}>Dismiss</button>
                   </div>
                 )}
@@ -1512,8 +1532,9 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
   // AI Confirmed No Match (those are moved into In-Transit to avoid double-counting).
   // AI Suggested + AI Review ARE included as they need analyst action.
   const baseExceptions   = Math.max(0, exceptionCount - statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) - bankOnlyCount - aiNoMatchCount);
+  const psrTotal  = summary?.psr_records ?? summary?.raw?.psr_count ?? 0;
+  const camtTotal = summary?.camt_entries ?? summary?.raw?.camt_count ?? 0;
   const chips = [
-    { label: 'Total',      value: total,          filter: '' },
     { label: 'Matched',    value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close') || s === 'Resolved Manually'), filter: 'matched' },
     { label: 'Exceptions', value: baseExceptions,  filter: 'exceptions' },
     { label: 'In-Transit', value: inTransitCount,  filter: 'in_transit' },
@@ -1521,7 +1542,16 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
   ];
   const aiActive = activeFilter === 'ai_processed';
   return (
-    <div className="summary-bar" style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
+    <div className="summary-bar" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+      <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap' }}>
+        <span style={{ fontSize: '0.8rem', color: 'var(--muted, #888)', fontWeight: 500 }}>
+          PSR records: <strong style={{ color: 'var(--ink)', fontWeight: 700 }}>{psrTotal}</strong>
+        </span>
+        <span style={{ fontSize: '0.8rem', color: 'var(--muted, #888)', fontWeight: 500 }}>
+          CAMT entries: <strong style={{ color: 'var(--ink)', fontWeight: 700 }}>{camtTotal}</strong>
+        </span>
+      </div>
+      <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
       <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
         {chips.map(c => (
           <button key={c.label} className={`chip${activeFilter === c.filter ? ' active' : ''}`} onClick={() => onFilter(c.filter)}>
@@ -1555,6 +1585,7 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
           borderRadius: '10px', padding: '0 6px', fontSize: '0.72rem', fontWeight: 700,
         }}>{aiProcessedCount}</span>
       </button>
+      </div>
     </div>
   );
 }
