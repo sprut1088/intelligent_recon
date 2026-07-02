@@ -914,7 +914,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
 
   useEffect(() => {
     if (!selected) return;
-    const MATCH_STATUSES_KB = ['Suggested Match - Analyst Review', 'Suggested Match - Learned Pattern', 'Exception - Amount Variance Review', 'Post to Short or Over Ledger', 'AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required'];
+    const MATCH_STATUSES_KB = ['Suggested Match - Analyst Review', 'Suggested Match - Group Settlement', 'Suggested Match - Learned Pattern', 'Exception - Amount Variance Review', 'Post to Short or Over Ledger', 'AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required'];
     const handler = (e) => {
       const tag = document.activeElement?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
@@ -1208,6 +1208,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
         {item.exception_flag === 'Y' && (() => {
           const MATCH_STATUSES = [
             'Suggested Match - Analyst Review',
+            'Suggested Match - Group Settlement',
             'Suggested Match - Learned Pattern',
             'Exception - Amount Variance Review',
             'Post to Short or Over Ledger',
@@ -1511,6 +1512,8 @@ const STATUS_OPTIONS = [
   'AI - Analyst Adjudication Required',
   'AI Confirmed — No Match',
   'Suggested Match - Analyst Review',
+  'Suggested Match - Group Settlement',
+  'Suggested Match - Split Settlement',
   'Suggested Match - Learned Pattern',
   'Exception - Amount Variance Review',
   'Post to Short or Over Ledger',
