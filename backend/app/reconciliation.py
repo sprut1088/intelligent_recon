@@ -339,8 +339,9 @@ def find_one_to_many_groups(
     bank_cp_min  = float(pattern_rule_value(config, "P6", "bank_counterparty_min_similarity", 0.95))
     max_grp_size = int(pattern_rule_value(config, "P6", "max_group_size", 6))
     date_window  = int(pattern_rule_value(config, "P6", "date_window_days", 3))
-    var_subpass  = bool(pattern_rule_value(config, "P6", "variance_subpass_enabled", True))
-    var_max_size = int(pattern_rule_value(config, "P6", "variance_subpass_max_group_size", 3))
+    var_subpass      = bool(pattern_rule_value(config, "P6", "variance_subpass_enabled", True))
+    var_max_size     = int(pattern_rule_value(config, "P6", "variance_subpass_max_group_size", 3))
+    major_var_factor = float(pattern_rule_value(config, "P6", "major_variance_factor", 4.0))
     # TASK-36: bank-side batch markers (e.g. end_to_end_id = "BATCH-GRP-A") seed grouping
     # first and earn a higher confidence (default 92 vs 88 for unflagged subset-sum hits).
     marker_regex      = str(pattern_rule_value(config, "P6", "batch_marker_regex", _DEFAULT_BATCH_MARKER_REGEX))
@@ -445,7 +446,7 @@ def find_one_to_many_groups(
                           conf, rule, reason, expl, 0.0, ambiguous)
             continue
 
-        # Step 4: variance sub-pass (small groups only)
+        # Step 4: minor variance sub-pass (small groups only)
         if var_subpass and len(candidates) >= 2:
             var_matches = _find_subset_matches(
                 candidates, camt.amount, var_max_size, settings.minor_variance_tolerance
@@ -468,6 +469,26 @@ def find_one_to_many_groups(
                 )
                 _record_group(groups, used_psr_ids, used_camt_ids, camt, chosen, None,
                               78, "P6_BATCH_MINOR_VARIANCE", "AMOUNT_VARIANCE_MINOR_BATCH",
+                              expl, grp_var, False)
+                continue
+
+            # Step 5: major variance sub-pass — surface as Exception for analyst review
+            major_tolerance = settings.minor_variance_tolerance * major_var_factor
+            major_matches = _find_subset_matches(
+                candidates, camt.amount, var_max_size, major_tolerance
+            )
+            if major_matches:
+                chosen      = major_matches[0]
+                group_sum   = sum(p.amount for p in chosen)
+                grp_var     = round(group_sum - camt.amount, 2)
+                psr_ids_str = ", ".join(p.id for p in chosen)
+                expl = (
+                    f"{len(chosen)} PSR transactions ({psr_ids_str}) sum to "
+                    f"{group_sum:.2f} vs CAMT {camt.ntry_id} ({camt.amount:.2f}). "
+                    f"Variance {grp_var:+.2f} exceeds minor tolerance — requires analyst review."
+                )
+                _record_group(groups, used_psr_ids, used_camt_ids, camt, chosen, None,
+                              65, "P6_BATCH_MAJOR_VARIANCE", "AMOUNT_VARIANCE_MAJOR_BATCH",
                               expl, grp_var, False)
 
     return groups
@@ -524,12 +545,13 @@ def find_one_to_n_splits(
     if not pattern_is_active(config, "P10"):
         return []
 
-    max_split    = int(pattern_rule_value(config, "P10", "max_split_size", 5))
-    date_window  = int(pattern_rule_value(config, "P10", "date_window_days", 3))
-    cp_min_sim   = float(pattern_rule_value(config, "P10", "bank_counterparty_min_similarity", 0.95))
-    marker_regex = str(pattern_rule_value(config, "P10", "split_marker_regex", _DEFAULT_SPLIT_MARKER_REGEX))
-    ref_conf     = int(pattern_rule_value(config, "P10", "shared_reference_confidence", 92))
-    sum_conf     = int(pattern_rule_value(config, "P10", "subset_sum_confidence", 86))
+    max_split        = int(pattern_rule_value(config, "P10", "max_split_size", 5))
+    date_window      = int(pattern_rule_value(config, "P10", "date_window_days", 3))
+    cp_min_sim       = float(pattern_rule_value(config, "P10", "bank_counterparty_min_similarity", 0.95))
+    marker_regex     = str(pattern_rule_value(config, "P10", "split_marker_regex", _DEFAULT_SPLIT_MARKER_REGEX))
+    ref_conf         = int(pattern_rule_value(config, "P10", "shared_reference_confidence", 92))
+    sum_conf         = int(pattern_rule_value(config, "P10", "subset_sum_confidence", 86))
+    major_var_factor = float(pattern_rule_value(config, "P10", "major_variance_factor", 4.0))
 
     splits: List[Dict] = []
     used_psr_ids: set = set()
@@ -565,6 +587,7 @@ def find_one_to_n_splits(
 
         for link_kind, link_value, bucket in candidate_buckets:
             total = round(sum(c.amount for c in bucket), 2)
+            variance_tier = None  # None=exact, "minor", "major"
             if abs(total - psr.amount) <= settings.exact_amount_tolerance and len(bucket) <= max_split:
                 chosen = sorted(bucket, key=lambda c: (c.booking_date or "", c.ntry_id))
                 ambiguous = False
@@ -573,6 +596,19 @@ def find_one_to_n_splits(
                 subsets = _find_camt_subset_matches(
                     bucket, psr.amount, max_split, settings.exact_amount_tolerance
                 )
+                if not subsets:
+                    subsets = _find_camt_subset_matches(
+                        bucket, psr.amount, max_split, settings.minor_variance_tolerance
+                    )
+                    if subsets:
+                        variance_tier = "minor"
+                if not subsets:
+                    subsets = _find_camt_subset_matches(
+                        bucket, psr.amount, max_split,
+                        settings.minor_variance_tolerance * major_var_factor,
+                    )
+                    if subsets:
+                        variance_tier = "major"
                 if not subsets:
                     continue
                 chosen = subsets[0]
@@ -594,26 +630,43 @@ def find_one_to_n_splits(
                 )
 
             camt_ids_str = ", ".join(c.ntry_id for c in chosen)
+            variance_note = (
+                f" Variance {round(sum(c.amount for c in chosen) - psr.amount, 2):+.2f} "
+                + ("within minor tolerance." if variance_tier == "minor" else "exceeds minor tolerance — requires analyst review.")
+                if variance_tier else ""
+            )
             expl = (
                 f"{marker_clause}"
                 f"{'Ambiguous: multiple valid CAMT subsets. Selected by earliest date. ' if ambiguous else ''}"
                 f"PSR {psr.id} ({psr.amount:.2f}) is settled by {len(chosen)} CAMT entries "
                 f"({camt_ids_str}) sharing {link_kind} '{link_value}', summing to "
-                f"{sum(c.amount for c in chosen):.2f}."
+                f"{sum(c.amount for c in chosen):.2f}.{variance_note}"
             )
             if ambiguous and alt:
                 expl += f" Alternative subset: {', '.join(c.ntry_id for c in alt)}."
 
+            if variance_tier == "minor":
+                p1_conf   = 78
+                p1_rule   = "P10_SPLIT_SHARED_REFERENCE_MINOR_VARIANCE"
+                p1_reason = "SPLIT_SETTLEMENT_MINOR_VARIANCE"
+            elif variance_tier == "major":
+                p1_conf   = 65
+                p1_rule   = "P10_SPLIT_SHARED_REFERENCE_MAJOR_VARIANCE"
+                p1_reason = "SPLIT_SETTLEMENT_MAJOR_VARIANCE"
+            else:
+                p1_conf   = 70 if ambiguous else ref_conf
+                p1_rule   = "P10_SPLIT_SHARED_REFERENCE_AMBIGUOUS" if ambiguous else "P10_SPLIT_SHARED_REFERENCE"
+                p1_reason = "SPLIT_SETTLEMENT_AMBIGUOUS" if ambiguous else "SPLIT_SETTLEMENT_SHARED_REFERENCE"
+
             splits.append({
                 "psr": psr, "camts": chosen, "anchor_camt": chosen[0],
-                "confidence": 70 if ambiguous else ref_conf,
-                "rule_applied": "P10_SPLIT_SHARED_REFERENCE_AMBIGUOUS" if ambiguous else "P10_SPLIT_SHARED_REFERENCE",
-                "reason_code": "SPLIT_SETTLEMENT_AMBIGUOUS" if ambiguous else "SPLIT_SETTLEMENT_SHARED_REFERENCE",
+                "confidence": p1_conf, "rule_applied": p1_rule, "reason_code": p1_reason,
                 "explanation": expl,
                 "marker_detected": bool(markers),
                 "ambiguous": ambiguous,
                 "alternative_camts": alt,
                 "variance": round(sum(c.amount for c in chosen) - psr.amount, 2),
+                "variance_tier": variance_tier,
             })
             used_psr_ids.add(psr.id)
             for c in chosen:
@@ -667,21 +720,50 @@ def find_one_to_n_splits(
         subsets = _find_camt_subset_matches(
             avail, psr.amount, max_split, settings.exact_amount_tolerance
         )
+        variance_tier = None
+        if not subsets:
+            subsets = _find_camt_subset_matches(
+                avail, psr.amount, max_split, settings.minor_variance_tolerance
+            )
+            if subsets:
+                variance_tier = "minor"
+        if not subsets:
+            subsets = _find_camt_subset_matches(
+                avail, psr.amount, max_split,
+                settings.minor_variance_tolerance * major_var_factor,
+            )
+            if subsets:
+                variance_tier = "major"
         if not subsets:
             continue
 
         chosen = subsets[0]
         ambiguous = len(subsets) > 1
         alt = subsets[1] if ambiguous else None
-        conf = 70 if ambiguous else sum_conf
-        rule = "P10_SPLIT_SUBSET_SUM_AMBIGUOUS" if ambiguous else "P10_SPLIT_SUBSET_SUM"
-        reason = "SPLIT_SETTLEMENT_AMBIGUOUS" if ambiguous else "SPLIT_SETTLEMENT_SUBSET_SUM"
+        if variance_tier == "minor":
+            conf   = 78
+            rule   = "P10_SPLIT_SUBSET_SUM_MINOR_VARIANCE"
+            reason = "SPLIT_SETTLEMENT_MINOR_VARIANCE"
+        elif variance_tier == "major":
+            conf   = 65
+            rule   = "P10_SPLIT_SUBSET_SUM_MAJOR_VARIANCE"
+            reason = "SPLIT_SETTLEMENT_MAJOR_VARIANCE"
+        else:
+            conf   = 70 if ambiguous else sum_conf
+            rule   = "P10_SPLIT_SUBSET_SUM_AMBIGUOUS" if ambiguous else "P10_SPLIT_SUBSET_SUM"
+            reason = "SPLIT_SETTLEMENT_AMBIGUOUS" if ambiguous else "SPLIT_SETTLEMENT_SUBSET_SUM"
         camt_ids_str = ", ".join(c.ntry_id for c in chosen)
+        camt_sum = sum(c.amount for c in chosen)
+        variance_note = (
+            f" Variance {round(camt_sum - psr.amount, 2):+.2f} "
+            + ("within minor tolerance." if variance_tier == "minor" else "exceeds minor tolerance — requires analyst review.")
+            if variance_tier else ""
+        )
         expl = (
             f"{'Ambiguous: multiple valid CAMT subsets. Selected by earliest date. ' if ambiguous else ''}"
             f"PSR {psr.id} ({psr.amount:.2f}) is settled by {len(chosen)} CAMT entries "
-            f"({camt_ids_str}) summing to {sum(c.amount for c in chosen):.2f}. "
-            f"Counterparty partition '{target_key}' confirmed."
+            f"({camt_ids_str}) summing to {camt_sum:.2f}. "
+            f"Counterparty partition '{target_key}' confirmed.{variance_note}"
         )
         if ambiguous and alt:
             expl += f" Alternative subset: {', '.join(c.ntry_id for c in alt)}."
@@ -691,7 +773,8 @@ def find_one_to_n_splits(
             "confidence": conf, "rule_applied": rule, "reason_code": reason,
             "explanation": expl, "marker_detected": False,
             "ambiguous": ambiguous, "alternative_camts": alt,
-            "variance": 0.0,
+            "variance": round(camt_sum - psr.amount, 2),
+            "variance_tier": variance_tier,
         })
         used_psr_ids.add(psr.id)
         for c in chosen:
@@ -776,7 +859,9 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
             group_sum = round(sum(p.amount for p in psrs_g), 2)
 
             if rule_g == "P6_BATCH_MINOR_VARIANCE":
-                status_g = "Post to Short or Over Ledger"
+                status_g = "Group Settlement - Post to Ledger"
+            elif rule_g == "P6_BATCH_MAJOR_VARIANCE":
+                status_g = "Group Settlement - Amount Variance Review"
             elif rule_g == "P6_BANK_BATCH_GROUPING_AMBIGUOUS":
                 status_g = "Suggested Match - Analyst Review"
             else:
@@ -851,17 +936,25 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
         p10_splits = find_one_to_n_splits(post_p6_residual, residual_camts_for_p10, config)
 
         for split in p10_splits:
-            split_id  = f"SPLIT-{idx:06d}"
-            psr_s     = split["psr"]
-            camts_s   = split["camts"]            # already date-sorted
-            conf_s    = split["confidence"]
-            rule_s    = split["rule_applied"]
-            reason_s  = split["reason_code"]
-            expl_s    = split["explanation"]
-            ambig_s   = split["ambiguous"]
+            split_id       = f"SPLIT-{idx:06d}"
+            psr_s          = split["psr"]
+            camts_s        = split["camts"]            # already date-sorted
+            conf_s         = split["confidence"]
+            rule_s         = split["rule_applied"]
+            reason_s       = split["reason_code"]
+            expl_s         = split["explanation"]
+            ambig_s        = split["ambiguous"]
+            variance_tier_s = split.get("variance_tier")
             camts_sum = round(sum(c.amount for c in camts_s), 2)
 
-            status_s = "Suggested Match - Analyst Review" if ambig_s else "Suggested Match - Split Settlement"
+            if variance_tier_s == "minor":
+                status_s = "Split Settlement - Post to Ledger"
+            elif variance_tier_s == "major":
+                status_s = "Split Settlement - Amount Variance Review"
+            elif ambig_s:
+                status_s = "Suggested Match - Analyst Review"
+            else:
+                status_s = "Suggested Match - Split Settlement"
 
             # All CAMTs embedded as members — one row per split, not per CAMT
             camt_members_s = [
@@ -879,10 +972,10 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
                 "marker_detected": split["marker_detected"],
                 "is_ambiguous": ambig_s,
                 "score_breakdown": score_breakdown(
-                    {"amount_exact": True, "currency_match": True,
+                    {"amount_exact": variance_tier_s is None, "currency_match": True,
                      "counterparty_similarity": 0.95, "end_to_end_id_exact": False,
                      "pmt_ref_exact": True, "invoice_exact": True,
-                     "invoice_suffix_match": False, "amount_variance": 0.0},
+                     "invoice_suffix_match": False, "amount_variance": round(camts_sum - psr_s.amount, 2)},
                     rule_s, conf_s),
             }
             if ambig_s and split["alternative_camts"]:

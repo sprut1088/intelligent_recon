@@ -914,7 +914,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
 
   useEffect(() => {
     if (!selected) return;
-    const MATCH_STATUSES_KB = ['Suggested Match - Analyst Review', 'Suggested Match - Group Settlement', 'Suggested Match - Learned Pattern', 'Exception - Amount Variance Review', 'Post to Short or Over Ledger', 'AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required'];
+    const MATCH_STATUSES_KB = ['Suggested Match - Analyst Review', 'Suggested Match - Group Settlement', 'Suggested Match - Split Settlement', 'Suggested Match - Learned Pattern', 'Group Settlement - Post to Ledger', 'Group Settlement - Amount Variance Review', 'Split Settlement - Post to Ledger', 'Split Settlement - Amount Variance Review', 'Exception - Amount Variance Review', 'Post to Short or Over Ledger', 'AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required'];
     const handler = (e) => {
       const tag = document.activeElement?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
@@ -1209,7 +1209,12 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           const MATCH_STATUSES = [
             'Suggested Match - Analyst Review',
             'Suggested Match - Group Settlement',
+            'Suggested Match - Split Settlement',
             'Suggested Match - Learned Pattern',
+            'Group Settlement - Post to Ledger',
+            'Group Settlement - Amount Variance Review',
+            'Split Settlement - Post to Ledger',
+            'Split Settlement - Amount Variance Review',
             'Exception - Amount Variance Review',
             'Post to Short or Over Ledger',
           ];
@@ -1220,7 +1225,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           const isMatch = MATCH_STATUSES.includes(item.reconciliation_status);
           const isNoMatch = NO_MATCH_STATUSES.includes(item.reconciliation_status);
           const isBankOnly = item.reconciliation_status === 'Bank-only Item - Investigation';
-          const isLedgerPost = item.reconciliation_status === 'Post to Short or Over Ledger';
+          const isLedgerPost = ['Post to Short or Over Ledger', 'Group Settlement - Post to Ledger', 'Split Settlement - Post to Ledger'].includes(item.reconciliation_status);
           const isAiSuggested = item.reconciliation_status === 'AI-Assisted Suggested Match';
           const isAiReview = item.reconciliation_status === 'AI - Analyst Adjudication Required';
           const isAiNoMatch = item.reconciliation_status === 'AI Confirmed — No Match';
@@ -1515,6 +1520,10 @@ const STATUS_OPTIONS = [
   'Suggested Match - Group Settlement',
   'Suggested Match - Split Settlement',
   'Suggested Match - Learned Pattern',
+  'Group Settlement - Post to Ledger',
+  'Group Settlement - Amount Variance Review',
+  'Split Settlement - Post to Ledger',
+  'Split Settlement - Amount Variance Review',
   'Exception - Amount Variance Review',
   'Post to Short or Over Ledger',
 ];

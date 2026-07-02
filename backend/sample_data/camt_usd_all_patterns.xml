@@ -1,0 +1,252 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<Document xmlns="urn:iso:std:iso:20022:tech:xsd:camt.053.001.02">
+  <BkToCstmrStmt>
+    <Stmt>
+      <Id>USD-STMT-20260607-001</Id>
+      <Acct>
+        <Id>
+          <IBAN>US00RECON00000012345678</IBAN>
+        </Id>
+      </Acct>
+      <Ccy>USD</Ccy>
+      <Ntry>
+        <Amt Ccy="USD">1250.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-001</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>TX-2026-9001</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Alpha Retail LLC</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>PMT-REF-91001 INV-2026-3001</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">890.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-002</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>TX-2026-9002</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Beta Foods Inc</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>PMT-REF-91002 INV-2026-3002</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">2300.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-003</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>NOTPROVIDED</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Cobalt Manufacturing</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>PMT-REF-91003 customer settlement</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">1575.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-004</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>NOTPROVIDED</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Delta Medical Supplies</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Customer paid invoice INV-2026-3004, no payment reference supplied</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">775.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-005</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>NOTPROVIDED</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Northwind Trading Co.</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Customer receipt with weak reference NW-775 only</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">620.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-006</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>BANK-ONLY-620</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Unknown Bank Fee Sender</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Unexpected bank-only credit FEE-REVERSAL-620</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">4500.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-007</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>BATCH-GRP-A</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Batch Customer A</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>BATCH-GRP-A includes PMT-REF-91007 PMT-REF-91008 PMT-REF-91009 INV-2026-3007 INV-2026-3008 INV-2026-3009</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">2000.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-008</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PARTIAL-9010-A</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Partial Payer LLC</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Partial payment 1 of 2 for PMT-REF-91010 INV-2026-3010</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">1300.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-009</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>PARTIAL-9010-B</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Partial Payer LLC</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Partial payment 2 of 2 for PMT-REF-91010 INV-2026-3010</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">1195.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-010</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>TX-2026-9011</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Variance Minor Co</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>PMT-REF-91011 INV-2026-3011 bank deducted small fee</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">410.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-011</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>NOTPROVIDED</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Echo Services LLC</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>PMT-REF-91012 service settlement</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">980.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-012</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>NOTPROVIDED</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Foxtrot Telecom</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Remittance for INV-2026-3013 only</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">642.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-013</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>NOTPROVIDED</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Green Valley Supply LLC</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Weak bank ref GV-642 no invoice no PMT ref</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">2470.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-014</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>TX-2026-9015</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Variance Major Co</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>PMT-REF-91015 INV-2026-3015 short paid</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">399.00</Amt>
+        <CdtDbtInd>DBIT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-015</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>TX-2026-9016</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Debit Refund Vendor</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>PMT-REF-91016 INV-2026-3016 debit refund</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">2000.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-016</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>BATCH-GRP-B</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Batch Customer B</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>BATCH-GRP-B includes PMT-REF-91017 PMT-REF-91018 INV-2026-3017 INV-2026-3018</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+
+      <!-- P6 Major Variance: 3 PSRs (1600+1600+1400=4600) vs CAMT 4500 → variance 100, exceeds minor(50), within major(200) → Exception - Amount Variance Review -->
+      <Ntry>
+        <Amt Ccy="USD">4500.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-017</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>BATCH-GRP-C</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Major Variance Group</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>BATCH-GRP-C includes PMT-REF-91019 PMT-REF-91020 PMT-REF-91021 INV-2026-3019 INV-2026-3020 INV-2026-3021</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+
+      <!-- P10 Minor Variance: 1 PSR (5000) settled by 2 CAMTs (2500+2475=4975) → variance -25, within minor(50) → Post to Short or Over Ledger -->
+      <Ntry>
+        <Amt Ccy="USD">2500.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-018</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>SPLIT-9022-A</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Split Minor Payer</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Partial payment 1 of 2 for PMT-REF-91022 INV-2026-3022</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">2475.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-019</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>SPLIT-9022-B</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Split Minor Payer</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Partial payment 2 of 2 for PMT-REF-91022 INV-2026-3022</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+
+      <!-- P10 Major Variance: 1 PSR (5000) settled by 2 CAMTs (2600+2280=4880) → variance -120, exceeds minor(50), within major(200) → Exception - Amount Variance Review -->
+      <Ntry>
+        <Amt Ccy="USD">2600.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-020</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>SPLIT-9023-A</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Split Major Payer</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Partial payment 1 of 2 for PMT-REF-91023 INV-2026-3023</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+      <Ntry>
+        <Amt Ccy="USD">2280.00</Amt>
+        <CdtDbtInd>CRDT</CdtDbtInd>
+        <BookgDt><Dt>2026-06-07</Dt></BookgDt>
+        <NtryRef>NTRY-USD-021</NtryRef>
+        <NtryDtls><TxDtls>
+          <Refs><EndToEndId>SPLIT-9023-B</EndToEndId></Refs>
+          <RltdPties><Dbtr><Nm>Split Major Payer</Nm></Dbtr></RltdPties>
+          <RmtInf><Ustrd>Partial payment 2 of 2 for PMT-REF-91023 INV-2026-3023</Ustrd></RmtInf>
+        </TxDtls></NtryDtls>
+      </Ntry>
+
+    </Stmt>
+  </BkToCstmrStmt>
+</Document>

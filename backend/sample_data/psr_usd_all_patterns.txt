@@ -1,0 +1,25 @@
+10MAINBKGRP20260607US12BANK00000012345678USD
+20TX-2026-900120260607PMT-REF-91001                   000000001250CRINV-2026-3001            Alpha Retail LLC                   
+20TX-2026-900220260607PMT-REF-91002                   000000000890CRINV-2026-3002            Beta Foods Inc                     
+20TX-2026-900320260607PMT-REF-91003                   000000002300CRINV-2026-3003            Cobalt Manufacturing               
+20TX-2026-900420260607PMT-REF-91004                   000000001575CRINV-2026-3004            Delta Medical Supplies             
+20TX-2026-900520260607PMT-REF-91005                   000000000775CRINV-2026-3005            Northwind Trading Company          
+20TX-2026-900620260607PMT-REF-91006                   000000000500CRINV-2026-3006            Orphan Expected Payment            
+20TX-2026-900720260607PMT-REF-91007                   000000001000CRINV-2026-3007            Batch Customer A                   
+20TX-2026-900820260607PMT-REF-91008                   000000001500CRINV-2026-3008            Batch Customer A                   
+20TX-2026-900920260607PMT-REF-91009                   000000002000CRINV-2026-3009            Batch Customer A                   
+20TX-2026-901020260607PMT-REF-91010                   000000003300CRINV-2026-3010            Partial Payer LLC                  
+20TX-2026-901120260607PMT-REF-91011                   000000001200CRINV-2026-3011            Variance Minor Co                  
+20TX-2026-901220260607PMT-REF-91012                   000000000410CRINV-2026-3012            Echo Services LLC                  
+20TX-2026-901320260607PMT-REF-91013                   000000000980CRINV-2026-3013            Foxtrot Telecom                    
+20TX-2026-901420260607PMT-REF-91014                   000000000642CRINV-2026-3014            Green Valley Supplies LLC          
+20TX-2026-901520260607PMT-REF-91015                   000000002500CRINV-2026-3015            Variance Major Co                  
+20TX-2026-901620260607PMT-REF-91016                   000000000399DRINV-2026-3016            Debit Refund Vendor                
+20TX-2026-901720260607PMT-REF-91017                   000000000750CRINV-2026-3017            Batch Customer B                   
+20TX-2026-901820260607PMT-REF-91018                   000000001250CRINV-2026-3018            Batch Customer B                   
+20TX-2026-901920260607PMT-REF-91019                   000000001600CRINV-2026-3019            Major Variance Group               
+20TX-2026-902020260607PMT-REF-91020                   000000001600CRINV-2026-3020            Major Variance Group               
+20TX-2026-902120260607PMT-REF-91021                   000000001400CRINV-2026-3021            Major Variance Group               
+20TX-2026-902220260607PMT-REF-91022                   000000005000CRINV-2026-3022            Split Minor Payer                  
+20TX-2026-902320260607PMT-REF-91023                   000000005000CRINV-2026-3023            Split Major Payer                  
+9900000023000000000037821USD
