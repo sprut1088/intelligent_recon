@@ -44,6 +44,11 @@ class PatternCreateRequest(BaseModel):
     confidence_threshold: float = 0.80
     approved_by: str = "prototype_user"
 
+class BulkPatternSaveRequest(BaseModel):
+    group_name: str
+    patterns: List["PatternCreateRequest"]
+
+
 class PatternUpdateRequest(BaseModel):
     pattern_name: Optional[str] = None
     pattern_type: Optional[str] = None

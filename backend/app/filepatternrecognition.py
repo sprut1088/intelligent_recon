@@ -11,7 +11,15 @@ from typing import Dict, List, Optional
 from fastapi import UploadFile
 
 from .config import settings
-from .parsers import CamtTransaction, PsrTransaction, parse_camt_file, parse_psr_file
+from .parsers import (
+    CamtTransaction,
+    PsrTransaction,
+    PMT_REF_RE,
+    INVOICE_RE,
+    invoice_suffix,
+    parse_camt_file,
+    parse_psr_file,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +132,301 @@ def _extract_camt_refs_map(path: Path) -> Dict[str, set]:
     return refs_map
 
 
+# ---------------------------------------------------------------------------
+# Large-file-safe CAMT reference index + flat-file scanner
+# ---------------------------------------------------------------------------
+
+# Sentinel values that appear in <EndToEndId> and similar fields when the
+# originating bank could not populate them — exclude from the index.
+_SKIP_REF_VALUES: frozenset = frozenset({
+    "NOTFOUND", "NOT FOUND", "N/A", "NOTAVAILABLE", "NONE", "NA",
+})
+
+
+def _build_camt_ref_index(
+    path: Path,
+) -> tuple:
+    """Stream-parse the CAMT XML with iterparse and build a per-entry ref index.
+
+    Only *identifier* values (those found under any ``<Refs>`` child element,
+    plus PMT-REF / INV tokens extracted from ``<Ustrd>`` remittance text) are
+    collected.  Amounts, dates, and free-text names are intentionally excluded
+    to avoid false-positive matches when scanning the flat file.
+
+    This approach is memory-efficient for large CAMT files: ``elem.clear()``
+    releases each processed ``<Ntry>`` subtree before moving to the next.
+
+    Returns
+    -------
+    value_to_entry : dict[str, entry_dict]
+        Maps each unique identifier (upper-cased) to the first CAMT entry that
+        owns it.  The entry dict contains the same keys as ``_load_camt_entries``.
+    all_values : set[str]
+        Flat set of all collected identifiers (used to build the combined regex).
+    """
+    value_to_entry: Dict[str, Dict[str, object]] = {}
+    all_values: set = set()
+
+    context = ET.iterparse(str(path), events=("end",))
+    for _event, elem in context:
+        if elem.tag.split('}')[-1] != "Ntry":
+            continue
+
+        ntry_ref     = _first_text_by_local_name(elem, "NtryRef")
+        amount       = _first_text_by_local_name(elem, "Amt")
+        currency     = next(
+            (e.attrib.get("Ccy", "") for e in elem.iter()
+             if e.tag.split('}')[-1] == "Amt"),
+            "",
+        )
+        direction    = _first_text_by_local_name(elem, "CdtDbtInd")
+        booking_date = _first_text_by_local_name(elem, "Dt")
+        counterparty = ""
+        remittance   = ""
+
+        txdtls = next(
+            (e for e in elem.iter() if e.tag.split('}')[-1] == "TxDtls"), None
+        )
+
+        # collect only child tags found inside <Refs>
+        refs_map: Dict[str, str] = {}
+        if txdtls is not None:
+            refs_el = next(
+                (e for e in txdtls.iter() if e.tag.split('}')[-1] == "Refs"), None
+            )
+            if refs_el is not None:
+                for child in list(refs_el):
+                    tag = child.tag.split('}')[-1]
+                    val = (child.text or "").strip()
+                    if val and val.upper() not in _SKIP_REF_VALUES:
+                        refs_map[tag] = val
+
+            dbtr = next(
+                (e for e in txdtls.iter() if e.tag.split('}')[-1] == "Dbtr"), None
+            )
+            if dbtr is not None:
+                counterparty = _first_text_by_local_name(dbtr, "Nm")
+
+            rmtinf = next(
+                (e for e in txdtls.iter() if e.tag.split('}')[-1] == "RmtInf"), None
+            )
+            if rmtinf is not None:
+                remittance = _first_text_by_local_name(rmtinf, "Ustrd")
+
+        # extract structured tokens from the remittance free text
+        pmt_ref_m = PMT_REF_RE.search(remittance)
+        inv_m     = INVOICE_RE.search(remittance)
+        pmt_ref   = pmt_ref_m.group(0).upper() if pmt_ref_m else ""
+        invoice   = inv_m.group(0).upper().replace(" ", "-") if inv_m else ""
+
+        entry: Dict[str, object] = {
+            "ntry_ref":    ntry_ref,
+            "amount":      amount,
+            "currency":    currency,
+            "direction":   direction,
+            "booking_date": booking_date,
+            "counterparty": counterparty,
+            "remittance":  remittance,
+            "refs":        refs_map,
+            "pmt_ref":     pmt_ref,
+            "invoice":     invoice,
+        }
+
+        id_values: set = set()
+        id_values.update(v for v in refs_map.values() if v)
+        if pmt_ref:
+            id_values.add(pmt_ref)
+        if invoice:
+            id_values.add(invoice)
+
+        for val in id_values:
+            upper_val = val.upper()
+            if upper_val not in value_to_entry:
+                value_to_entry[upper_val] = entry
+        all_values.update(v.upper() for v in id_values)
+
+        # release the processed subtree so memory does not accumulate
+        elem.clear()
+
+    logger.debug("CAMT ref index built: %d unique identifiers", len(all_values))
+    return value_to_entry, all_values
+
+
+def _scan_flat_file_for_refs(
+    path: Path,
+    value_to_entry: Dict[str, Dict[str, object]],
+    all_values: set,
+    max_matches: int = 500,
+) -> List[Dict[str, object]]:
+    """Stream a flat file and find every line that contains a CAMT ref value.
+
+    A *single* combined regex built from all ref values is used so that each
+    line requires only one pass regardless of how many CAMT entries exist.
+    The file is streamed line-by-line — the full file is never held in memory.
+
+    Parameters
+    ----------
+    max_matches :
+        Stop collecting after this many matched lines to keep the response
+        payload small for very large files.
+    """
+    if not all_values:
+        return []
+
+    # sort longest-first so longer tokens shadow overlapping shorter ones
+    sorted_vals = sorted(all_values, key=len, reverse=True)
+    combined_re = re.compile(
+        "|".join(re.escape(v) for v in sorted_vals),
+        re.IGNORECASE,
+    )
+
+    matches: List[Dict[str, object]] = []
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        for line_no, raw in enumerate(fh, start=1):
+            if len(matches) >= max_matches:
+                break
+            line = raw.rstrip("\n")
+            hits = combined_re.findall(line)
+            if not hits:
+                continue
+
+            matched_entries: List[Dict[str, object]] = []
+            seen: set = set()
+            for hit in hits:
+                key = hit.upper()
+                if key in seen:
+                    continue
+                seen.add(key)
+                entry = value_to_entry.get(key)
+                if entry:
+                    matched_entries.append({"value": hit, "camt_entry": entry})
+
+            if matched_entries:
+                matches.append({
+                    "line_no": line_no,
+                    "line": line,
+                    "matched": matched_entries,
+                })
+
+    logger.debug(
+        "Flat-file scan: %d lines matched (cap=%d)", len(matches), max_matches
+    )
+    return matches
+
+
+def _infer_flat_file_format(matched_records: List[Dict[str, object]]) -> Dict[str, object]:
+    """Derive the flat-file format from the set of matched lines.
+
+    Analyses structural features of the matched lines (2-char record-type
+    prefixes, delimiter frequency, character offsets of the matched ref values)
+    rather than assuming any particular spec, so it adapts to any flat-file
+    layout.
+
+    Returns
+    -------
+    dict with keys:
+        detected_type   – "FIXED_WIDTH" | "DELIMITED" | "UNKNOWN"
+        record_prefix   – dominant 2-char line prefix, e.g. "20"
+        delimiter       – "," | "\\t" | "|" | ";" | None
+        field_positions – {name: offset} for fixed-width layouts
+        suggested_regex_map – {field: pattern} ready for use as regex hints
+        sample_lines    – up to 5 representative matched lines
+    """
+    if not matched_records:
+        return {
+            "detected_type": "UNKNOWN",
+            "record_prefix": None,
+            "delimiter": None,
+            "field_positions": {},
+            "suggested_regex_map": {},
+            "sample_lines": [],
+        }
+
+    lines = [r["line"] for r in matched_records[:200]]
+    sample_lines = lines[:5]
+
+    # delimiter detection: count how many lines contain each candidate
+    delim_hits: Dict[str, int] = {",": 0, "\t": 0, "|": 0, ";": 0}
+    for line in lines:
+        for d in delim_hits:
+            if d in line:
+                delim_hits[d] += 1
+    dominant_delim = max(delim_hits, key=lambda d: delim_hits[d])
+    is_delimited = delim_hits[dominant_delim] >= len(lines) * 0.8
+
+    # 2-char record-type prefix detection
+    prefix_counts: Dict[str, int] = {}
+    for line in lines:
+        if len(line) >= 2:
+            prefix_counts[line[0:2]] = prefix_counts.get(line[0:2], 0) + 1
+    dominant_prefix = (
+        max(prefix_counts, key=lambda k: prefix_counts[k]) if prefix_counts else None
+    )
+    is_fixed_width = (
+        not is_delimited
+        and dominant_prefix is not None
+        and prefix_counts.get(dominant_prefix, 0) >= len(lines) * 0.7
+    )
+
+    # measure where matched ref values start in each line
+    ref_offsets: List[int] = []
+    for rec in matched_records[:100]:
+        for m in rec["matched"]:
+            idx = rec["line"].find(m["value"])
+            if idx >= 0:
+                ref_offsets.append(idx)
+    ref_offset_avg = int(sum(ref_offsets) / len(ref_offsets)) if ref_offsets else 0
+
+    if is_fixed_width:
+        return {
+            "detected_type": "FIXED_WIDTH",
+            "record_prefix": dominant_prefix,
+            "delimiter": None,
+            "field_positions": {
+                "record_type": (0, 2),
+                "ref_approx_start": ref_offset_avg,
+            },
+            "suggested_regex_map": {
+                "record_type": rf"^{re.escape(dominant_prefix)}",
+                "ref_field": (
+                    r"(?P<ref>TX-\d{4}-\d+"
+                    r"|PMT-REF-\d+"
+                    r"|INV[-]?\d{4}[-]?\d+"
+                    r"|[A-Z]{2,}-\d+)"
+                ),
+                "amount":    r"(?P<amount>\d{8,15})",
+                "direction": r"(?P<direction>CR|DR)",
+            },
+            "sample_lines": sample_lines,
+        }
+
+    if is_delimited:
+        return {
+            "detected_type": "DELIMITED",
+            "record_prefix": None,
+            "delimiter": dominant_delim,
+            "field_positions": {},
+            "suggested_regex_map": {
+                "ref_field": (
+                    r"(?P<ref>TX-\d{4}-\d+"
+                    r"|PMT-REF-\d+"
+                    r"|INV[-]?\d{4}[-]?\d+"
+                    r"|[A-Z]{2,}-\d+)"
+                ),
+            },
+            "sample_lines": sample_lines,
+        }
+
+    return {
+        "detected_type": "UNKNOWN",
+        "record_prefix": dominant_prefix,
+        "delimiter": None,
+        "field_positions": {"ref_approx_start": ref_offset_avg},
+        "suggested_regex_map": {},
+        "sample_lines": sample_lines,
+    }
+
+
 def recognize_files(camt_upload: UploadFile, other_upload: UploadFile) -> Dict[str, object]:
     """Attempt to auto-recognize the uploaded CAMT file and the other file format."""
     with tempfile.TemporaryDirectory() as temp_dir:
@@ -151,33 +454,57 @@ def recognize_files(camt_upload: UploadFile, other_upload: UploadFile) -> Dict[s
                 other_details["parse_success"] = False
         elif other_format_hint == "TEXT":
             try:
-                camt_refs_map = _extract_camt_refs_map(camt_path)
-                text_lines = [line.rstrip("\n") for line in other_path.open("r", encoding="utf-8", errors="replace")]
+                # Phase 1 — stream CAMT with iterparse, build identifier-only index.
+                # Only <Refs> children + remittance PMT-REF/INV tokens are collected;
+                # amounts, dates, and names are excluded to avoid false positives.
+                value_to_entry, all_values = _build_camt_ref_index(camt_path)
+
+                # Phase 2 — scan flat file line-by-line with a single combined regex.
+                # The file is never fully loaded into memory.
+                matched_records = _scan_flat_file_for_refs(
+                    other_path, value_to_entry, all_values
+                )
+
+                # Phase 3 — derive the flat-file format from the matched dataset.
+                format_info = _infer_flat_file_format(matched_records)
+
+                # Count total lines without loading the whole file
+                with other_path.open("r", encoding="utf-8", errors="replace") as _fh:
+                    line_count = sum(1 for _ in _fh)
+
+                # Attempt structured PSR parse for transaction count (best-effort)
                 header, psr_transactions = parse_psr_file(other_path)
-                other_details["camt_refs_count"] = sum(len(v) for v in camt_refs_map.values())
+
+                other_details["camt_ref_index_size"] = len(all_values)
                 other_details["psr_transaction_count"] = len(psr_transactions)
                 other_details["parsed_as"] = "PSR" if psr_transactions else "TEXT"
-                matches = []
-                value_to_tags: Dict[str, List[str]] = {}
-                for tag, vals in camt_refs_map.items():
-                    for v in vals:
-                        value_to_tags.setdefault(v, []).append(tag)
-
-                for i, line in enumerate(text_lines, start=1):
-                    found: List[Dict[str, str]] = []
-                    for val, tags in value_to_tags.items():
-                        if val and val in line:
-                            for t in tags:
-                                found.append({"tag": t, "value": val})
-                    if found:
-                        matches.append({"line_no": i, "line": line.strip(), "matched": found})
-
-                other_details["line_count"] = len(text_lines)
-                other_details["matches"] = matches
-                other_details["match_count"] = len(matches)
-                other_details["refs_map_sample"] = {k: list(v)[:5] for k, v in list(camt_refs_map.items())[:10]} if camt_refs_map else {}
-                other_details["parse_success"] = bool(psr_transactions)
+                other_details["line_count"] = line_count
+                other_details["match_count"] = len(matched_records)
+                other_details["matches"] = [
+                    {
+                        "line_no": r["line_no"],
+                        "line": r["line"].strip(),
+                        "matched": [
+                            {
+                                "value": m["value"],
+                                "camt_ref_tags": list(
+                                    m["camt_entry"].get("refs", {}).keys()
+                                ),
+                            }
+                            for m in r["matched"]
+                        ],
+                    }
+                    for r in matched_records
+                ]
+                other_details["format_info"] = format_info
+                other_details["ref_index_sample"] = list(all_values)[:10]
+                other_details["parse_success"] = (
+                    bool(psr_transactions) or len(matched_records) > 0
+                )
             except Exception:
+                logger.exception(
+                    "TEXT branch recognition failed for %s", other_path
+                )
                 other_details["line_count"] = 0
                 other_details["matches"] = []
                 other_details["match_count"] = 0
@@ -315,53 +642,463 @@ def _build_reconciliation_pattern(
     }
 
 
+# ---------------------------------------------------------------------------
+# Two-phase reconciliation pattern discovery helpers
+# ---------------------------------------------------------------------------
+
+def _normalise_field_extractors(
+    provided: Optional[Dict[str, object]],
+) -> Optional[Dict[str, str]]:
+    """Coerce several possible input shapes to a flat ``{field: regex_str}`` dict.
+
+    Accepted shapes
+    ---------------
+    * LLM field_extractors:
+      ``{"tx_id": {"regex": "...", "maps_to_camt": "...", ...}, ...}``
+    * Structural suggested_regex_map:
+      ``{"record_type": "^20", "ref_field": "...", ...}``
+    * Old simple map:
+      ``{"pmt_ref": "\\d+", ...}``
+    * Wrapped in a ``field_extractors`` key:
+      ``{"field_extractors": {...}, ...}``
+    """
+    if not provided:
+        return None
+    first_val = next(iter(provided.values()), None)
+    if isinstance(first_val, dict) and "regex" in first_val:
+        return {
+            field: info["regex"]
+            for field, info in provided.items()
+            if isinstance(info, dict) and info.get("regex")
+        }
+    if "field_extractors" in provided:
+        return _normalise_field_extractors(provided["field_extractors"])
+    if all(isinstance(v, str) for v in provided.values()):
+        return provided  # type: ignore[return-value]
+    return None
+
+
+def _parse_flat_file_with_extractors(
+    path: Path,
+    field_regexes: Dict[str, str],
+    record_prefix: Optional[str] = None,
+) -> List[Dict[str, str]]:
+    """Apply field-extractor regexes line-by-line; skip lines not starting with
+    *record_prefix*.  Named capture groups are preferred over the whole match.
+    """
+    compiled: Dict[str, re.Pattern] = {}
+    for field, pattern in field_regexes.items():
+        try:
+            compiled[field] = re.compile(pattern, re.IGNORECASE)
+        except re.error as exc:
+            logger.warning("Skipping invalid regex for field %r: %s", field, exc)
+
+    records: List[Dict[str, str]] = []
+    with path.open("r", encoding="utf-8", errors="replace") as fh:
+        for line_no, raw in enumerate(fh, start=1):
+            line = raw.rstrip("\n")
+            if record_prefix and not line.startswith(record_prefix):
+                continue
+            record: Dict[str, str] = {"raw_line": line, "line_no": str(line_no)}
+            for field, pat in compiled.items():
+                m = pat.search(line)
+                if m:
+                    gd = m.groupdict()
+                    record[field] = (
+                        gd[field] if field in gd else
+                        next(iter(gd.values()), m.group(0)) if gd else
+                        m.group(0)
+                    )
+                else:
+                    record[field] = ""
+            records.append(record)
+    return records
+
+
+def _norm_amount(raw: str) -> str:
+    """Strip leading zeros from a digit string for amount comparison."""
+    s = (raw or "").strip()
+    return str(int(s)) if s.isdigit() else s
+
+
+_DET_RULES = [
+    ("EXACT_E2E",        "EndToEndId Exact Match",   ["end_to_end_id"]),
+    ("EXACT_PMT_REF",    "PMT-REF Exact Match",      ["pmt_ref"]),
+    ("EXACT_INVOICE",    "Invoice Exact Match",      ["invoice"]),
+    ("AMOUNT_DIRECTION", "Amount + Direction Match", ["amount", "direction"]),
+]
+
+
+def _run_deterministic_matching(
+    camt_transactions: List[CamtTransaction],
+    flat_records: List[Dict[str, str]],
+) -> Dict[str, object]:
+    """Apply strict deterministic rules in priority order.
+
+    Each CAMT entry and each flat-file line is consumed at most once.
+    Returns patterns, matched_pairs, unmatched_camt, unmatched_flat, stats.
+    """
+    flat_by: Dict[str, Dict[str, Dict]] = {k: {} for k in ("tx_id", "reference", "invoice")}
+    flat_by_amount: Dict[str, List[Dict]] = {}
+
+    for rec in flat_records:
+        for field in ("tx_id", "reference", "invoice"):
+            val = rec.get(field, "").strip().upper()
+            if val and val not in flat_by[field]:
+                flat_by[field][val] = rec
+        amt = _norm_amount(rec.get("amount", ""))
+        if amt:
+            flat_by_amount.setdefault(amt, []).append(rec)
+
+    consumed_flat: set = set()
+    consumed_camt: set = set()
+    stats_map: Dict[str, Dict] = {
+        rid: {"rule": rid, "pattern_name": name, "fields_used": fields,
+              "matched_count": 0, "sample_pairs": []}
+        for rid, name, fields in _DET_RULES
+    }
+    all_pairs: List[Dict] = []
+
+    for camt in camt_transactions:
+        if camt.camt_id in consumed_camt:
+            continue
+        matched_rule: Optional[str] = None
+        matched_rec: Optional[Dict] = None
+
+        e2e = (camt.end_to_end_id or "").strip().upper()
+        if e2e:
+            r = flat_by["tx_id"].get(e2e)
+            if r and r["line_no"] not in consumed_flat:
+                matched_rule, matched_rec = "EXACT_E2E", r
+
+        if not matched_rule:
+            ref = (camt.pmt_ref or "").strip().upper()
+            if ref:
+                r = flat_by["reference"].get(ref)
+                if r and r["line_no"] not in consumed_flat:
+                    matched_rule, matched_rec = "EXACT_PMT_REF", r
+
+        if not matched_rule:
+            inv = (camt.invoice or "").strip().upper()
+            if inv:
+                r = flat_by["invoice"].get(inv)
+                if r and r["line_no"] not in consumed_flat:
+                    matched_rule, matched_rec = "EXACT_INVOICE", r
+                else:
+                    suf = invoice_suffix(inv)
+                    if suf:
+                        for k, r2 in flat_by["invoice"].items():
+                            if invoice_suffix(k) == suf and r2["line_no"] not in consumed_flat:
+                                matched_rule, matched_rec = "EXACT_INVOICE", r2
+                                break
+
+        if not matched_rule:
+            amt = _norm_amount(str(int(camt.amount)) if camt.amount else "")
+            cdir = (camt.direction or "").strip().upper()
+            for r in flat_by_amount.get(amt, []):
+                if r["line_no"] in consumed_flat:
+                    continue
+                rdir = (r.get("direction", "") or "").strip().upper()
+                if not rdir or rdir == cdir:
+                    matched_rule, matched_rec = "AMOUNT_DIRECTION", r
+                    break
+
+        if matched_rule and matched_rec:
+            consumed_camt.add(camt.camt_id)
+            consumed_flat.add(matched_rec["line_no"])
+            pair = {
+                "camt_id": camt.camt_id,
+                "camt_amount": camt.amount, "camt_currency": camt.currency,
+                "camt_direction": camt.direction,
+                "camt_counterparty": camt.counterparty,
+                "flat_line_no": matched_rec.get("line_no"),
+                "flat_tx_id": matched_rec.get("tx_id", ""),
+                "flat_reference": matched_rec.get("reference", ""),
+                "flat_amount": matched_rec.get("amount", ""),
+                "flat_direction": matched_rec.get("direction", ""),
+                "rule": matched_rule,
+            }
+            all_pairs.append(pair)
+            bucket = stats_map[matched_rule]
+            bucket["matched_count"] += 1
+            if len(bucket["sample_pairs"]) < 3:
+                bucket["sample_pairs"].append(pair)
+
+    unmatched_camt = [c for c in camt_transactions if c.camt_id not in consumed_camt]
+    unmatched_flat = [r for r in flat_records if r["line_no"] not in consumed_flat]
+    return {
+        "patterns": [p for p in stats_map.values() if p["matched_count"] > 0],
+        "all_rules": list(stats_map.values()),
+        "matched_pairs": all_pairs,
+        "unmatched_camt": unmatched_camt,
+        "unmatched_flat": unmatched_flat,
+        "stats": {
+            "camt_total": len(camt_transactions),
+            "flat_total": len(flat_records),
+            "camt_matched": len(consumed_camt),
+            "camt_unmatched": len(unmatched_camt),
+            "flat_matched": len(consumed_flat),
+            "flat_unmatched": len(unmatched_flat),
+            "match_rate": round(len(consumed_camt) / max(len(camt_transactions), 1), 4),
+        },
+    }
+
+
+def _build_unmatched_pattern_prompt(
+    unmatched_camt: List[CamtTransaction],
+    unmatched_flat: List[Dict[str, str]],
+    max_samples: int = 6,
+) -> str:
+    """Build LLM prompt asking for fuzzy / tolerance-based patterns for the
+    CAMT entries that could not be matched deterministically.
+    """
+    camt_block = "\n".join(
+        f"  id={c.camt_id}  amount={c.amount} {c.currency}  dir={c.direction}  "
+        f"date={c.booking_date}  party={c.counterparty!r}  "
+        f"ref={c.pmt_ref}  inv={c.invoice}  remit={c.remittance!r}"
+        for c in unmatched_camt[:max_samples]
+    ) or "  (none)"
+
+    flat_block = "\n".join(
+        "  line {ln}: {fields}  raw: {raw}".format(
+            ln=r.get("line_no"),
+            fields={k: v for k, v in r.items() if k not in ("raw_line", "line_no") and v},
+            raw=(r.get("raw_line") or "")[:80],
+        )
+        for r in unmatched_flat[:max_samples]
+    ) or "  (none)"
+
+    return (
+        "You are an expert payment reconciliation analyst.\n\n"
+        "The following CAMT.053 entries could NOT be matched to any internal payment "
+        "record using exact identifier rules (EndToEndId, PMT-REF, Invoice, "
+        "Amount+Direction).\n\n"
+        f"Unmatched CAMT entries ({len(unmatched_camt)} total, showing ≤{max_samples}):\n"
+        f"{camt_block}\n\n"
+        f"Unmatched flat-file records ({len(unmatched_flat)} total, showing ≤{max_samples}):\n"
+        f"{flat_block}\n\n"
+        "Propose a prioritised list of ADDITIONAL reconciliation patterns.\n"
+        "Focus on tolerance / fuzzy techniques such as:\n"
+        "  - Amount variance (e.g. ±0.5% or ±1 currency unit)\n"
+        "  - Date tolerance (booking_date within ±2 business days)\n"
+        "  - Counterparty name similarity (token-set ratio ≥ 85%)\n"
+        "  - Partial reference match (common suffix or numeric tail)\n"
+        "  - Combined scoring (amount exact + counterparty ≥ 70%)\n\n"
+        "Return ONLY valid JSON — no markdown:\n"
+        "{\n"
+        '  "patterns": [\n'
+        "    {\n"
+        '      "rule_id": "AMOUNT_VARIANCE",\n'
+        '      "pattern_name": "Amount Variance ±0.5%",\n'
+        '      "description": "...",\n'
+        '      "fields_used": ["amount", "direction"],\n'
+        '      "tolerance_spec": {"amount_pct": 0.5},\n'
+        '      "estimated_coverage": "high|medium|low",\n'
+        '      "confidence": "high|medium|low"\n'
+        "    }\n"
+        "  ],\n"
+        '  "explanation": "Why these patterns and what in the data suggested them."\n'
+        "}\n"
+    )
+
+
 def generate_reconciliation_patterns(
     camt_path: Path,
     other_path: Path,
-    provided_regex_map: Optional[Dict[str, str]] = None,
+    provided_regex_map: Optional[Dict[str, object]] = None,
 ) -> Dict[str, object]:
+    """Two-phase reconciliation pattern discovery.
+
+    Phase 1 — Deterministic
+        Parse the flat file (using field-extractor regexes when provided,
+        falling back to the structured PSR parser otherwise).  Apply exact-match
+        rules in priority order: E2E id → PMT-REF → Invoice → Amount+Direction.
+
+    Phase 2 — LLM-assisted
+        For CAMT entries that no deterministic rule could match, ask the LLM
+        to propose tolerance / fuzzy patterns (amount variance, date proximity,
+        counterparty similarity, etc.).
+    """
     camt_transactions = _load_camt(camt_path)
-    _, psr_transactions = parse_psr_file(other_path)
-    if not psr_transactions:
-        raise ValueError("Uploaded file could not be parsed as a PSR transaction file.")
-    return _build_reconciliation_pattern(camt_transactions, psr_transactions, provided_regex_map)
+    field_regexes = _normalise_field_extractors(provided_regex_map)
+
+    # ── Phase 1: parse flat file ─────────────────────────────────────
+    if field_regexes:
+        record_prefix: Optional[str] = None
+        if isinstance(provided_regex_map, dict):
+            fmt = (provided_regex_map.get("format_info") or {})
+            record_prefix = fmt.get("record_prefix") or None
+        flat_records = _parse_flat_file_with_extractors(
+            other_path, field_regexes, record_prefix=record_prefix or "20"
+        )
+        if not flat_records:
+            raise ValueError(
+                "No records matched the provided regex patterns in the flat file."
+            )
+    else:
+        _, psr_transactions = parse_psr_file(other_path)
+        if not psr_transactions:
+            raise ValueError(
+                "Uploaded file could not be parsed as a PSR file. "
+                "Run \"Generate regex mapping\" first and pass the field extractors here."
+            )
+        flat_records = [
+            {
+                "raw_line": t.raw_line, "line_no": str(t.source_line),
+                "tx_id": t.id, "reference": t.reference,
+                "invoice": t.invoice,
+                "amount": _norm_amount(str(int(t.amount)) if t.amount else ""),
+                "direction": t.direction, "booking_date": t.execution_date,
+                "counterparty": t.counterparty,
+            }
+            for t in psr_transactions
+        ]
+
+    det = _run_deterministic_matching(camt_transactions, flat_records)
+
+    # ── Phase 2: LLM for unmatched ───────────────────────────────────
+    unmatched_camt: List[CamtTransaction] = det["unmatched_camt"]
+    unmatched_flat: List[Dict] = det["unmatched_flat"]
+
+    llm_result: Dict[str, object] = {"llm_available": False}
+    if unmatched_camt or unmatched_flat:
+        prompt = _build_unmatched_pattern_prompt(unmatched_camt, unmatched_flat)
+        llm_result["prompt"] = prompt
+        try:
+            out = _llm_json_completion(prompt)
+            llm_result["llm_available"] = True
+            llm_result["llm_patterns"] = out.get("patterns", [])
+            llm_result["llm_explanation"] = out.get("explanation", "")
+        except ValueError as exc:
+            llm_result["llm_error"] = str(exc)
+        except Exception as exc:
+            llm_result["llm_error"] = str(exc)
+    else:
+        llm_result["llm_patterns"] = []
+        llm_result["llm_explanation"] = (
+            "All entries matched deterministically — no LLM pass needed."
+        )
+
+    return {
+        "deterministic_patterns": det["patterns"],
+        "all_deterministic_rules": det["all_rules"],
+        "matched_pairs_sample": det["matched_pairs"][:20],
+        "unmatched_count": len(unmatched_camt),
+        "unmatched_samples": [
+            {
+                "camt_id": c.camt_id, "amount": c.amount, "currency": c.currency,
+                "direction": c.direction, "booking_date": c.booking_date,
+                "counterparty": c.counterparty, "pmt_ref": c.pmt_ref,
+                "invoice": c.invoice, "remittance": c.remittance,
+            }
+            for c in unmatched_camt[:8]
+        ],
+        "stats": det["stats"],
+        **llm_result,
+    }
 
 
 def _build_regex_prompt(samples: List[Dict[str, object]]) -> str:
-    example_text = []
+    """Build an LLM prompt from CAMT/flat-file matched pair samples.
+
+    Each sample in *samples* is an entry dict from ``_build_camt_ref_index``
+    with the shape::
+
+        {
+            ntry_ref, amount, currency, direction, booking_date,
+            counterparty, remittance,
+            refs: Dict[str, str],   # XML tag -> single identifier value
+            pmt_ref, invoice,
+            matched_text: List[str],  # raw flat-file lines that matched
+        }
+
+    The prompt shows each CAMT entry alongside its matched flat-file lines,
+    annotated with the character offsets of the known identifier values, and
+    asks the LLM to produce a JSON field-extractor schema for the flat file.
+    """
+    pair_blocks: List[str] = []
     for i, sample in enumerate(samples, start=1):
-        example_text.append(f"ENTRY {i}:")
-        for key in ("ntry_ref", "amount", "currency", "direction", "booking_date", "counterparty", "remittance"):
-            example_text.append(f"- {key}: {sample.get(key, '')}")
-        refs = sample.get("refs", {})
-        if refs:
-            example_text.append("- refs:")
-            for tag, values in refs.items():
-                example_text.append(f"  - {tag}: {values}")
-        matched = sample.get("matched_text", [])
+        # --- CAMT entry block ---
+        camt_lines = [f"  CAMT entry {i}:"]
+        camt_lines.append(f"    ntry_ref:     {sample.get('ntry_ref', '')}")
+        refs: Dict[str, str] = sample.get("refs", {}) or {}
+        for tag, val in refs.items():
+            camt_lines.append(f"    {tag}: {val}")
+        if sample.get("pmt_ref"):
+            camt_lines.append(f"    pmt_ref:      {sample['pmt_ref']}")
+        if sample.get("invoice"):
+            camt_lines.append(f"    invoice:      {sample['invoice']}")
+        camt_lines.append(
+            f"    amount:       {sample.get('amount', '')} {sample.get('currency', '')}"
+        )
+        camt_lines.append(f"    direction:    {sample.get('direction', '')}")
+        camt_lines.append(f"    booking_date: {sample.get('booking_date', '')}")
+        camt_lines.append(f"    counterparty: {sample.get('counterparty', '')}")
+        camt_lines.append(f"    remittance:   {sample.get('remittance', '')}")
+
+        # --- matched flat-file lines, annotated with known-value offsets ---
+        matched: List[str] = sample.get("matched_text", []) or []
+        flat_lines = ["  Matched flat-file line(s):"]
         if matched:
-            example_text.append("- matched_text:")
-            for line in matched:
-                example_text.append(f"  - {line}")
-        example_text.append("")
+            all_ids = list(refs.values()) + [
+                v for v in (sample.get("pmt_ref"), sample.get("invoice")) if v
+            ]
+            for flat_line in matched:
+                offsets = []
+                for val in all_ids:
+                    idx = flat_line.find(val) if val else -1
+                    if idx >= 0:
+                        offsets.append(f"'{val}' at offset {idx}")
+                annotation = f"  [known: {', '.join(offsets)}]" if offsets else ""
+                flat_lines.append(f"    {flat_line}{annotation}")
+        else:
+            flat_lines.append(
+                "    (no matching flat-file line — patterns must be inferred "
+                "from remittance text only)"
+            )
+
+        pair_blocks.append("\n".join(camt_lines) + "\n" + "\n".join(flat_lines))
 
     prompt = (
-        "You are a regex expert for CAMT.053 reconciliation.\n"
-        "Given CAMT.053 XML entry values and example rows from a matching settlement file (PSR or text extract), propose extraction patterns that help reconcile the bank statement entry against the internal record.\n"
-        "The CAMT.053 entry may include EndToEndId, InstrId, NtryRef, Refs child tags, booking date, amount, counterparty, and remittance/unstructured reference text.\n"
-        "Construct a mapping that can identify the following fields from the text file rows:\n"
-        "- end_to_end_id (or other CAMT reference IDs if available)\n"
-        "- amount\n"
-        "- booking_date\n"
-        "- counterparty name\n"
-        "- remittance / unstructured reference string\n"
-        "Focus on patterns that help match CAMT.053 entries to PSR/transaction records in a reconciliation workflow.\n"
-        "Return only valid JSON with keys: regex_map and explanation.\n"
-        "regex_map should be an object with fields for end_to_end_id, amount, booking_date, counterparty, remittance.\n"
-        "If a pattern is ambiguous, return a sensible fallback.\n"
-        "Do not include markdown.\n"
-        "Examples:\n"
-        + "\n".join(example_text)
+        "You are an expert at payment file reconciliation.\n\n"
+        "You are given CAMT.053 bank statement entries paired with the flat-file "
+        "(PSR / text) transaction lines that correspond to them.  The pairs were "
+        "identified because known CAMT identifier values (EndToEndId, InstrId, "
+        "PMT-REF numbers, INV numbers etc.) were found verbatim inside those "
+        "flat-file lines.  Character offsets of the matching values are shown in "
+        "square brackets to help you locate field boundaries.\n\n"
+        "YOUR TASK:\n"
+        "Analyse the CAMT field values and the structure of the matched flat-file "
+        "lines, then produce a JSON extraction schema that can parse ANY line from "
+        "this flat file to extract the fields needed for reconciliation.\n\n"
+        "Use the known CAMT values (and their offsets) as anchors to infer the "
+        "positions and patterns of surrounding fields.\n\n"
+        "Required output — return ONLY valid JSON, no markdown:\n"
+        "{\n"
+        '  "format_type": "FIXED_WIDTH" | "DELIMITED" | "UNKNOWN",\n'
+        '  "record_type_prefix": "20" | null,\n'
+        '  "delimiter": null | "," | "\\t" | "|",\n'
+        '  "field_extractors": {\n'
+        '    "tx_id":        {"regex": "...", "maps_to_camt": "end_to_end_id or ntry_ref", "confidence": "high|medium|low"},\n'
+        '    "reference":    {"regex": "...", "maps_to_camt": "pmt_ref",                   "confidence": "..."},\n'
+        '    "invoice":      {"regex": "...", "maps_to_camt": "invoice",                   "confidence": "..."},\n'
+        '    "amount":       {"regex": "...", "maps_to_camt": "amount",                    "confidence": "..."},\n'
+        '    "direction":    {"regex": "...", "maps_to_camt": "direction",                 "confidence": "..."},\n'
+        '    "booking_date": {"regex": "...", "maps_to_camt": "booking_date",              "confidence": "..."},\n'
+        '    "counterparty": {"regex": "...", "maps_to_camt": "counterparty",              "confidence": "..."}\n'
+        "  },\n"
+        '  "explanation": "brief description of the detected layout"\n'
+        "}\n\n"
+        "Rules:\n"
+        "- Use named capture groups in every regex, e.g. (?P<amount>\\d+).\n"
+        "- For FIXED_WIDTH layouts, anchor patterns with positional ^ offsets "
+        "where possible.\n"
+        "- For entries with no matched flat-file line, base patterns solely on "
+        "remittance text clues.\n"
+        "- Do NOT guess fields that cannot be reliably identified — set confidence "
+        "\"low\" and use a broad fallback regex instead.\n\n"
+        "Entry pairs:\n\n"
+        + "\n\n".join(pair_blocks)
     )
     return prompt
 
@@ -415,51 +1152,62 @@ def _llm_json_completion(prompt: str) -> Dict[str, object]:
         return json.loads(cleaned)
 
 
-def _build_mapping_samples(camt_entries: List[Dict[str, object]], text_lines: List[str], limit: int = 10) -> List[Dict[str, object]]:
-    samples: List[Dict[str, object]] = []
-    for entry in camt_entries:
-        if len(samples) >= limit:
-            break
-        search_values = []
-        for vals in entry.get("refs", {}).values():
-            search_values.extend(vals)
-        if entry.get("ntry_ref"):
-            search_values.append(entry["ntry_ref"])
-        if entry.get("amount"):
-            search_values.append(entry["amount"])
-        if entry.get("booking_date"):
-            search_values.append(entry["booking_date"])
-
-        matched_lines = []
-        for line in text_lines:
-            if any(val and val in line for val in search_values):
-                matched_lines.append(line)
-            if len(matched_lines) >= 3:
-                break
-
-        samples.append({
-            "ntry_ref": entry.get("ntry_ref", ""),
-            "amount": entry.get("amount", ""),
-            "currency": entry.get("currency", ""),
-            "direction": entry.get("direction", ""),
-            "booking_date": entry.get("booking_date", ""),
-            "counterparty": entry.get("counterparty", ""),
-            "remittance": entry.get("remittance", ""),
-            "refs": entry.get("refs", {}),
-            "matched_text": matched_lines,
-        })
-    return samples
-
 
 def generate_mapping_regex(camt_path: Path, other_path: Path, max_examples: int = 10) -> Dict[str, object]:
-    camt_entries = _load_camt_entries(camt_path)
-    text_lines = [line.rstrip("\n") for line in other_path.open("r", encoding="utf-8", errors="replace")]
-    samples = _build_mapping_samples(camt_entries, text_lines, limit=max_examples)
+    """Build LLM prompt samples using the large-file-safe ref index + streaming scanner."""
+    value_to_entry, all_values = _build_camt_ref_index(camt_path)
+    matched_records = _scan_flat_file_for_refs(other_path, value_to_entry, all_values)
+
+    # Group matched flat-file lines by camt ntry_ref so each sample has
+    # one CAMT entry and up to 3 representative flat-file lines.
+    seen_ntry: Dict[str, Dict[str, object]] = {}
+    for rec in matched_records:
+        # A single flat-file line may match several CAMT values that all belong
+        # to the same entry (e.g. TX-id + PMT-REF + INV all on one line).
+        # Track which entry keys we have already appended this line for so the
+        # line is added at most once per CAMT entry per flat-file line.
+        keys_used_this_rec: set = set()
+        for m in rec["matched"]:
+            entry = m["camt_entry"]
+            key = entry.get("ntry_ref") or entry.get("pmt_ref") or "?"
+            if key not in seen_ntry:
+                seen_ntry[key] = {
+                    **entry,
+                    "matched_text": [],
+                }
+            if key not in keys_used_this_rec and len(seen_ntry[key]["matched_text"]) < 3:
+                seen_ntry[key]["matched_text"].append(rec["line"])
+                keys_used_this_rec.add(key)
+        if len(seen_ntry) >= max_examples:
+            break
+
+    samples = list(seen_ntry.values())[:max_examples]
+    format_info = _infer_flat_file_format(matched_records)
+
+    # Overall pattern-confidence score (0–100):
+    #   65 % weight  — match ratio: what fraction of CAMT identifiers were found in
+    #                   the flat file (high ratio → files are well-aligned)
+    #   35 % weight  — structural clarity: how unambiguously the format was detected
+    match_ratio = len(matched_records) / max(len(all_values), 1)
+    structural_score = (
+        0.90 if format_info["detected_type"] == "FIXED_WIDTH" else
+        0.85 if format_info["detected_type"] == "DELIMITED" else
+        0.30
+    )
+    pattern_confidence = round(
+        min(structural_score * 0.35 + min(match_ratio, 1.0) * 0.65, 1.0) * 100, 1
+    )
+
     prompt = _build_regex_prompt(samples)
     result: Dict[str, object] = {
         "examples": samples,
         "prompt": prompt,
         "llm_available": False,
+        "format_info": format_info,
+        "match_count": len(matched_records),
+        "camt_ref_index_size": len(all_values),
+        "pattern_confidence": pattern_confidence,
+        "llm_samples_sent": len(samples),
     }
     try:
         llm_output = _llm_json_completion(prompt)
@@ -472,57 +1220,122 @@ def generate_mapping_regex(camt_path: Path, other_path: Path, max_examples: int 
     return result
 
 
-def _entries_missing_refs_or_unmatched(camt_path: Path, other_path: Path) -> List[Dict[str, object]]:
-    """Return CAMT entries that either have no refs or have refs that are not found in the other file's text lines.
+def _entries_missing_refs_or_unmatched(
+    camt_path: Path, other_path: Path
+) -> List[Dict[str, object]]:
+    """Return CAMT entries that have no identifiers, or whose identifiers were
+    not found anywhere in the flat file.
 
-    Each item is a dict with keys: entry, reason ("no_refs"|"refs_present_but_not_found"), refs_sample, matched_text_sample
+    Uses the same streaming ref-index + combined-regex scanner as
+    ``recognize_files`` so it remains O(N + M) for large files.
+
+    Each returned item has keys:
+        entry      – the CAMT entry dict (refs shape: Dict[str, str])
+        reason     – "no_refs" | "refs_present_but_not_found"
+        refs_sample – list of the identifier values that were checked
     """
-    camt_entries = _load_camt_entries(camt_path)
-    text_lines = [line.rstrip("\n") for line in other_path.open("r", encoding="utf-8", errors="replace")]
-    problems: List[Dict[str, object]] = []
-    for entry in camt_entries:
-        refs = entry.get("refs", {}) or {}
-        # collect all reference values
-        ref_values = []
-        for vals in refs.values():
-            ref_values.extend([v for v in vals if v])
-        if entry.get("ntry_ref"):
-            ref_values.append(entry.get("ntry_ref"))
+    value_to_entry, all_values = _build_camt_ref_index(camt_path)
+    matched_records = _scan_flat_file_for_refs(other_path, value_to_entry, all_values)
 
-        if not ref_values:
-            problems.append({"entry": entry, "reason": "no_refs", "refs_sample": {}, "matched_text_sample": []})
+    # which identifier values actually appeared in the flat file?
+    found_values: set = {
+        m["value"].upper()
+        for rec in matched_records
+        for m in rec["matched"]
+    }
+
+    problems: List[Dict[str, object]] = []
+
+    # second iterparse pass: classify every Ntry
+    context = ET.iterparse(str(camt_path), events=("end",))
+    for _event, elem in context:
+        if elem.tag.split("}")[-1] != "Ntry":
             continue
 
-        # check whether any ref value occurs in the other file lines
-        found = []
-        for v in ref_values:
-            for line in text_lines:
-                if v and v in line:
-                    found.append({"value": v, "line": line.strip()})
-                    break
+        ntry_ref = _first_text_by_local_name(elem, "NtryRef")
+        txdtls = next(
+            (e for e in elem.iter() if e.tag.split("}")[-1] == "TxDtls"), None
+        )
 
-        if not found:
-            problems.append({"entry": entry, "reason": "refs_present_but_not_found", "refs_sample": ref_values[:5], "matched_text_sample": []})
+        refs_map: Dict[str, str] = {}
+        remittance = ""
+        if txdtls is not None:
+            refs_el = next(
+                (e for e in txdtls.iter() if e.tag.split("}")[-1] == "Refs"), None
+            )
+            if refs_el is not None:
+                for child in list(refs_el):
+                    tag = child.tag.split("}")[-1]
+                    val = (child.text or "").strip()
+                    if val and val.upper() not in _SKIP_REF_VALUES:
+                        refs_map[tag] = val
+            rmtinf = next(
+                (e for e in txdtls.iter() if e.tag.split("}")[-1] == "RmtInf"), None
+            )
+            if rmtinf is not None:
+                remittance = _first_text_by_local_name(rmtinf, "Ustrd")
+
+        pmt_ref_m = PMT_REF_RE.search(remittance)
+        inv_m = INVOICE_RE.search(remittance)
+        pmt_ref = pmt_ref_m.group(0).upper() if pmt_ref_m else ""
+        invoice = inv_m.group(0).upper().replace(" ", "-") if inv_m else ""
+
+        id_values: set = set()
+        id_values.update(v.upper() for v in refs_map.values() if v)
+        if pmt_ref:
+            id_values.add(pmt_ref)
+        if invoice:
+            id_values.add(invoice)
+
+        entry: Dict[str, object] = {
+            "ntry_ref":    ntry_ref,
+            "amount":      _first_text_by_local_name(elem, "Amt"),
+            "currency":    next(
+                (e.attrib.get("Ccy", "") for e in elem.iter()
+                 if e.tag.split("}")[-1] == "Amt"), ""
+            ),
+            "direction":   _first_text_by_local_name(elem, "CdtDbtInd"),
+            "booking_date": _first_text_by_local_name(elem, "Dt"),
+            "remittance":  remittance,
+            "refs":        refs_map,
+            "pmt_ref":     pmt_ref,
+            "invoice":     invoice,
+        }
+
+        if not id_values:
+            problems.append({
+                "entry": entry,
+                "reason": "no_refs",
+                "refs_sample": [],
+            })
+        elif not id_values.intersection(found_values):
+            problems.append({
+                "entry": entry,
+                "reason": "refs_present_but_not_found",
+                "refs_sample": list(id_values)[:5],
+            })
+
+        elem.clear()
 
     return problems
 
 
-def suggest_patterns_for_unmatched(camt_path: Path, other_path: Path, max_examples: int = 8) -> Dict[str, object]:
-    """Use the LLM to propose extraction patterns for CAMT entries that lack usable refs or matches.
+def suggest_patterns_for_unmatched(
+    camt_path: Path, other_path: Path, max_examples: int = 8
+) -> Dict[str, object]:
+    """Use the LLM to propose extraction patterns for CAMT entries that either
+    have no identifiers or whose identifiers could not be located in the flat file.
 
-    Returns a structure with example samples and the LLM JSON output when available.
+    Uses the streaming ref-index pipeline — the flat file is never fully loaded.
     """
-    camt_entries = _load_camt_entries(camt_path)
-    text_lines = [line.rstrip("\n") for line in other_path.open("r", encoding="utf-8", errors="replace")]
-
-    # Build samples focusing on problematic entries
     problems = _entries_missing_refs_or_unmatched(camt_path, other_path)
-    samples = []
-    for p in problems[:max_examples]:
-        samples.append(p["entry"])
+    samples = [p["entry"] for p in problems[:max_examples]]
 
     if not samples:
-        raise ValueError("No CAMT entries without refs or unmatched refs were found; LLM suggestions are not required.")
+        raise ValueError(
+            "No CAMT entries without refs or unmatched refs were found; "
+            "LLM suggestions are not required."
+        )
 
     prompt = _build_regex_prompt(samples)
     result: Dict[str, object] = {"examples": samples, "prompt": prompt, "llm_available": False}

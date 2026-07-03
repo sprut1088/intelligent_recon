@@ -17,7 +17,7 @@ from .loader import load_samples_and_reconcile, rerun_reconciliation_only
 from .quality import get_quality_report, validate_batch
 from .workflow import get_exception_workflow, list_exception_workflow, mark_workflow_resolved, update_exception_workflow
 from .workspace import create_snapshot, export_reconciliation_results, get_dashboard_model, get_data_preview, get_no_code_rules, get_workspace_overview, get_workflow_rules, list_submissions, predict_match_fields
-from .schemas import CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
+from .schemas import BulkPatternSaveRequest, CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
 from .ai_triage import build_ai_snapshot, find_candidates, run_tier2c
 
 # Module-level logger — format applied in startup() after uvicorn finishes its own logging setup
@@ -805,6 +805,51 @@ def create_pattern(request: PatternCreateRequest) -> dict:
         conn.commit()
         row = conn.execute("SELECT * FROM recon_pattern_registry WHERE pattern_id=?", (pattern_id,)).fetchone()
     return row_to_dict(row)
+
+@app.post("/api/patterns/bulk")
+def create_bulk_patterns(request: BulkPatternSaveRequest) -> dict:
+    """Save multiple patterns in one transaction, all assigned to *group_name*.
+
+    Patterns are mapped from the file-analysis output format to the registry
+    schema (fields_used → pattern_rule.fields, rule hints → execution_mode /
+    confidence_threshold).  Existing pattern IDs are skipped without error.
+    """
+    if not request.group_name.strip():
+        raise HTTPException(status_code=400, detail="group_name cannot be blank")
+    created, skipped = [], []
+    with get_conn() as conn:
+        for p in request.patterns:
+            pid = p.pattern_id or f"PX-{uuid.uuid4().hex[:8].upper()}"
+            if conn.execute(
+                "SELECT 1 FROM recon_pattern_registry WHERE pattern_id=?", (pid,)
+            ).fetchone():
+                skipped.append(pid)
+                continue
+            conn.execute(
+                """
+                INSERT INTO recon_pattern_registry
+                (pattern_id, pattern_name, pattern_type, pattern_group,
+                 pattern_version, pattern_rule_json, status, execution_mode,
+                 confidence_threshold, approved_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    pid, p.pattern_name, p.pattern_type,
+                    request.group_name,   # always override with the bulk group
+                    p.pattern_version,
+                    json_dumps(p.pattern_rule), p.status,
+                    p.execution_mode, p.confidence_threshold, p.approved_by,
+                ),
+            )
+            created.append(pid)
+        conn.commit()
+    return {
+        "created": len(created),
+        "skipped": len(skipped),
+        "pattern_ids": created,
+        "group_name": request.group_name,
+    }
+
 
 @app.patch("/api/patterns/{pattern_id}")
 def update_pattern(pattern_id: str, request: PatternUpdateRequest) -> dict:

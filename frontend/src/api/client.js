@@ -154,6 +154,8 @@ export const api = {
   }),
   patterns: async () => (await request('/api/patterns')).items || [],
   createPattern: (payload) => request('/api/patterns', { method: 'POST', body: JSON.stringify(payload) }),
+  createBulkPatterns: (groupName, patterns) =>
+    request('/api/patterns/bulk', { method: 'POST', body: JSON.stringify({ group_name: groupName, patterns }) }),
   deletePattern: (patternId) => request(`/api/patterns/${patternId}`, { method: 'DELETE' }),
 
   updatePattern: (patternId, payload) => request(`/api/patterns/${patternId}`, { method: 'PATCH', body: JSON.stringify(payload) }),

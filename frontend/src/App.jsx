@@ -843,7 +843,7 @@ function PatternManagement({ patterns, onCreate, onDelete }) {
   );
 }
 
-function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSuggestPatterns, onSave, proposedPatterns, setProposedPatterns }) {
+function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSuggestPatterns, onSave, onSaveBulk, proposedPatterns, setProposedPatterns }) {
   const [camtFile, setCamtFile] = useState(null);
   const [otherFile, setOtherFile] = useState(null);
   const [mappingResult, setMappingResult] = useState(null);
@@ -852,16 +852,37 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSuggestPatter
   const [selectedPattern, setSelectedPattern] = useState(null);
   const [error, setError] = useState('');
   const [loadingPattern, setLoadingPattern] = useState(false);
+  const [loadingMapping, setLoadingMapping] = useState(false);
+
+  // Save-as-group state
+  const today = new Date().toISOString().slice(0, 10);
+  const [groupName, setGroupName] = useState(`auto-${today}`);
+  const [selectedGroupPatterns, setSelectedGroupPatterns] = useState(new Set());
+  const [bulkSaveStatus, setBulkSaveStatus] = useState(null); // null | {loading} | {success} | {error}
+
+  // Auto-select all patterns when a new analysis result arrives
+  useEffect(() => {
+    if (!patternResult) return;
+    const allKeys = new Set([
+      ...(patternResult.deterministic_patterns || []).map(p => `det-${p.rule}`),
+      ...(patternResult.llm_patterns || []).map((p, i) => `llm-${p.rule_id || i}`),
+    ]);
+    setSelectedGroupPatterns(allKeys);
+    setBulkSaveStatus(null);
+  }, [patternResult]);
 
   const loadMapping = async () => {
     if (!camtFile || !otherFile) return;
     setError('');
+    setLoadingMapping(true);
     try {
       const result = await onGenerateMapping(camtFile, otherFile);
       setMappingResult(result);
     } catch (err) {
       setError(err.message || 'Unable to generate regex mapping');
       setMappingResult(null);
+    } finally {
+      setLoadingMapping(false);
     }
   };
 
@@ -870,11 +891,34 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSuggestPatter
     setError('');
     setLoadingPattern(true);
     try {
-      const regexMap = providedRegexMap ? JSON.parse(providedRegexMap) : null;
+      // Use field_extractors from the mapping step when no manual override is typed
+      let regexMap = null;
+      if (providedRegexMap) {
+        try { regexMap = JSON.parse(providedRegexMap); } catch (_) { /* ignore */ }
+      } else if (mappingResult) {
+        regexMap = mappingResult.llm_output?.field_extractors
+          || mappingResult.format_info?.suggested_regex_map
+          || null;
+      }
       const result = await onGeneratePatterns(camtFile, otherFile, regexMap);
       setPatternResult(result);
-      setProposedPatterns([result]);
-      setSelectedPattern(result);
+      // Flatten deterministic + LLM patterns for the candidates table
+      const allPats = [
+        ...(result.deterministic_patterns || []).map(p => ({
+          pattern_name: p.pattern_name,
+          mapping_key: p.rule,
+          regex_inferred: {},
+          pattern_rule: { fields: p.fields_used || [], mode: 'DETERMINISTIC' },
+        })),
+        ...(result.llm_patterns || []).map(p => ({
+          pattern_name: p.pattern_name,
+          mapping_key: p.rule_id,
+          regex_inferred: {},
+          pattern_rule: { fields: p.fields_used || [], mode: 'LLM_SUGGESTED', tolerance_spec: p.tolerance_spec },
+        })),
+      ];
+      setProposedPatterns(allPats.length > 0 ? allPats : [result]);
+      setSelectedPattern(allPats[0] || result);
     } catch (err) {
       setError(err.message || 'Unable to generate reconciliation pattern');
       setPatternResult(null);
@@ -936,7 +980,7 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSuggestPatter
             <label>Optional regex override JSON</label>
             <textarea rows={4} value={providedRegexMap} onChange={(e) => setProvidedRegexMap(e.target.value)} placeholder='{"pmt_ref":"\\d+"}' />
             <div className="button-row">
-              <button className="btn secondary" onClick={loadMapping} disabled={!camtFile || !otherFile}>Generate regex mapping</button>
+              <button className="btn secondary" onClick={loadMapping} disabled={!camtFile || !otherFile || loadingMapping}>{loadingMapping ? 'Analysing…' : 'Generate regex mapping'}</button>
               <button className="btn ghost" onClick={suggestPatterns} disabled={!camtFile || !otherFile || loadingPattern}>{loadingPattern ? 'Suggesting…' : 'Find missing-ref suggestions (LLM)'}</button>
               <button className="btn primary" onClick={buildPatterns} disabled={!camtFile || !otherFile || loadingPattern}>{loadingPattern ? 'Generating…' : 'Generate pattern'}</button>
             </div>
@@ -944,26 +988,31 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSuggestPatter
           </div>
         </Panel>
 
-        <Panel title="Pattern results" subtitle="Review the inferred pattern and save it to the registry.">
-          <div className="table-wrap compact tight">
-            <table>
-              <thead>
-                <tr><th>Key</th><th>Value</th></tr>
-              </thead>
-              <tbody>
-                {patternResult ? (
-                  Object.entries(patternResult).map(([key, value]) => (
-                    <tr key={key}>
-                      <td>{key}</td>
-                      <td><pre>{typeof value === 'string' ? value : JSON.stringify(value, null, 2)}</pre></td>
-                    </tr>
-                  ))
-                ) : (
-                  <tr><td colSpan={2} className="empty">No generated pattern yet.</td></tr>
+        <Panel title="Reconciliation pattern results" subtitle="Match statistics and active rules from the two-phase analysis.">
+          {patternResult?.stats ? (() => {
+            const s = patternResult.stats;
+            const rate = Math.round((s.match_rate || 0) * 100);
+            const rateTone = rate >= 80 ? 'success' : rate >= 50 ? 'warning' : 'danger';
+            return (
+              <>
+                <div className="metric-row">
+                  <Metric label="CAMT entries" value={s.camt_total ?? '—'} />
+                  <Metric label="Flat-file records" value={s.flat_total ?? '—'} />
+                  <Metric label="Matched" value={s.camt_matched ?? '—'} tone="success" />
+                  <Metric label="Unmatched" value={s.camt_unmatched ?? '—'} tone={s.camt_unmatched > 0 ? 'warning' : 'success'} />
+                  <Metric label="Match rate" value={`${rate}%`} tone={rateTone} hint="camt entries matched" />
+                  <Metric label="LLM patterns" value={patternResult.llm_patterns?.length ?? 0} tone={patternResult.llm_available ? 'success' : 'neutral'} />
+                </div>
+                {patternResult.llm_explanation && (
+                  <p style={{ marginTop: '0.75rem', fontSize: '0.83rem', color: 'var(--text-muted, #888)' }}>
+                    {patternResult.llm_explanation}
+                  </p>
                 )}
-              </tbody>
-            </table>
-          </div>
+              </>
+            );
+          })() : (
+            <p className="empty">Run “Generate pattern” to see results.</p>
+          )}
           {patternResult && (
             <div className="button-row" style={{ marginTop: '1rem' }}>
               <button className="btn primary" onClick={savePattern}>Save generated pattern</button>
@@ -972,7 +1021,428 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSuggestPatter
         </Panel>
       </div>
 
+      {mappingResult && (
+        <Panel
+          title="File Format Detection"
+          subtitle={
+            mappingResult.llm_available
+              ? 'LLM-generated field extractors and structural detection'
+              : 'Structural detection from matched CAMT / flat-file pairs'
+          }
+        >
+          {/* ── summary metrics ───────────────────────────────── */}
+          {(() => {
+            const conf = mappingResult.pattern_confidence;
+            const confTone = conf >= 80 ? 'success' : conf >= 50 ? 'warning' : 'danger';
+            const llmEx = mappingResult.llm_output?.field_extractors;
+            const fieldConfidence = llmEx && Object.keys(llmEx).length > 0
+              ? Math.round(
+                  Object.values(llmEx)
+                    .map(f => f.confidence === 'high' ? 100 : f.confidence === 'medium' ? 60 : 30)
+                    .reduce((a, b) => a + b, 0) / Object.keys(llmEx).length
+                )
+              : null;
+            const fcTone = fieldConfidence == null ? 'neutral' : fieldConfidence >= 80 ? 'success' : fieldConfidence >= 50 ? 'warning' : 'danger';
+            return (
+              <div className="metric-row">
+                <Metric
+                  label="Format"
+                  value={mappingResult.format_info?.detected_type ?? '—'}
+                  tone={
+                    mappingResult.format_info?.detected_type === 'FIXED_WIDTH' ? 'success'
+                      : mappingResult.format_info?.detected_type === 'DELIMITED' ? 'info'
+                      : 'neutral'
+                  }
+                />
+                <Metric label="Record prefix" value={mappingResult.format_info?.record_prefix ?? '—'} />
+                <Metric label="Delimiter" value={mappingResult.format_info?.delimiter ?? 'none'} />
+                <Metric label="Matched lines" value={mappingResult.match_count ?? '—'} hint={`of ${mappingResult.camt_ref_index_size ?? '?'} CAMT identifiers`} />
+                <Metric
+                  label="Pattern confidence"
+                  value={conf != null ? `${conf}%` : '—'}
+                  hint="match ratio × structural clarity"
+                  tone={conf != null ? confTone : 'neutral'}
+                />
+                <Metric
+                  label="LLM samples sent"
+                  value={mappingResult.llm_samples_sent ?? mappingResult.examples?.length ?? '—'}
+                  hint="entry pairs in prompt"
+                />
+                {fieldConfidence != null && (
+                  <Metric
+                    label="Field confidence"
+                    value={`${fieldConfidence}%`}
+                    hint="avg across extracted fields"
+                    tone={fcTone}
+                  />
+                )}
+              </div>
+            );
+          })()}
+
+          {/* ── field extractors ──────────────────────────────── */}
+          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '1.5rem 0 0.5rem' }}>
+            <h4 style={{ margin: 0 }}>Field extractors</h4>
+            {mappingResult.llm_available
+              ? <Tag tone="success">LLM</Tag>
+              : <Tag tone="neutral">structural</Tag>}
+          </div>
+          <div className="table-wrap compact tight">
+            <table>
+              <thead>
+                <tr>
+                  <th>Field</th>
+                  <th>Regex</th>
+                  <th>Maps to CAMT</th>
+                  <th>Confidence</th>
+                </tr>
+              </thead>
+              <tbody>
+                {(() => {
+                  const llmEx = mappingResult.llm_output?.field_extractors;
+                  const structural = mappingResult.format_info?.suggested_regex_map;
+                  if (llmEx && Object.keys(llmEx).length > 0) {
+                    return Object.entries(llmEx).map(([field, info]) => (
+                      <tr key={field}>
+                        <td><code>{field}</code></td>
+                        <td><pre style={{ margin: 0, fontSize: '0.73rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{info.regex}</pre></td>
+                        <td><code style={{ fontSize: '0.78rem' }}>{info.maps_to_camt}</code></td>
+                        <td><Tag tone={info.confidence === 'high' ? 'success' : info.confidence === 'medium' ? 'warning' : 'danger'}>{info.confidence}</Tag></td>
+                      </tr>
+                    ));
+                  }
+                  if (structural && Object.keys(structural).length > 0) {
+                    return Object.entries(structural).map(([field, pattern]) => (
+                      <tr key={field}>
+                        <td><code>{field}</code></td>
+                        <td><pre style={{ margin: 0, fontSize: '0.73rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{pattern}</pre></td>
+                        <td>—</td>
+                        <td><Tag tone="neutral">structural</Tag></td>
+                      </tr>
+                    ));
+                  }
+                  return (
+                    <tr>
+                      <td colSpan={4} className="empty">
+                        {mappingResult.llm_error
+                          ? `LLM unavailable — ${mappingResult.llm_error}`
+                          : 'No field extractors available.'}
+                      </td>
+                    </tr>
+                  );
+                })()}
+              </tbody>
+            </table>
+          </div>
+
+          {/* ── LLM layout explanation ────────────────────────── */}
+          {mappingResult.llm_output?.explanation && (
+            <p style={{ marginTop: '1rem', color: 'var(--text-muted, #888)', fontSize: '0.83rem' }}>
+              <strong>Layout: </strong>{mappingResult.llm_output.explanation}
+            </p>
+          )}
+
+          {/* ── matched CAMT / flat-file pairs ────────────────── */}
+          {mappingResult.examples?.length > 0 && (
+            <>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '1.5rem 0 0.5rem' }}>
+                <h4 style={{ margin: 0 }}>Matched entry pairs</h4>
+                <Tag tone="neutral">{mappingResult.examples.length}</Tag>
+              </div>
+              <div className="table-wrap compact tight">
+                <table>
+                  <thead>
+                    <tr>
+                      <th>CAMT entry</th>
+                      <th>Identifiers found</th>
+                      <th>Matched flat-file line</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {mappingResult.examples.map((ex, idx) => (
+                      <tr key={idx}>
+                        <td>
+                          <code style={{ fontWeight: 600 }}>{ex.ntry_ref}</code>
+                          {ex.pmt_ref && <div style={{ fontSize: '0.74rem', opacity: 0.7 }}>PMT-REF: {ex.pmt_ref}</div>}
+                          {ex.invoice && <div style={{ fontSize: '0.74rem', opacity: 0.7 }}>INV: {ex.invoice}</div>}
+                          <div style={{ fontSize: '0.74rem', opacity: 0.7 }}>{ex.amount} {ex.currency} · {ex.direction}</div>
+                        </td>
+                        <td>
+                          {Object.entries(ex.refs || {}).map(([tag, val]) => (
+                            <div key={tag} style={{ fontSize: '0.74rem' }}>
+                              <span style={{ opacity: 0.55 }}>{tag}: </span><code>{val}</code>
+                            </div>
+                          ))}
+                        </td>
+                        <td>
+                          {ex.matched_text?.length > 0 ? (
+                            <pre style={{ margin: 0, fontSize: '0.68rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxWidth: '48ch' }}>
+                              {ex.matched_text[0]}
+                            </pre>
+                          ) : (
+                            <span className="empty">no match</span>
+                          )}
+                        </td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </>
+          )}
+        </Panel>
+      )}
+
+      {/* ── Deterministic pattern results ─────────────────────── */}
+      {patternResult?.deterministic_patterns?.length > 0 && (
+        <Panel title="Deterministic patterns" subtitle="Rules that fired — each entry matched at most once, in priority order.">
+          <div className="table-wrap compact tight">
+            <table>
+              <thead>
+                <tr>
+                  <th>Rule</th>
+                  <th>Pattern name</th>
+                  <th>Fields used</th>
+                  <th>Matched</th>
+                  <th>Sample pair</th>
+                </tr>
+              </thead>
+              <tbody>
+                {patternResult.deterministic_patterns.map((p) => (
+                  <tr key={p.rule}>
+                    <td><Tag tone="success">{p.rule}</Tag></td>
+                    <td>{p.pattern_name}</td>
+                    <td>{(p.fields_used || []).map(f => <code key={f} style={{ marginRight: '0.25rem' }}>{f}</code>)}</td>
+                    <td style={{ fontWeight: 600 }}>{p.matched_count}</td>
+                    <td style={{ fontSize: '0.74rem' }}>
+                      {p.sample_pairs?.[0] ? (
+                        <span>
+                          <code>{p.sample_pairs[0].camt_id}</code>
+                          {' ↔ '}
+                          <code>{p.sample_pairs[0].flat_tx_id || p.sample_pairs[0].flat_reference || `line ${p.sample_pairs[0].flat_line_no}`}</code>
+                        </span>
+                      ) : '—'}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+
+          {patternResult.all_deterministic_rules?.filter(r => r.matched_count === 0).length > 0 && (
+            <details style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted,#888)' }}>
+              <summary style={{ cursor: 'pointer' }}>Rules that did not fire ({patternResult.all_deterministic_rules.filter(r => r.matched_count === 0).length})</summary>
+              <ul style={{ margin: '0.25rem 0 0 1rem' }}>
+                {patternResult.all_deterministic_rules.filter(r => r.matched_count === 0).map(r => (
+                  <li key={r.rule}>{r.pattern_name} — <em>0 matches</em></li>
+                ))}
+              </ul>
+            </details>
+          )}
+        </Panel>
+      )}
+
+      {/* ── LLM-suggested patterns for unmatched ────────────── */}
+      {patternResult && (patternResult.llm_patterns?.length > 0 || patternResult.unmatched_count > 0) && (
+        <Panel
+          title={`LLM-suggested patterns for unmatched (${patternResult.unmatched_count ?? 0})`}
+          subtitle={patternResult.llm_available ? 'Fuzzy / tolerance-based patterns proposed by LLM' : 'LLM not configured — patterns below are placeholders'}
+        >
+          {patternResult.llm_patterns?.length > 0 ? (
+            <div className="table-wrap compact tight">
+              <table>
+                <thead>
+                  <tr>
+                    <th>Rule ID</th>
+                    <th>Pattern name</th>
+                    <th>Fields used</th>
+                    <th>Tolerance</th>
+                    <th>Coverage</th>
+                    <th>Confidence</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {patternResult.llm_patterns.map((p, i) => (
+                    <tr key={p.rule_id || i}>
+                      <td><code>{p.rule_id}</code></td>
+                      <td>{p.pattern_name}</td>
+                      <td>{(p.fields_used || []).map(f => <code key={f} style={{ marginRight: '0.25rem' }}>{f}</code>)}</td>
+                      <td style={{ fontSize: '0.73rem' }}>
+                        {p.tolerance_spec ? <pre style={{ margin: 0 }}>{JSON.stringify(p.tolerance_spec)}</pre> : '—'}
+                      </td>
+                      <td><Tag tone={p.estimated_coverage === 'high' ? 'success' : p.estimated_coverage === 'medium' ? 'warning' : 'neutral'}>{p.estimated_coverage ?? '—'}</Tag></td>
+                      <td><Tag tone={p.confidence === 'high' ? 'success' : p.confidence === 'medium' ? 'warning' : 'danger'}>{p.confidence ?? '—'}</Tag></td>
+                    </tr>
+                  ))}
+                </tbody>
+              </table>
+            </div>
+          ) : (
+            <p className="empty">
+              {patternResult.llm_error
+                ? `LLM unavailable — ${patternResult.llm_error}`
+                : `${patternResult.unmatched_count} unmatched entries. Configure LLM to get fuzzy pattern suggestions.`}
+            </p>
+          )}
+
+          {patternResult.unmatched_samples?.length > 0 && (
+            <details style={{ marginTop: '1rem' }}>
+              <summary style={{ cursor: 'pointer', fontSize: '0.83rem' }}>Unmatched CAMT samples ({patternResult.unmatched_samples.length})</summary>
+              <div className="table-wrap compact tight" style={{ marginTop: '0.5rem' }}>
+                <table>
+                  <thead><tr><th>CAMT ID</th><th>Amount</th><th>Direction</th><th>Counterparty</th><th>Remittance</th></tr></thead>
+                  <tbody>
+                    {patternResult.unmatched_samples.map((s, i) => (
+                      <tr key={i}>
+                        <td><code>{s.camt_id}</code></td>
+                        <td>{s.amount} {s.currency}</td>
+                        <td>{s.direction}</td>
+                        <td style={{ fontSize: '0.78rem' }}>{s.counterparty}</td>
+                        <td style={{ fontSize: '0.75rem', maxWidth: '30ch', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.remittance}</td>
+                      </tr>
+                    ))}
+                  </tbody>
+                </table>
+              </div>
+            </details>
+          )}
+        </Panel>
+      )}
+
       <Panel title="Proposed pattern candidates" subtitle="Select and edit candidate patterns before saving.">
+
+      {/* ── Save as pattern group ──────────────────────────── */}
+      {patternResult && ((patternResult.deterministic_patterns?.length ?? 0) + (patternResult.llm_patterns?.length ?? 0)) > 0 && (() => {
+        // Constants for converting analysis output → registry format
+        const DET_EXEC = { EXACT_E2E: 'AUTO_CLOSE', EXACT_PMT_REF: 'AUTO_CLOSE', EXACT_INVOICE: 'SUGGESTION', AMOUNT_DIRECTION: 'SUGGESTION' };
+        const DET_CONF = { EXACT_E2E: 0.95, EXACT_PMT_REF: 0.92, EXACT_INVOICE: 0.90, AMOUNT_DIRECTION: 0.80 };
+
+        const allSaveable = [
+          ...(patternResult.deterministic_patterns || []).map(p => ({
+            key: `det-${p.rule}`, label: p.pattern_name, badge: 'Deterministic', badgeTone: 'success',
+            toPayload: () => ({
+              pattern_name: p.pattern_name, pattern_type: 'FILE_DETECTED', pattern_version: '1.0',
+              pattern_rule: { fields: p.fields_used || [], mode: 'AUTO' },
+              status: 'ACTIVE', execution_mode: DET_EXEC[p.rule] || 'SUGGESTION',
+              confidence_threshold: DET_CONF[p.rule] ?? 0.80, approved_by: 'prototype_user',
+            }),
+          })),
+          ...(patternResult.llm_patterns || []).map((p, i) => ({
+            key: `llm-${p.rule_id || i}`, label: p.pattern_name, badge: 'LLM suggested', badgeTone: 'warning',
+            toPayload: () => ({
+              pattern_name: p.pattern_name, pattern_type: 'LLM_SUGGESTED', pattern_version: '1.0',
+              pattern_rule: { fields: p.fields_used || [], mode: 'SUGGESTION', ...(p.tolerance_spec || {}) },
+              status: 'DRAFT', execution_mode: 'SUGGESTION',
+              confidence_threshold: 0.75, approved_by: 'prototype_user',
+            }),
+          })),
+        ];
+
+        const allSelected = allSaveable.every(item => selectedGroupPatterns.has(item.key));
+        const someSelected = allSaveable.some(item => selectedGroupPatterns.has(item.key));
+
+        const toggleAll = () => {
+          if (allSelected) setSelectedGroupPatterns(new Set());
+          else setSelectedGroupPatterns(new Set(allSaveable.map(i => i.key)));
+        };
+        const toggleOne = (key) => {
+          setSelectedGroupPatterns(prev => {
+            const next = new Set(prev);
+            next.has(key) ? next.delete(key) : next.add(key);
+            return next;
+          });
+        };
+
+        const saveBulk = async () => {
+          if (!groupName.trim()) { setBulkSaveStatus({ error: 'Group name cannot be blank.' }); return; }
+          const toSave = allSaveable.filter(i => selectedGroupPatterns.has(i.key)).map(i => i.toPayload());
+          if (!toSave.length) { setBulkSaveStatus({ error: 'Select at least one pattern.' }); return; }
+          setBulkSaveStatus({ loading: true });
+          try {
+            const res = await onSaveBulk(groupName.trim(), toSave);
+            setBulkSaveStatus({ success: `Saved ${res.created} pattern(s) to group "${res.group_name}".${res.skipped > 0 ? ` (${res.skipped} already existed, skipped)` : ''}` });
+          } catch (err) {
+            setBulkSaveStatus({ error: err.message || 'Failed to save patterns.' });
+          }
+        };
+
+        return (
+          <Panel
+            title="Save as pattern group"
+            subtitle="Pick which patterns to persist, give the group a name, then save them all at once."
+          >
+            {/* group name */}
+            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '1rem' }}>
+              <label style={{ fontWeight: 600, whiteSpace: 'nowrap', fontSize: '0.85rem' }}>Group name</label>
+              <input
+                type="text"
+                value={groupName}
+                onChange={e => { setGroupName(e.target.value); setBulkSaveStatus(null); }}
+                placeholder="e.g. psr-camt-2026-q3"
+                style={{ flex: 1, padding: '0.35rem 0.6rem', borderRadius: '4px', border: '1px solid var(--border, #ccc)', fontFamily: 'monospace', fontSize: '0.85rem' }}
+              />
+            </div>
+
+            {/* pattern checklist */}
+            <div className="table-wrap compact tight">
+              <table>
+                <thead>
+                  <tr>
+                    <th style={{ width: '2rem' }}>
+                      <input
+                        type="checkbox"
+                        checked={allSelected}
+                        ref={el => { if (el) el.indeterminate = !allSelected && someSelected; }}
+                        onChange={toggleAll}
+                        title="Select / deselect all"
+                      />
+                    </th>
+                    <th>Pattern name</th>
+                    <th>Origin</th>
+                    <th>Registry rule stored as</th>
+                    <th>Mode</th>
+                    <th>Status</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {allSaveable.map(item => {
+                    const payload = item.toPayload();
+                    return (
+                      <tr key={item.key}>
+                        <td><input type="checkbox" checked={selectedGroupPatterns.has(item.key)} onChange={() => toggleOne(item.key)} /></td>
+                        <td>{item.label}</td>
+                        <td><Tag tone={item.badgeTone}>{item.badge}</Tag></td>
+                        <td style={{ fontSize: '0.73rem' }}>
+                          <code>{(payload.pattern_rule.fields || []).join(', ') || '—'}</code>
+                        </td>
+                        <td><Tag tone={payload.execution_mode === 'AUTO_CLOSE' ? 'success' : 'warning'}>{payload.execution_mode}</Tag></td>
+                        <td><Tag tone={payload.status === 'ACTIVE' ? 'success' : 'neutral'}>{payload.status}</Tag></td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            <div className="button-row" style={{ marginTop: '1rem' }}>
+              <button
+                className="btn primary"
+                onClick={saveBulk}
+                disabled={!someSelected || bulkSaveStatus?.loading}
+              >
+                {bulkSaveStatus?.loading ? 'Saving…' : `Save ${[...selectedGroupPatterns].length} pattern(s) to group`}
+              </button>
+              {bulkSaveStatus?.success && (
+                <span style={{ color: 'var(--success, #16a34a)', fontSize: '0.84rem' }}>{bulkSaveStatus.success}</span>
+              )}
+              {bulkSaveStatus?.error && (
+                <span style={{ color: 'var(--danger, #dc2626)', fontSize: '0.84rem' }}>{bulkSaveStatus.error}</span>
+              )}
+            </div>
+          </Panel>
+        );
+      })()}
+
         <div className="table-wrap compact tight">
           <table>
             <thead>
@@ -2514,6 +2984,15 @@ export default function App() {
     return api.patternSuggestions(camtFile, otherFile, maxExamples);
   };
 
+  const createBulkPatterns = async (groupName, patterns) => {
+    const result = await api.createBulkPatterns(groupName, patterns);
+    // Refresh patterns immediately so the new group appears in the
+    // Data Intake "Run batch with pattern group" dropdown without a page reload.
+    const fresh = await api.patterns();
+    setPatterns(fresh);
+    return result;
+  };
+
   const saveGeneratedPattern = async (patternPayload) => {
     await safe(() => api.createPattern(patternPayload), 'Pattern saved to registry');
   };
@@ -2600,7 +3079,7 @@ export default function App() {
     if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} patternGroups={[...new Set((patterns || []).map((p) => p.pattern_group || 'default').filter(Boolean))].sort()} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
-    if (active === 'pattern-builder') return <PatternBuilder onGenerateMapping={generateRegexMapping} onGeneratePatterns={generatePatternsFromFiles} onSuggestPatterns={generatePatternSuggestions} onSave={saveGeneratedPattern} proposedPatterns={proposedPatterns} setProposedPatterns={setProposedPatterns} />;
+    if (active === 'pattern-builder') return <PatternBuilder onGenerateMapping={generateRegexMapping} onGeneratePatterns={generatePatternsFromFiles} onSuggestPatterns={generatePatternSuggestions} onSave={saveGeneratedPattern} onSaveBulk={createBulkPatterns} proposedPatterns={proposedPatterns} setProposedPatterns={setProposedPatterns} />;
     if (active === 'patterns') return <PatternManagement patterns={patterns} onCreate={createPattern} onUpdate={tunePattern} onDelete={removePattern} />;
     if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
