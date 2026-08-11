@@ -129,20 +129,20 @@ def generate_reconciliation_patterns_route(
             raise HTTPException(status_code=400, detail=f"Invalid JSON for provided_regex_map: {exc}") from exc
 
 
-    @app.post("/api/files/pattern-suggestions")
-    def generate_pattern_suggestions(
-        camt_file: UploadFile = File(...),
-        other_file: UploadFile = File(...),
-        max_examples: int = Form(8),
-    ) -> dict:
-        with tempfile.TemporaryDirectory() as temp_dir:
-            temp_dir_path = Path(temp_dir)
-            camt_path = _write_upload_to_temp(camt_file, temp_dir_path)
-            other_path = _write_upload_to_temp(other_file, temp_dir_path)
-            try:
-                return suggest_patterns_for_unmatched(camt_path, other_path, max_examples=max_examples)
-            except ValueError as exc:
-                raise HTTPException(status_code=400, detail=str(exc)) from exc
+@app.post("/api/files/pattern-suggestions")
+def generate_pattern_suggestions(
+    camt_file: UploadFile = File(...),
+    other_file: UploadFile = File(...),
+    max_examples: int = Form(8),
+) -> dict:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        camt_path = _write_upload_to_temp(camt_file, temp_dir_path)
+        other_path = _write_upload_to_temp(other_file, temp_dir_path)
+        try:
+            return suggest_patterns_for_unmatched(camt_path, other_path, max_examples=max_examples)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 @app.get("/api/files/batches")
 def files_batches(limit:int=Query(50,ge=1,le=200), offset:int=Query(0,ge=0)) -> dict:

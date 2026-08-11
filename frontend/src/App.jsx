@@ -529,15 +529,14 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
     approved_by: 'prototype_user',
   };
 
+  const fmtLabel = (s) => (s || '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  const statusTone = (s) => s === 'ACTIVE' ? 'success' : s === 'DRAFT' ? 'warning' : 'neutral';
+  const modeTone  = (m) => m === 'AUTO_CLOSE' ? 'success' : m === 'SUGGESTION' ? 'warning' : 'neutral';
+
   const [selectedGroup, setSelectedGroup] = useState('');
-  // rowEdits tracks unsaved inline edits: { pattern_id: { field: value } }
-  const [rowEdits, setRowEdits] = useState({});
-  const [showSaveAsGroupModal, setShowSaveAsGroupModal] = useState(false);
-  const [newGroupName, setNewGroupName] = useState('');
-  const [showAddPatternModal, setShowAddPatternModal] = useState(false);
-  const [addPatternDraft, setAddPatternDraft] = useState({ ...BLANK_PATTERN });
-  const [showNewGroupModal, setShowNewGroupModal] = useState(false);
-  const [newGroupDraft, setNewGroupDraft] = useState({ group_name: '', ...BLANK_PATTERN });
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addDraft, setAddDraft] = useState({ ...BLANK_PATTERN });
+  const [addToGroup, setAddToGroup] = useState('');
   const [errors, setErrors] = useState({});
 
   const groupedPatterns = useMemo(() => {
@@ -549,76 +548,42 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
     });
     return Object.entries(groups)
       .sort(([a], [b]) => a.localeCompare(b))
-      .map(([groupName, items]) => ({
-        groupName,
+      .map(([name, items]) => ({
+        groupName: name,
         items: [...items].sort((a, b) => (a.pattern_name || '').localeCompare(b.pattern_name || '')),
       }));
   }, [patterns]);
 
-  // Auto-select first group on load
   useEffect(() => {
     if (!selectedGroup && groupedPatterns[0]) setSelectedGroup(groupedPatterns[0].groupName);
   }, [groupedPatterns, selectedGroup]);
 
-  // Clear row edits when switching groups
-  useEffect(() => { setRowEdits({}); }, [selectedGroup]);
-
-  const hasEdits = Object.keys(rowEdits).length > 0;
   const activeGroup = groupedPatterns.find((g) => g.groupName === selectedGroup) || groupedPatterns[0];
 
-  const updateRowEdit = (patternId, field, value) =>
-    setRowEdits((prev) => ({ ...prev, [patternId]: { ...(prev[patternId] || {}), [field]: value } }));
-
-  // Copies all patterns from the active group (with applied edits) into a brand new group name
-  const saveAsNewGroup = async () => {
-    const name = newGroupName.trim();
-    if (!name) { setErrors({ newGroup: 'Group name is required' }); return; }
-    if (!activeGroup) return;
-    for (const p of activeGroup.items) {
-      const edits = rowEdits[p.pattern_id] || {};
-      const ruleStr = edits.pattern_rule !== undefined ? edits.pattern_rule : JSON.stringify(p.pattern_rule || {});
-      let rule;
-      try { rule = JSON.parse(ruleStr); }
-      catch { setErrors({ newGroup: `Invalid rule JSON in "${p.pattern_name}"` }); return; }
-      await onCreate({
-        pattern_name: edits.pattern_name ?? p.pattern_name,
-        pattern_type: edits.pattern_type ?? p.pattern_type,
-        pattern_group: name,
-        pattern_rule: rule,
-        status: edits.status ?? p.status,
-        execution_mode: edits.execution_mode ?? p.execution_mode,
-        confidence_threshold: edits.confidence_threshold ?? p.confidence_threshold,
-        approved_by: edits.approved_by ?? p.approved_by ?? 'prototype_user',
-      });
-    }
-    setShowSaveAsGroupModal(false);
-    setNewGroupName('');
-    setRowEdits({});
-    setSelectedGroup(name);
-  };
-
-  const saveAddPattern = () => {
-    let rule;
-    try { rule = JSON.parse(addPatternDraft.pattern_rule); }
-    catch { setErrors({ addPattern: 'Invalid JSON in pattern rule' }); return; }
-    onCreate({ ...addPatternDraft, pattern_name: addPatternDraft.pattern_name || 'New pattern', pattern_group: selectedGroup || 'default', pattern_rule: rule });
-    setShowAddPatternModal(false);
-    setAddPatternDraft({ ...BLANK_PATTERN });
+  const openAdd = (targetGroup) => {
+    setAddToGroup(targetGroup || selectedGroup || 'default');
+    setAddDraft({ ...BLANK_PATTERN });
     setErrors({});
+    setShowAddModal(true);
   };
 
-  const saveNewGroup = () => {
-    const name = newGroupDraft.group_name.trim();
-    if (!name) { setErrors({ newGroupModal: 'Group name is required' }); return; }
+  const commitAdd = () => {
     let rule;
-    try { rule = JSON.parse(newGroupDraft.pattern_rule); }
-    catch { setErrors({ newGroupModal: 'Invalid JSON in pattern rule' }); return; }
-    onCreate({ pattern_name: newGroupDraft.pattern_name || 'New pattern', pattern_type: newGroupDraft.pattern_type, pattern_group: name, pattern_rule: rule, status: newGroupDraft.status, execution_mode: newGroupDraft.execution_mode, confidence_threshold: newGroupDraft.confidence_threshold, approved_by: newGroupDraft.approved_by });
-    setShowNewGroupModal(false);
-    setSelectedGroup(name);
-    setNewGroupDraft({ group_name: '', ...BLANK_PATTERN });
-    setErrors({});
+    try { rule = JSON.parse(addDraft.pattern_rule); }
+    catch { setErrors({ add: 'Invalid rule JSON' }); return; }
+    const name = addDraft.pattern_name.trim() || 'New pattern';
+    const group = addToGroup.trim() || 'default';
+    onCreate({ ...addDraft, pattern_name: name, pattern_group: group, pattern_rule: rule });
+    setShowAddModal(false);
+    setSelectedGroup(group);
   };
+
+  const MODES = [
+    { value: 'SUGGESTION', label: 'Suggestion' },
+    { value: 'AUTO_CLOSE', label: 'Auto close' },
+    { value: 'MANUAL', label: 'Manual' },
+    { value: 'LEDGER_OR_IN_TRANSIT', label: 'Ledger / in transit' },
+  ];
 
   return (
     <section className="screen">
@@ -626,219 +591,97 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
         <div>
           <div className="eyebrow">Pattern manager</div>
           <h1>Pattern groups</h1>
-          <p>A group is a named set of patterns. Edit patterns inline and save the full set as a new group.</p>
+          <p>Named sets of reconciliation patterns applied during a batch run.</p>
         </div>
-        <button className="btn primary" onClick={() => { setErrors({}); setShowNewGroupModal(true); }}>Add new group</button>
+        <button className="btn ghost" style={{ fontSize: '0.82rem' }} onClick={() => openAdd('new-group')}>+ New group</button>
       </div>
 
-      <Panel
-        title="Groups"
-        subtitle="Pick a group to view its patterns. Edit any row, then save all changes as a new group."
-      >
-        <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-          {/* Group selector + action bar */}
-          <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
-            <select value={selectedGroup} onChange={(e) => setSelectedGroup(e.target.value)} style={{ minWidth: '200px' }}>
-              {groupedPatterns.map((g) => (
-                <option key={g.groupName} value={g.groupName}>{g.groupName} ({g.items.length})</option>
-              ))}
-            </select>
-
-            {hasEdits && (
-              <>
-                <button className="btn primary" onClick={() => { setNewGroupName(''); setErrors({}); setShowSaveAsGroupModal(true); }}>
-                  Save edits as new group
-                </button>
-                <button className="btn ghost" onClick={() => setRowEdits({})}>Discard edits</button>
-              </>
-            )}
-
-            <button className="btn secondary" style={{ marginLeft: 'auto' }} onClick={() => { setErrors({}); setShowAddPatternModal(true); }}>
-              Add pattern to group
-            </button>
+      {groupedPatterns.length === 0 ? (
+        <Panel>
+          <p className="empty">No pattern groups yet. Use the Pattern Builder to generate and save patterns.</p>
+        </Panel>
+      ) : (
+        <Panel>
+          {/* ── Group selector + action row ── */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+              <select
+                value={selectedGroup}
+                onChange={(e) => setSelectedGroup(e.target.value)}
+                style={{ fontSize: '0.85rem', padding: '0.3rem 0.5rem' }}
+              >
+                {groupedPatterns.map((g) => (
+                  <option key={g.groupName} value={g.groupName}>{g.groupName} ({g.items.length})</option>
+                ))}
+              </select>
+              <span style={{ fontSize: '0.78rem', color: 'var(--muted, #64748b)' }}>
+                {activeGroup?.items.length ?? 0} pattern{activeGroup?.items.length !== 1 ? 's' : ''}
+              </span>
+            </div>
+            <button className="btn ghost" style={{ fontSize: '0.82rem' }} onClick={() => openAdd(activeGroup?.groupName)}>+ Add pattern</button>
           </div>
 
-          {hasEdits && (
-            <div className="tag warning" style={{ alignSelf: 'flex-start' }}>
-              Unsaved edits — click "Save edits as new group" to persist
-            </div>
-          )}
-
-          {/* Patterns table */}
-          {activeGroup ? (
-            <div style={{ overflowX: 'auto' }}>
-              <table className="data-table">
-                <thead>
-                  <tr>
-                    <th>Pattern name</th>
-                    <th>Type</th>
-                    <th>Status</th>
-                    <th>Mode</th>
-                    <th>Confidence</th>
-                    <th>Rule (JSON)</th>
-                    <th></th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {activeGroup.items.map((p) => {
-                    const edits = rowEdits[p.pattern_id] || {};
-                    const dirty = Object.keys(edits).length > 0;
-                    const rowStyle = dirty ? { background: 'var(--warning-bg, #fffbeb)' } : {};
-                    return (
-                      <tr key={p.pattern_id} style={rowStyle}>
-                        <td>
-                          <input
-                            style={{ width: '100%' }}
-                            value={edits.pattern_name ?? p.pattern_name}
-                            onChange={(e) => updateRowEdit(p.pattern_id, 'pattern_name', e.target.value)}
-                          />
-                        </td>
-                        <td>
-                          <input
-                            style={{ width: '90px' }}
-                            value={edits.pattern_type ?? p.pattern_type}
-                            onChange={(e) => updateRowEdit(p.pattern_id, 'pattern_type', e.target.value)}
-                          />
-                        </td>
-                        <td>
-                          <select value={edits.status ?? p.status} onChange={(e) => updateRowEdit(p.pattern_id, 'status', e.target.value)}>
-                            <option>DRAFT</option><option>ACTIVE</option><option>INACTIVE</option>
-                          </select>
-                        </td>
-                        <td>
-                          <select value={edits.execution_mode ?? p.execution_mode} onChange={(e) => updateRowEdit(p.pattern_id, 'execution_mode', e.target.value)}>
-                            <option value="SUGGESTION">SUGGESTION</option>
-                            <option value="AUTO_CLOSE">AUTO_CLOSE</option>
-                            <option value="MANUAL">MANUAL</option>
-                            <option value="LEDGER_OR_IN_TRANSIT">LEDGER_OR_IN_TRANSIT</option>
-                          </select>
-                        </td>
-                        <td>
-                          <input
-                            type="number" min="0" max="1" step="0.01"
-                            style={{ width: '70px' }}
-                            value={edits.confidence_threshold ?? p.confidence_threshold}
-                            onChange={(e) => updateRowEdit(p.pattern_id, 'confidence_threshold', Number(e.target.value))}
-                          />
-                        </td>
-                        <td><code style={{ fontSize: '0.72rem' }}>{JSON.stringify(p.pattern_rule || {})}</code></td>
-                        <td>
-                          <button className="btn ghost" onClick={() => onDelete(p.pattern_id)}>Remove</button>
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
+          {activeGroup?.items.length === 0 ? (
+            <p className="empty">No patterns in this group.</p>
           ) : (
-            <p className="empty">No groups yet. Click "Add new group" to create one.</p>
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Mode</th>
+                  <th title="Minimum match confidence required for this pattern to accept a reconciliation match" style={{ cursor: 'help' }}>Confidence ↑</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeGroup?.items.map((p) => (
+                  <tr key={p.pattern_id}>
+                    <td style={{ fontWeight: 500 }}>{p.pattern_name}</td>
+                    <td><Tag tone={statusTone(p.status)}>{fmtLabel(p.status)}</Tag></td>
+                    <td><Tag tone={modeTone(p.execution_mode)}>{fmtLabel(p.execution_mode)}</Tag></td>
+                    <td style={{ color: 'var(--muted, #64748b)', fontSize: '0.85rem' }} title="Minimum match confidence required for this pattern to accept a reconciliation match">{Math.round((p.confidence_threshold ?? 0.8) * 100)}%</td>
+                    <td>
+                      <button className="btn ghost" onClick={() => onCreate({ pattern_name: `Copy of ${p.pattern_name}`, pattern_type: p.pattern_type, pattern_group: p.pattern_group, pattern_rule: p.pattern_rule, status: p.status, execution_mode: p.execution_mode, confidence_threshold: p.confidence_threshold, approved_by: p.approved_by ?? 'prototype_user' })}>Duplicate</button>
+                      <button className="btn ghost" onClick={() => onDelete(p.pattern_id)}>Remove</button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
           )}
-        </div>
-      </Panel>
-
-      {/* ── Save edits as new group modal ── */}
-      {showSaveAsGroupModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-          <div style={{ background: 'white', padding: '1.5rem', borderRadius: '12px', width: 'min(480px, 90vw)', boxShadow: '0 12px 28px rgba(0,0,0,0.2)' }}>
-            <h3 style={{ margin: '0 0 0.5rem' }}>Save edits as new group</h3>
-            <p className="muted" style={{ marginBottom: '1rem' }}>
-              All {activeGroup?.items.length} patterns from <strong>{selectedGroup}</strong> will be copied with your edits into the new group.
-            </p>
-            <label>New group name</label>
-            <input
-              autoFocus
-              value={newGroupName}
-              placeholder="e.g. Invoice Rules v2"
-              onChange={(e) => setNewGroupName(e.target.value)}
-              style={{ width: '100%', marginTop: '0.35rem', marginBottom: '0.75rem' }}
-            />
-            {errors.newGroup && <p className="error-text">{errors.newGroup}</p>}
-            <div className="button-row">
-              <button className="btn secondary" onClick={() => setShowSaveAsGroupModal(false)}>Cancel</button>
-              <button className="btn primary" onClick={saveAsNewGroup}>Create new group</button>
-            </div>
-          </div>
-        </div>
+        </Panel>
       )}
 
-      {/* ── Add pattern to existing group modal ── */}
-      {showAddPatternModal && (
+      {/* ── Add / create pattern modal ── */}
+      {showAddModal && (
         <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-          <div style={{ background: 'white', padding: '1.25rem', borderRadius: '12px', width: 'min(560px, 90vw)', boxShadow: '0 12px 28px rgba(0,0,0,0.2)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.8rem' }}>
-              <strong>Add pattern to &ldquo;{selectedGroup}&rdquo;</strong>
-              <button className="btn ghost" onClick={() => setShowAddPatternModal(false)}>Close</button>
-            </div>
+          <div style={{ background: 'white', padding: '1.5rem', borderRadius: '12px', width: 'min(520px, 92vw)', boxShadow: '0 12px 28px rgba(0,0,0,0.2)' }}>
+            <h3 style={{ margin: '0 0 1rem' }}>Add pattern</h3>
             <div className="form-grid">
-              <label>Name</label>
-              <input value={addPatternDraft.pattern_name} onChange={(e) => setAddPatternDraft((d) => ({ ...d, pattern_name: e.target.value }))} />
-              <label>Type</label>
-              <input value={addPatternDraft.pattern_type} onChange={(e) => setAddPatternDraft((d) => ({ ...d, pattern_type: e.target.value }))} />
+              <label>Group</label>
+              <input value={addToGroup} onChange={(e) => setAddToGroup(e.target.value)} placeholder="Group name" />
+              <label>Pattern name</label>
+              <input autoFocus value={addDraft.pattern_name} placeholder="e.g. Exact end-to-end match" onChange={(e) => setAddDraft((d) => ({ ...d, pattern_name: e.target.value }))} />
               <label>Status</label>
-              <select value={addPatternDraft.status} onChange={(e) => setAddPatternDraft((d) => ({ ...d, status: e.target.value }))}>
-                <option>DRAFT</option><option>ACTIVE</option><option>INACTIVE</option>
+              <select value={addDraft.status} onChange={(e) => setAddDraft((d) => ({ ...d, status: e.target.value }))}>
+                <option value="DRAFT">Draft</option>
+                <option value="ACTIVE">Active</option>
+                <option value="INACTIVE">Inactive</option>
               </select>
               <label>Execution mode</label>
-              <select value={addPatternDraft.execution_mode} onChange={(e) => setAddPatternDraft((d) => ({ ...d, execution_mode: e.target.value }))}>
-                <option value="SUGGESTION">SUGGESTION</option>
-                <option value="AUTO_CLOSE">AUTO_CLOSE</option>
-                <option value="MANUAL">MANUAL</option>
-                <option value="LEDGER_OR_IN_TRANSIT">LEDGER_OR_IN_TRANSIT</option>
+              <select value={addDraft.execution_mode} onChange={(e) => setAddDraft((d) => ({ ...d, execution_mode: e.target.value }))}>
+                {MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
               </select>
               <label>Confidence</label>
-              <input type="number" min="0" max="1" step="0.01" value={addPatternDraft.confidence_threshold} onChange={(e) => setAddPatternDraft((d) => ({ ...d, confidence_threshold: Number(e.target.value) }))} />
-              <label>Approved by</label>
-              <input value={addPatternDraft.approved_by} onChange={(e) => setAddPatternDraft((d) => ({ ...d, approved_by: e.target.value }))} />
+              <input type="number" min="0" max="1" step="0.01" value={addDraft.confidence_threshold} onChange={(e) => setAddDraft((d) => ({ ...d, confidence_threshold: Number(e.target.value) }))} />
               <label>Rule JSON</label>
-              <textarea rows={4} value={addPatternDraft.pattern_rule} onChange={(e) => setAddPatternDraft((d) => ({ ...d, pattern_rule: e.target.value }))} />
-              {errors.addPattern && <p className="error-text">{errors.addPattern}</p>}
-              <div className="button-row">
-                <button className="btn secondary" onClick={() => setShowAddPatternModal(false)}>Cancel</button>
-                <button className="btn primary" onClick={saveAddPattern}>Add pattern</button>
-              </div>
+              <textarea rows={4} value={addDraft.pattern_rule} onChange={(e) => setAddDraft((d) => ({ ...d, pattern_rule: e.target.value }))} style={{ fontFamily: 'monospace', fontSize: '0.82rem' }} />
             </div>
-          </div>
-        </div>
-      )}
-
-      {/* ── Add new group modal ── */}
-      {showNewGroupModal && (
-        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
-          <div style={{ background: 'white', padding: '1.25rem', borderRadius: '12px', width: 'min(560px, 90vw)', boxShadow: '0 12px 28px rgba(0,0,0,0.2)' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.8rem' }}>
-              <strong>Create new group</strong>
-              <button className="btn ghost" onClick={() => setShowNewGroupModal(false)}>Close</button>
-            </div>
-            <div className="form-grid">
-              <label>Group name</label>
-              <input autoFocus value={newGroupDraft.group_name} placeholder="e.g. Invoice Rules" onChange={(e) => setNewGroupDraft((d) => ({ ...d, group_name: e.target.value }))} />
-              <label>First pattern name</label>
-              <input value={newGroupDraft.pattern_name} onChange={(e) => setNewGroupDraft((d) => ({ ...d, pattern_name: e.target.value }))} />
-              <label>Type</label>
-              <input value={newGroupDraft.pattern_type} onChange={(e) => setNewGroupDraft((d) => ({ ...d, pattern_type: e.target.value }))} />
-              <label>Status</label>
-              <select value={newGroupDraft.status} onChange={(e) => setNewGroupDraft((d) => ({ ...d, status: e.target.value }))}>
-                <option>DRAFT</option><option>ACTIVE</option>
-              </select>
-              <label>Execution mode</label>
-              <select value={newGroupDraft.execution_mode} onChange={(e) => setNewGroupDraft((d) => ({ ...d, execution_mode: e.target.value }))}>
-                <option value="SUGGESTION">SUGGESTION</option>
-                <option value="AUTO_CLOSE">AUTO_CLOSE</option>
-                <option value="MANUAL">MANUAL</option>
-                <option value="LEDGER_OR_IN_TRANSIT">LEDGER_OR_IN_TRANSIT</option>
-              </select>
-              <label>Confidence</label>
-              <input type="number" min="0" max="1" step="0.01" value={newGroupDraft.confidence_threshold} onChange={(e) => setNewGroupDraft((d) => ({ ...d, confidence_threshold: Number(e.target.value) }))} />
-              <label>Approved by</label>
-              <input value={newGroupDraft.approved_by} onChange={(e) => setNewGroupDraft((d) => ({ ...d, approved_by: e.target.value }))} />
-              <label>Rule JSON</label>
-              <textarea rows={4} value={newGroupDraft.pattern_rule} onChange={(e) => setNewGroupDraft((d) => ({ ...d, pattern_rule: e.target.value }))} />
-              {errors.newGroupModal && <p className="error-text">{errors.newGroupModal}</p>}
-              <div className="button-row">
-                <button className="btn secondary" onClick={() => setShowNewGroupModal(false)}>Cancel</button>
-                <button className="btn primary" onClick={saveNewGroup}>Create group</button>
-              </div>
+            {errors.add && <p className="error-text" style={{ marginTop: '0.5rem' }}>{errors.add}</p>}
+            <div className="button-row" style={{ marginTop: '1rem' }}>
+              <button className="btn secondary" onClick={() => setShowAddModal(false)}>Cancel</button>
+              <button className="btn primary" onClick={commitAdd}>Add pattern</button>
             </div>
           </div>
         </div>
@@ -847,22 +690,23 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
   );
 }
 
-function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSuggestPatterns, onSave, onSaveBulk, proposedPatterns, setProposedPatterns }) {
+function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveBulk, proposedPatterns, setProposedPatterns, patterns }) {
   const [camtFile, setCamtFile] = useState(null);
   const [otherFile, setOtherFile] = useState(null);
   const [mappingResult, setMappingResult] = useState(null);
   const [patternResult, setPatternResult] = useState(null);
-  const [providedRegexMap, setProvidedRegexMap] = useState('');
-  const [selectedPattern, setSelectedPattern] = useState(null);
   const [error, setError] = useState('');
   const [loadingPattern, setLoadingPattern] = useState(false);
   const [loadingMapping, setLoadingMapping] = useState(false);
+  const [addToGroup, setAddToGroup] = useState('');
+  const [addToGroupStatus, setAddToGroupStatus] = useState(null);
+  const [resultTab, setResultTab] = useState('format');
 
   // Save-as-group state
   const today = new Date().toISOString().slice(0, 10);
   const [groupName, setGroupName] = useState(`auto-${today}`);
   const [selectedGroupPatterns, setSelectedGroupPatterns] = useState(new Set());
-  const [bulkSaveStatus, setBulkSaveStatus] = useState(null); // null | {loading} | {success} | {error}
+  const [bulkSaveStatus, setBulkSaveStatus] = useState(null);
 
   // Auto-select all patterns when a new analysis result arrives
   useEffect(() => {
@@ -875,93 +719,116 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSuggestPatter
     setBulkSaveStatus(null);
   }, [patternResult]);
 
-  const loadMapping = async () => {
+  const resetFiles = () => { setMappingResult(null); setPatternResult(null); setProposedPatterns([]); setError(''); };
+
+  const identifyFormat = async () => {
     if (!camtFile || !otherFile) return;
     setError('');
+    setMappingResult(null);
+    setPatternResult(null);
+    setProposedPatterns([]);
     setLoadingMapping(true);
     try {
-      const result = await onGenerateMapping(camtFile, otherFile);
-      setMappingResult(result);
+      setMappingResult(await onGenerateMapping(camtFile, otherFile));
+      setResultTab('format');
     } catch (err) {
-      setError(err.message || 'Unable to generate regex mapping');
-      setMappingResult(null);
+      setError(err.message || 'Unable to identify file format');
     } finally {
       setLoadingMapping(false);
     }
   };
 
-  const buildPatterns = async () => {
+  const identifyPatterns = async () => {
     if (!camtFile || !otherFile) return;
     setError('');
     setLoadingPattern(true);
     try {
-      // Use field_extractors from the mapping step when no manual override is typed
-      let regexMap = null;
-      if (providedRegexMap) {
-        try { regexMap = JSON.parse(providedRegexMap); } catch (_) { /* ignore */ }
-      } else if (mappingResult) {
-        regexMap = mappingResult.llm_output?.field_extractors
-          || mappingResult.format_info?.suggested_regex_map
-          || null;
-      }
+      const regexMap = mappingResult?.llm_output?.field_extractors
+        || mappingResult?.format_info?.suggested_regex_map
+        || null;
       const result = await onGeneratePatterns(camtFile, otherFile, regexMap);
       setPatternResult(result);
-      // Flatten deterministic + LLM patterns for the candidates table
       const allPats = [
         ...(result.deterministic_patterns || []).map(p => ({
           pattern_name: p.pattern_name,
           mapping_key: p.rule,
-          regex_inferred: {},
           pattern_rule: { fields: p.fields_used || [], mode: 'DETERMINISTIC' },
         })),
         ...(result.llm_patterns || []).map(p => ({
           pattern_name: p.pattern_name,
           mapping_key: p.rule_id,
-          regex_inferred: {},
           pattern_rule: { fields: p.fields_used || [], mode: 'LLM_SUGGESTED', tolerance_spec: p.tolerance_spec },
         })),
       ];
-      setProposedPatterns(allPats.length > 0 ? allPats : [result]);
-      setSelectedPattern(allPats[0] || result);
+      setProposedPatterns(allPats.length > 0 ? allPats : []);
+      setResultTab('patterns');
     } catch (err) {
-      setError(err.message || 'Unable to generate reconciliation pattern');
-      setPatternResult(null);
+      setError(err.message || 'Unable to identify patterns');
     } finally {
       setLoadingPattern(false);
     }
   };
 
-  const suggestPatterns = async () => {
-    if (!camtFile || !otherFile) return;
-    setError('');
-    setLoadingPattern(true);
-    try {
-      const result = await onSuggestPatterns(camtFile, otherFile);
-      // result contains examples, prompt and llm_output
-      const suggestions = (result.llm_output && result.llm_output.regex_map) ? result.llm_output : result;
-      setPatternResult(suggestions);
-      setProposedPatterns([suggestions]);
-      setSelectedPattern(suggestions);
-    } catch (err) {
-      setError(err.message || 'Unable to generate LLM suggestions');
-      setPatternResult(null);
-    } finally {
-      setLoadingPattern(false);
-    }
+  const DET_EXEC = { EXACT_E2E: 'AUTO_CLOSE', EXACT_PMT_REF: 'AUTO_CLOSE', EXACT_INVOICE: 'SUGGESTION', AMOUNT_DIRECTION: 'SUGGESTION' };
+  const DET_CONF = { EXACT_E2E: 0.95, EXACT_PMT_REF: 0.92, EXACT_INVOICE: 0.90, AMOUNT_DIRECTION: 0.80 };
+  const DET_REASON = {
+    EXACT_E2E:        (n) => `Exact end-to-end ID match across ${n} transaction${n !== 1 ? 's' : ''} — unique identifier, collision risk near zero → 95%`,
+    EXACT_PMT_REF:    (n) => `Exact payment reference match across ${n} transaction${n !== 1 ? 's' : ''} — structured reference, very low false-positive rate → 92%`,
+    EXACT_INVOICE:    (n) => `Exact invoice number match across ${n} transaction${n !== 1 ? 's' : ''} — reliable but occasionally reused → 90%`,
+    AMOUNT_DIRECTION: (n) => `Amount + debit/credit direction match across ${n} transaction${n !== 1 ? 's' : ''} — amounts can coincide across parties, higher ambiguity → 80%`,
   };
 
-  const savePattern = async () => {
-    if (!selectedPattern) return;
-    await onSave({
-      pattern_name: selectedPattern.pattern_name || 'Generated pattern',
-      pattern_type: 'AUTO_GENERATED',
-      pattern_version: '1.0',
-      pattern_rule: selectedPattern.pattern_rule,
-      status: 'DRAFT',
-      execution_mode: 'SUGGESTION',
-      confidence_threshold: 0.8,
-      approved_by: 'prototype_user',
+  const allSaveable = patternResult ? [
+    ...(patternResult.deterministic_patterns || []).map(p => ({
+      key: `det-${p.rule}`, label: p.pattern_name, origin: 'Deterministic', originTone: 'success',
+      fields: p.fields_used || [], mode: DET_EXEC[p.rule] || 'SUGGESTION', status: 'ACTIVE',
+      reason: DET_REASON[p.rule] ? DET_REASON[p.rule](p.matched_count) : `Matched ${p.matched_count} transaction(s)`,
+      toPayload: () => ({
+        pattern_name: p.pattern_name, pattern_type: 'FILE_DETECTED', pattern_version: '1.0',
+        pattern_rule: { fields: p.fields_used || [], mode: 'AUTO' },
+        status: 'ACTIVE', execution_mode: DET_EXEC[p.rule] || 'SUGGESTION',
+        confidence_threshold: DET_CONF[p.rule] ?? 0.80, approved_by: 'prototype_user',
+      }),
+    })),
+    ...(patternResult.llm_patterns || []).map((p, i) => ({
+      key: `llm-${p.rule_id || i}`, label: p.pattern_name, origin: 'LLM suggested', originTone: 'warning',
+      fields: p.fields_used || [], mode: 'SUGGESTION', status: 'DRAFT',
+      reason: p.description || `AI-proposed fuzzy pattern — lower certainty, requires human review → 75%`,
+      toPayload: () => ({
+        pattern_name: p.pattern_name, pattern_type: 'LLM_SUGGESTED', pattern_version: '1.0',
+        pattern_rule: { fields: p.fields_used || [], mode: 'SUGGESTION', ...(p.tolerance_spec || {}) },
+        status: 'DRAFT', execution_mode: 'SUGGESTION',
+        confidence_threshold: 0.75, approved_by: 'prototype_user',
+      }),
+    })),
+  ] : [];
+
+  const allSelected = allSaveable.length > 0 && allSaveable.every(i => selectedGroupPatterns.has(i.key));
+  const someSelected = allSaveable.some(i => selectedGroupPatterns.has(i.key));
+
+  const toggleAll = () => {
+    if (allSelected) setSelectedGroupPatterns(new Set());
+    else setSelectedGroupPatterns(new Set(allSaveable.map(i => i.key)));
+  };
+  const toggleOne = (key) => {
+    setSelectedGroupPatterns(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
     });
+  };
+
+  const saveBulk = async () => {
+    if (!groupName.trim()) { setBulkSaveStatus({ error: 'Group name cannot be blank.' }); return; }
+    const toSave = allSaveable.filter(i => selectedGroupPatterns.has(i.key)).map(i => i.toPayload());
+    if (!toSave.length) { setBulkSaveStatus({ error: 'Select at least one pattern.' }); return; }
+    setBulkSaveStatus({ loading: true });
+    try {
+      const res = await onSaveBulk(groupName.trim(), toSave);
+      setBulkSaveStatus({ success: `Saved ${res.created} pattern(s) to group "${res.group_name}".${res.skipped > 0 ? ` (${res.skipped} skipped — already existed)` : ''}` });
+    } catch (err) {
+      setBulkSaveStatus({ error: err.message || 'Failed to save patterns.' });
+    }
   };
 
   return (
@@ -969,507 +836,229 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSuggestPatter
       <div className="screen-title">
         <div>
           <div className="eyebrow">Pattern builder</div>
-          <h1>Upload CAMT and text/PSR, infer regex, then save generated patterns</h1>
-          <p>Use the CAMT/PSR flow to generate a candidate pattern, edit it, and persist it into the registry.</p>
+          <h1>Identify file format, extract patterns and save as a group</h1>
+          <p>Upload a CAMT and PSR file — the engine detects the format, extracts regex, then identifies reconciliation patterns ready to save.</p>
         </div>
       </div>
 
-      <div className="grid two">
-        <Panel title="Upload source files" subtitle="Choose the bank CAMT file and the corresponding settlement/text file.">
-          <div className="form-grid">
-            <label>CAMT file</label>
-            <input type="file" accept=".xml,application/xml,text/xml" onChange={(e) => setCamtFile(e.target.files?.[0] || null)} />
-            <label>Other file</label>
-            <input type="file" accept=".txt,.dat,.psr,text/plain,.xml" onChange={(e) => setOtherFile(e.target.files?.[0] || null)} />
-            <label>Optional regex override JSON</label>
-            <textarea rows={4} value={providedRegexMap} onChange={(e) => setProvidedRegexMap(e.target.value)} placeholder='{"pmt_ref":"\\d+"}' />
-            <div className="button-row">
-              <button className="btn secondary" onClick={loadMapping} disabled={!camtFile || !otherFile || loadingMapping}>{loadingMapping ? 'Analysing…' : 'Generate regex mapping'}</button>
-              <button className="btn ghost" onClick={suggestPatterns} disabled={!camtFile || !otherFile || loadingPattern}>{loadingPattern ? 'Suggesting…' : 'Find missing-ref suggestions (LLM)'}</button>
-              <button className="btn primary" onClick={buildPatterns} disabled={!camtFile || !otherFile || loadingPattern}>{loadingPattern ? 'Generating…' : 'Generate pattern'}</button>
-            </div>
-            {error && <p className="error-text">{error}</p>}
-          </div>
-        </Panel>
-
-        <Panel title="Reconciliation pattern results" subtitle="Match statistics and active rules from the two-phase analysis.">
-          {patternResult?.stats ? (() => {
-            const s = patternResult.stats;
-            const rate = Math.round((s.match_rate || 0) * 100);
-            const rateTone = rate >= 80 ? 'success' : rate >= 50 ? 'warning' : 'danger';
-            return (
-              <>
-                <div className="metric-row">
-                  <Metric label="CAMT entries" value={s.camt_total ?? '—'} />
-                  <Metric label="Flat-file records" value={s.flat_total ?? '—'} />
-                  <Metric label="Matched" value={s.camt_matched ?? '—'} tone="success" />
-                  <Metric label="Unmatched" value={s.camt_unmatched ?? '—'} tone={s.camt_unmatched > 0 ? 'warning' : 'success'} />
-                  <Metric label="Match rate" value={`${rate}%`} tone={rateTone} hint="camt entries matched" />
-                  <Metric label="LLM patterns" value={patternResult.llm_patterns?.length ?? 0} tone={patternResult.llm_available ? 'success' : 'neutral'} />
-                </div>
-                {patternResult.llm_explanation && (
-                  <p style={{ marginTop: '0.75rem', fontSize: '0.83rem', color: 'var(--text-muted, #888)' }}>
-                    {patternResult.llm_explanation}
-                  </p>
-                )}
-              </>
-            );
-          })() : (
-            <p className="empty">Run “Generate pattern” to see results.</p>
-          )}
-          {patternResult && (
-            <div className="button-row" style={{ marginTop: '1rem' }}>
-              <button className="btn primary" onClick={savePattern}>Save generated pattern</button>
-            </div>
-          )}
-        </Panel>
-      </div>
-
-      {mappingResult && (
-        <Panel
-          title="File Format Detection"
-          subtitle={
-            mappingResult.llm_available
-              ? 'LLM-generated field extractors and structural detection'
-              : 'Structural detection from matched CAMT / flat-file pairs'
-          }
-        >
-          {/* ── summary metrics ───────────────────────────────── */}
-          {(() => {
-            const conf = mappingResult.pattern_confidence;
-            const confTone = conf >= 80 ? 'success' : conf >= 50 ? 'warning' : 'danger';
-            const llmEx = mappingResult.llm_output?.field_extractors;
-            const fieldConfidence = llmEx && Object.keys(llmEx).length > 0
-              ? Math.round(
-                  Object.values(llmEx)
-                    .map(f => f.confidence === 'high' ? 100 : f.confidence === 'medium' ? 60 : 30)
-                    .reduce((a, b) => a + b, 0) / Object.keys(llmEx).length
-                )
-              : null;
-            const fcTone = fieldConfidence == null ? 'neutral' : fieldConfidence >= 80 ? 'success' : fieldConfidence >= 50 ? 'warning' : 'danger';
-            return (
-              <div className="metric-row">
-                <Metric
-                  label="Format"
-                  value={mappingResult.format_info?.detected_type ?? '—'}
-                  tone={
-                    mappingResult.format_info?.detected_type === 'FIXED_WIDTH' ? 'success'
-                      : mappingResult.format_info?.detected_type === 'DELIMITED' ? 'info'
-                      : 'neutral'
-                  }
-                />
-                <Metric label="Record prefix" value={mappingResult.format_info?.record_prefix ?? '—'} />
-                <Metric label="Delimiter" value={mappingResult.format_info?.delimiter ?? 'none'} />
-                <Metric label="Matched lines" value={mappingResult.match_count ?? '—'} hint={`of ${mappingResult.camt_ref_index_size ?? '?'} CAMT identifiers`} />
-                <Metric
-                  label="Pattern confidence"
-                  value={conf != null ? `${conf}%` : '—'}
-                  hint="match ratio × structural clarity"
-                  tone={conf != null ? confTone : 'neutral'}
-                />
-                <Metric
-                  label="LLM samples sent"
-                  value={mappingResult.llm_samples_sent ?? mappingResult.examples?.length ?? '—'}
-                  hint="entry pairs in prompt"
-                />
-                {fieldConfidence != null && (
-                  <Metric
-                    label="Field confidence"
-                    value={`${fieldConfidence}%`}
-                    hint="avg across extracted fields"
-                    tone={fcTone}
-                  />
-                )}
-              </div>
-            );
-          })()}
-
-          {/* ── field extractors ──────────────────────────────── */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '1.5rem 0 0.5rem' }}>
-            <h4 style={{ margin: 0 }}>Field extractors</h4>
-            {mappingResult.llm_available
-              ? <Tag tone="success">LLM</Tag>
-              : <Tag tone="neutral">structural</Tag>}
-          </div>
-          <div className="table-wrap compact tight">
-            <table>
-              <thead>
-                <tr>
-                  <th>Field</th>
-                  <th>Regex</th>
-                  <th>Maps to CAMT</th>
-                  <th>Confidence</th>
-                </tr>
-              </thead>
-              <tbody>
-                {(() => {
-                  const llmEx = mappingResult.llm_output?.field_extractors;
-                  const structural = mappingResult.format_info?.suggested_regex_map;
-                  if (llmEx && Object.keys(llmEx).length > 0) {
-                    return Object.entries(llmEx).map(([field, info]) => (
-                      <tr key={field}>
-                        <td><code>{field}</code></td>
-                        <td><pre style={{ margin: 0, fontSize: '0.73rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{info.regex}</pre></td>
-                        <td><code style={{ fontSize: '0.78rem' }}>{info.maps_to_camt}</code></td>
-                        <td><Tag tone={info.confidence === 'high' ? 'success' : info.confidence === 'medium' ? 'warning' : 'danger'}>{info.confidence}</Tag></td>
-                      </tr>
-                    ));
-                  }
-                  if (structural && Object.keys(structural).length > 0) {
-                    return Object.entries(structural).map(([field, pattern]) => (
-                      <tr key={field}>
-                        <td><code>{field}</code></td>
-                        <td><pre style={{ margin: 0, fontSize: '0.73rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{pattern}</pre></td>
-                        <td>—</td>
-                        <td><Tag tone="neutral">structural</Tag></td>
-                      </tr>
-                    ));
-                  }
-                  return (
-                    <tr>
-                      <td colSpan={4} className="empty">
-                        {mappingResult.llm_error
-                          ? `LLM unavailable — ${mappingResult.llm_error}`
-                          : 'No field extractors available.'}
-                      </td>
-                    </tr>
-                  );
-                })()}
-              </tbody>
-            </table>
-          </div>
-
-          {/* ── LLM layout explanation ────────────────────────── */}
-          {mappingResult.llm_output?.explanation && (
-            <p style={{ marginTop: '1rem', color: 'var(--text-muted, #888)', fontSize: '0.83rem' }}>
-              <strong>Layout: </strong>{mappingResult.llm_output.explanation}
-            </p>
-          )}
-
-          {/* ── matched CAMT / flat-file pairs ────────────────── */}
-          {mappingResult.examples?.length > 0 && (
-            <>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', margin: '1.5rem 0 0.5rem' }}>
-                <h4 style={{ margin: 0 }}>Matched entry pairs</h4>
-                <Tag tone="neutral">{mappingResult.examples.length}</Tag>
-              </div>
-              <div className="table-wrap compact tight">
-                <table>
-                  <thead>
-                    <tr>
-                      <th>CAMT entry</th>
-                      <th>Identifiers found</th>
-                      <th>Matched flat-file line</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {mappingResult.examples.map((ex, idx) => (
-                      <tr key={idx}>
-                        <td>
-                          <code style={{ fontWeight: 600 }}>{ex.ntry_ref}</code>
-                          {ex.pmt_ref && <div style={{ fontSize: '0.74rem', opacity: 0.7 }}>PMT-REF: {ex.pmt_ref}</div>}
-                          {ex.invoice && <div style={{ fontSize: '0.74rem', opacity: 0.7 }}>INV: {ex.invoice}</div>}
-                          <div style={{ fontSize: '0.74rem', opacity: 0.7 }}>{ex.amount} {ex.currency} · {ex.direction}</div>
-                        </td>
-                        <td>
-                          {Object.entries(ex.refs || {}).map(([tag, val]) => (
-                            <div key={tag} style={{ fontSize: '0.74rem' }}>
-                              <span style={{ opacity: 0.55 }}>{tag}: </span><code>{val}</code>
-                            </div>
-                          ))}
-                        </td>
-                        <td>
-                          {ex.matched_text?.length > 0 ? (
-                            <pre style={{ margin: 0, fontSize: '0.68rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all', maxWidth: '48ch' }}>
-                              {ex.matched_text[0]}
-                            </pre>
-                          ) : (
-                            <span className="empty">no match</span>
-                          )}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </>
-          )}
-        </Panel>
-      )}
-
-      {/* ── Deterministic pattern results ─────────────────────── */}
-      {patternResult?.deterministic_patterns?.length > 0 && (
-        <Panel title="Deterministic patterns" subtitle="Rules that fired — each entry matched at most once, in priority order.">
-          <div className="table-wrap compact tight">
-            <table>
-              <thead>
-                <tr>
-                  <th>Rule</th>
-                  <th>Pattern name</th>
-                  <th>Fields used</th>
-                  <th>Matched</th>
-                  <th>Sample pair</th>
-                </tr>
-              </thead>
-              <tbody>
-                {patternResult.deterministic_patterns.map((p) => (
-                  <tr key={p.rule}>
-                    <td><Tag tone="success">{p.rule}</Tag></td>
-                    <td>{p.pattern_name}</td>
-                    <td>{(p.fields_used || []).map(f => <code key={f} style={{ marginRight: '0.25rem' }}>{f}</code>)}</td>
-                    <td style={{ fontWeight: 600 }}>{p.matched_count}</td>
-                    <td style={{ fontSize: '0.74rem' }}>
-                      {p.sample_pairs?.[0] ? (
-                        <span>
-                          <code>{p.sample_pairs[0].camt_id}</code>
-                          {' ↔ '}
-                          <code>{p.sample_pairs[0].flat_tx_id || p.sample_pairs[0].flat_reference || `line ${p.sample_pairs[0].flat_line_no}`}</code>
-                        </span>
-                      ) : '—'}
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-
-          {patternResult.all_deterministic_rules?.filter(r => r.matched_count === 0).length > 0 && (
-            <details style={{ marginTop: '0.75rem', fontSize: '0.8rem', color: 'var(--text-muted,#888)' }}>
-              <summary style={{ cursor: 'pointer' }}>Rules that did not fire ({patternResult.all_deterministic_rules.filter(r => r.matched_count === 0).length})</summary>
-              <ul style={{ margin: '0.25rem 0 0 1rem' }}>
-                {patternResult.all_deterministic_rules.filter(r => r.matched_count === 0).map(r => (
-                  <li key={r.rule}>{r.pattern_name} — <em>0 matches</em></li>
-                ))}
-              </ul>
-            </details>
-          )}
-        </Panel>
-      )}
-
-      {/* ── LLM-suggested patterns for unmatched ────────────── */}
-      {patternResult && (patternResult.llm_patterns?.length > 0 || patternResult.unmatched_count > 0) && (
-        <Panel
-          title={`LLM-suggested patterns for unmatched (${patternResult.unmatched_count ?? 0})`}
-          subtitle={patternResult.llm_available ? 'Fuzzy / tolerance-based patterns proposed by LLM' : 'LLM not configured — patterns below are placeholders'}
-        >
-          {patternResult.llm_patterns?.length > 0 ? (
-            <div className="table-wrap compact tight">
-              <table>
-                <thead>
-                  <tr>
-                    <th>Rule ID</th>
-                    <th>Pattern name</th>
-                    <th>Fields used</th>
-                    <th>Tolerance</th>
-                    <th>Coverage</th>
-                    <th>Confidence</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {patternResult.llm_patterns.map((p, i) => (
-                    <tr key={p.rule_id || i}>
-                      <td><code>{p.rule_id}</code></td>
-                      <td>{p.pattern_name}</td>
-                      <td>{(p.fields_used || []).map(f => <code key={f} style={{ marginRight: '0.25rem' }}>{f}</code>)}</td>
-                      <td style={{ fontSize: '0.73rem' }}>
-                        {p.tolerance_spec ? <pre style={{ margin: 0 }}>{JSON.stringify(p.tolerance_spec)}</pre> : '—'}
-                      </td>
-                      <td><Tag tone={p.estimated_coverage === 'high' ? 'success' : p.estimated_coverage === 'medium' ? 'warning' : 'neutral'}>{p.estimated_coverage ?? '—'}</Tag></td>
-                      <td><Tag tone={p.confidence === 'high' ? 'success' : p.confidence === 'medium' ? 'warning' : 'danger'}>{p.confidence ?? '—'}</Tag></td>
-                    </tr>
-                  ))}
-                </tbody>
-              </table>
-            </div>
-          ) : (
-            <p className="empty">
-              {patternResult.llm_error
-                ? `LLM unavailable — ${patternResult.llm_error}`
-                : `${patternResult.unmatched_count} unmatched entries. Configure LLM to get fuzzy pattern suggestions.`}
-            </p>
-          )}
-
-          {patternResult.unmatched_samples?.length > 0 && (
-            <details style={{ marginTop: '1rem' }}>
-              <summary style={{ cursor: 'pointer', fontSize: '0.83rem' }}>Unmatched CAMT samples ({patternResult.unmatched_samples.length})</summary>
-              <div className="table-wrap compact tight" style={{ marginTop: '0.5rem' }}>
-                <table>
-                  <thead><tr><th>CAMT ID</th><th>Amount</th><th>Direction</th><th>Counterparty</th><th>Remittance</th></tr></thead>
-                  <tbody>
-                    {patternResult.unmatched_samples.map((s, i) => (
-                      <tr key={i}>
-                        <td><code>{s.camt_id}</code></td>
-                        <td>{s.amount} {s.currency}</td>
-                        <td>{s.direction}</td>
-                        <td style={{ fontSize: '0.78rem' }}>{s.counterparty}</td>
-                        <td style={{ fontSize: '0.75rem', maxWidth: '30ch', overflow: 'hidden', textOverflow: 'ellipsis' }}>{s.remittance}</td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            </details>
-          )}
-        </Panel>
-      )}
-
-      <Panel title="Proposed pattern candidates" subtitle="Select and edit candidate patterns before saving.">
-
-      {/* ── Save as pattern group ──────────────────────────── */}
-      {patternResult && ((patternResult.deterministic_patterns?.length ?? 0) + (patternResult.llm_patterns?.length ?? 0)) > 0 && (() => {
-        // Constants for converting analysis output → registry format
-        const DET_EXEC = { EXACT_E2E: 'AUTO_CLOSE', EXACT_PMT_REF: 'AUTO_CLOSE', EXACT_INVOICE: 'SUGGESTION', AMOUNT_DIRECTION: 'SUGGESTION' };
-        const DET_CONF = { EXACT_E2E: 0.95, EXACT_PMT_REF: 0.92, EXACT_INVOICE: 0.90, AMOUNT_DIRECTION: 0.80 };
-
-        const allSaveable = [
-          ...(patternResult.deterministic_patterns || []).map(p => ({
-            key: `det-${p.rule}`, label: p.pattern_name, badge: 'Deterministic', badgeTone: 'success',
-            toPayload: () => ({
-              pattern_name: p.pattern_name, pattern_type: 'FILE_DETECTED', pattern_version: '1.0',
-              pattern_rule: { fields: p.fields_used || [], mode: 'AUTO' },
-              status: 'ACTIVE', execution_mode: DET_EXEC[p.rule] || 'SUGGESTION',
-              confidence_threshold: DET_CONF[p.rule] ?? 0.80, approved_by: 'prototype_user',
-            }),
-          })),
-          ...(patternResult.llm_patterns || []).map((p, i) => ({
-            key: `llm-${p.rule_id || i}`, label: p.pattern_name, badge: 'LLM suggested', badgeTone: 'warning',
-            toPayload: () => ({
-              pattern_name: p.pattern_name, pattern_type: 'LLM_SUGGESTED', pattern_version: '1.0',
-              pattern_rule: { fields: p.fields_used || [], mode: 'SUGGESTION', ...(p.tolerance_spec || {}) },
-              status: 'DRAFT', execution_mode: 'SUGGESTION',
-              confidence_threshold: 0.75, approved_by: 'prototype_user',
-            }),
-          })),
-        ];
-
-        const allSelected = allSaveable.every(item => selectedGroupPatterns.has(item.key));
-        const someSelected = allSaveable.some(item => selectedGroupPatterns.has(item.key));
-
-        const toggleAll = () => {
-          if (allSelected) setSelectedGroupPatterns(new Set());
-          else setSelectedGroupPatterns(new Set(allSaveable.map(i => i.key)));
-        };
-        const toggleOne = (key) => {
-          setSelectedGroupPatterns(prev => {
-            const next = new Set(prev);
-            next.has(key) ? next.delete(key) : next.add(key);
-            return next;
-          });
-        };
-
-        const saveBulk = async () => {
-          if (!groupName.trim()) { setBulkSaveStatus({ error: 'Group name cannot be blank.' }); return; }
-          const toSave = allSaveable.filter(i => selectedGroupPatterns.has(i.key)).map(i => i.toPayload());
-          if (!toSave.length) { setBulkSaveStatus({ error: 'Select at least one pattern.' }); return; }
-          setBulkSaveStatus({ loading: true });
-          try {
-            const res = await onSaveBulk(groupName.trim(), toSave);
-            setBulkSaveStatus({ success: `Saved ${res.created} pattern(s) to group "${res.group_name}".${res.skipped > 0 ? ` (${res.skipped} already existed, skipped)` : ''}` });
-          } catch (err) {
-            setBulkSaveStatus({ error: err.message || 'Failed to save patterns.' });
-          }
-        };
-
-        return (
-          <Panel
-            title="Save as pattern group"
-            subtitle="Pick which patterns to persist, give the group a name, then save them all at once."
-          >
-            {/* group name */}
-            <div style={{ display: 'flex', gap: '0.75rem', alignItems: 'center', marginBottom: '1rem' }}>
-              <label style={{ fontWeight: 600, whiteSpace: 'nowrap', fontSize: '0.85rem' }}>Group name</label>
-              <input
-                type="text"
-                value={groupName}
-                onChange={e => { setGroupName(e.target.value); setBulkSaveStatus(null); }}
-                placeholder="e.g. psr-camt-2026-q3"
-                style={{ flex: 1, padding: '0.35rem 0.6rem', borderRadius: '4px', border: '1px solid var(--border, #ccc)', fontFamily: 'monospace', fontSize: '0.85rem' }}
-              />
-            </div>
-
-            {/* pattern checklist */}
-            <div className="table-wrap compact tight">
-              <table>
-                <thead>
-                  <tr>
-                    <th style={{ width: '2rem' }}>
-                      <input
-                        type="checkbox"
-                        checked={allSelected}
-                        ref={el => { if (el) el.indeterminate = !allSelected && someSelected; }}
-                        onChange={toggleAll}
-                        title="Select / deselect all"
-                      />
-                    </th>
-                    <th>Pattern name</th>
-                    <th>Origin</th>
-                    <th>Registry rule stored as</th>
-                    <th>Mode</th>
-                    <th>Status</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {allSaveable.map(item => {
-                    const payload = item.toPayload();
-                    return (
-                      <tr key={item.key}>
-                        <td><input type="checkbox" checked={selectedGroupPatterns.has(item.key)} onChange={() => toggleOne(item.key)} /></td>
-                        <td>{item.label}</td>
-                        <td><Tag tone={item.badgeTone}>{item.badge}</Tag></td>
-                        <td style={{ fontSize: '0.73rem' }}>
-                          <code>{(payload.pattern_rule.fields || []).join(', ') || '—'}</code>
-                        </td>
-                        <td><Tag tone={payload.execution_mode === 'AUTO_CLOSE' ? 'success' : 'warning'}>{payload.execution_mode}</Tag></td>
-                        <td><Tag tone={payload.status === 'ACTIVE' ? 'success' : 'neutral'}>{payload.status}</Tag></td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-
-            <div className="button-row" style={{ marginTop: '1rem' }}>
-              <button
-                className="btn primary"
-                onClick={saveBulk}
-                disabled={!someSelected || bulkSaveStatus?.loading}
-              >
-                {bulkSaveStatus?.loading ? 'Saving…' : `Save ${[...selectedGroupPatterns].length} pattern(s) to group`}
-              </button>
-              {bulkSaveStatus?.success && (
-                <span style={{ color: 'var(--success, #16a34a)', fontSize: '0.84rem' }}>{bulkSaveStatus.success}</span>
-              )}
-              {bulkSaveStatus?.error && (
-                <span style={{ color: 'var(--danger, #dc2626)', fontSize: '0.84rem' }}>{bulkSaveStatus.error}</span>
-              )}
-            </div>
-          </Panel>
-        );
-      })()}
-
-        <div className="table-wrap compact tight">
-          <table>
-            <thead>
-              <tr><th>Name</th><th>Mapping key</th><th>Regex</th><th>Actions</th></tr>
-            </thead>
-            <tbody>
-              {proposedPatterns.length ? proposedPatterns.map((pattern, idx) => (
-                <tr key={idx}>
-                  <td>{pattern.pattern_name}</td>
-                  <td>{pattern.mapping_key}</td>
-                  <td><pre>{JSON.stringify(pattern.regex_inferred, null, 2)}</pre></td>
-                  <td className="action-cell">
-                    <button className="btn secondary" onClick={() => setSelectedPattern(pattern)}>Edit</button>
-                    <button className="btn primary" onClick={savePattern}>Save</button>
-                  </td>
-                </tr>
-              )) : (
-                <tr><td colSpan={4} className="empty">No proposed patterns generated yet.</td></tr>
-              )}
-            </tbody>
-          </table>
+      {/* ── Step 1: Upload files ──────────────────────────────── */}
+      <Panel title="Step 1 — Upload files" subtitle="Choose the CAMT bank statement and the PSR / settlement file.">
+        <div className="form-grid">
+          <label>CAMT file (.xml)</label>
+          <input type="file" accept=".xml,application/xml,text/xml" onChange={(e) => { setCamtFile(e.target.files?.[0] || null); resetFiles(); }} />
+          <label>PSR / settlement file</label>
+          <input type="file" accept=".txt,.dat,.psr,text/plain,.xml" onChange={(e) => { setOtherFile(e.target.files?.[0] || null); resetFiles(); }} />
+        </div>
+        {error && <p className="error-text" style={{ marginTop: '0.75rem' }}>{error}</p>}
+        <div className="button-row" style={{ marginTop: '1rem' }}>
+          <button className="btn primary" onClick={identifyFormat} disabled={!camtFile || !otherFile || loadingMapping}>
+            {loadingMapping ? 'Identifying…' : 'Identify File Format (regex)'}
+          </button>
+          <button className="btn secondary" onClick={identifyPatterns} disabled={!camtFile || !otherFile || loadingPattern}>
+            {loadingPattern ? 'Identifying…' : 'Identify Patterns'}
+          </button>
         </div>
       </Panel>
+
+      {/* ── Results tabs (File Format + Patterns) ────────────── */}
+      {(mappingResult || patternResult) && (() => {
+        const tabs = [
+          ...(mappingResult ? [{ key: 'format', label: 'File Format' }] : []),
+          ...(patternResult ? [{ key: 'patterns', label: `Patterns${allSaveable.length ? ` (${allSaveable.length})` : ''}` }] : []),
+        ];
+        return (
+          <div style={{ border: '1px solid var(--border, #e2e8f0)', borderRadius: '10px', overflow: 'hidden' }}>
+            {/* tab strip */}
+            <div style={{ display: 'flex', borderBottom: '1px solid var(--border, #e2e8f0)', background: 'var(--bg, #f8fafc)' }}>
+              {tabs.map(t => (
+                <button
+                  key={t.key}
+                  onClick={() => setResultTab(t.key)}
+                  style={{
+                    padding: '0.6rem 1.25rem', border: 'none', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600,
+                    background: resultTab === t.key ? 'var(--panel, #fff)' : 'transparent',
+                    color: resultTab === t.key ? 'var(--primary, #2563eb)' : 'var(--muted, #64748b)',
+                    borderBottom: resultTab === t.key ? '2px solid var(--primary, #2563eb)' : '2px solid transparent',
+                    marginBottom: '-1px',
+                  }}
+                >{t.label}</button>
+              ))}
+            </div>
+
+            <div style={{ padding: '1.25rem' }}>
+              {/* ── File Format tab ──────────────────────────── */}
+              {resultTab === 'format' && mappingResult && (
+                <>
+                  {/* summary metrics — single compact row */}
+                  <div style={{ display: 'flex', flexWrap: 'nowrap', gap: '0', marginBottom: '1rem', border: '1px solid var(--border, #e2e8f0)', borderRadius: '8px', overflow: 'hidden' }}>
+                    {[
+                      { label: 'Format', value: mappingResult.format_info?.detected_type ?? '—' },
+                      { label: 'Record prefix', value: mappingResult.format_info?.record_prefix ?? '—' },
+                      { label: 'Delimiter', value: mappingResult.format_info?.delimiter ?? 'none' },
+                      { label: 'Matched lines', value: `${mappingResult.match_count ?? '—'} / ${mappingResult.camt_ref_index_size ?? '?'}`, hint: 'CAMT IDs' },
+                      ...(mappingResult.pattern_confidence != null ? [{ label: 'Confidence', value: `${mappingResult.pattern_confidence}%`, hint: 'match ratio × clarity' }] : []),
+                    ].map((item, i, arr) => (
+                      <div key={item.label} style={{ flex: 1, padding: '0.55rem 0.85rem', borderRight: i < arr.length - 1 ? '1px solid var(--border, #e2e8f0)' : 'none', minWidth: 0 }}>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--muted, #64748b)', marginBottom: '0.2rem', whiteSpace: 'nowrap' }}>{item.label}</div>
+                        <div style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--ink, #1e293b)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</div>
+                        {item.hint && <div style={{ fontSize: '0.68rem', color: 'var(--muted, #94a3b8)', marginTop: '0.1rem' }}>{item.hint}</div>}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                    <strong style={{ fontSize: '0.85rem' }}>Field extractors</strong>
+                    <Tag tone={mappingResult.llm_available ? 'success' : 'neutral'}>{mappingResult.llm_available ? 'LLM' : 'structural'}</Tag>
+                  </div>
+                  <div className="table-wrap compact tight">
+                    <table>
+                      <thead><tr><th>Field</th><th>Regex</th><th>Maps to CAMT</th><th>Confidence</th></tr></thead>
+                      <tbody>
+                        {(() => {
+                          const llmEx = mappingResult.llm_output?.field_extractors;
+                          const structural = mappingResult.format_info?.suggested_regex_map;
+                          if (llmEx && Object.keys(llmEx).length > 0) {
+                            return Object.entries(llmEx).map(([field, info]) => (
+                              <tr key={field}>
+                                <td><code>{field}</code></td>
+                                <td><pre style={{ margin: 0, fontSize: '0.73rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{info.regex}</pre></td>
+                                <td><code style={{ fontSize: '0.78rem' }}>{info.maps_to_camt}</code></td>
+                                <td><Tag tone={info.confidence === 'high' ? 'success' : info.confidence === 'medium' ? 'warning' : 'danger'}>{info.confidence}</Tag></td>
+                              </tr>
+                            ));
+                          }
+                          if (structural && Object.keys(structural).length > 0) {
+                            return Object.entries(structural).map(([field, pattern]) => (
+                              <tr key={field}>
+                                <td><code>{field}</code></td>
+                                <td><pre style={{ margin: 0, fontSize: '0.73rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{pattern}</pre></td>
+                                <td>—</td>
+                                <td><Tag tone="neutral">structural</Tag></td>
+                              </tr>
+                            ));
+                          }
+                          return <tr><td colSpan={4} className="empty">{mappingResult.llm_error ? `LLM unavailable — ${mappingResult.llm_error}` : 'No field extractors available.'}</td></tr>;
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                  {mappingResult.llm_output?.explanation && (
+                    <p style={{ marginTop: '0.75rem', fontSize: '0.83rem', color: 'var(--text-muted, #888)' }}>
+                      <strong>Layout: </strong>{mappingResult.llm_output.explanation}
+                    </p>
+                  )}
+                </>
+              )}
+
+              {/* ── Patterns tab ─────────────────────────────── */}
+              {resultTab === 'patterns' && patternResult && (
+                <>
+                  {patternResult.stats && (() => {
+                    const s = patternResult.stats;
+                    const rate = Math.round((s.match_rate || 0) * 100);
+                    return (
+                      <div style={{ display: 'flex', flexWrap: 'nowrap', gap: '0', marginBottom: '1.25rem', border: '1px solid var(--border, #e2e8f0)', borderRadius: '8px', overflow: 'hidden' }}>
+                        {[
+                          { label: 'CAMT entries', value: s.camt_total ?? '—' },
+                          { label: 'Matched', value: s.camt_matched ?? '—' },
+                          { label: 'Unmatched', value: s.camt_unmatched ?? '—' },
+                          { label: 'Match rate', value: `${rate}%` },
+                        ].map((item, i, arr) => (
+                          <div key={item.label} style={{ flex: 1, padding: '0.55rem 0.85rem', borderRight: i < arr.length - 1 ? '1px solid var(--border, #e2e8f0)' : 'none' }}>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--muted, #64748b)', marginBottom: '0.2rem' }}>{item.label}</div>
+                            <div style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--ink, #1e293b)' }}>{item.value}</div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {allSaveable.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '1.25rem' }}>
+                      {allSaveable.map(item => (
+                        <label key={item.key} style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', padding: '0.75rem 1rem', border: `1px solid ${selectedGroupPatterns.has(item.key) ? 'var(--primary, #2563eb)' : 'var(--border, #e2e8f0)'}`, borderRadius: '8px', cursor: 'pointer', background: selectedGroupPatterns.has(item.key) ? 'var(--primary-bg, #eff6ff)' : 'var(--panel, #fff)', transition: 'all .12s' }}>
+                          <input type="checkbox" checked={selectedGroupPatterns.has(item.key)} onChange={() => toggleOne(item.key)} style={{ width: '1rem', height: '1rem', flexShrink: 0 }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--ink, #1e293b)' }}>{item.label}</div>
+                            <div style={{ fontSize: '0.74rem', color: 'var(--muted, #64748b)', marginTop: '0.2rem' }}>{item.reason}</div>
+                            {item.fields.length > 0 && <div style={{ fontSize: '0.7rem', color: 'var(--muted, #94a3b8)', marginTop: '0.1rem' }}>Fields: {item.fields.join(' · ')}</div>}
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0 }}>
+                            <Tag tone={item.originTone}>{item.origin}</Tag>
+                            <Tag tone={item.mode === 'AUTO_CLOSE' ? 'success' : 'warning'}>{item.mode}</Tag>
+                            <Tag tone="neutral" title="Minimum match confidence required for this pattern to accept a reconciliation match">{Math.round((item.toPayload().confidence_threshold ?? 0.8) * 100)}% confidence</Tag>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty" style={{ marginBottom: '1rem' }}>No patterns identified.</p>
+                  )}
+
+                  {allSaveable.length > 0 && (() => {
+                    const existingGroups = [...new Set((patterns || []).map(p => (p.pattern_group || 'default').trim()).filter(Boolean))].sort();
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border, #e2e8f0)' }}>
+                        {/* Save selected as new group */}
+                        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--muted,#64748b)', whiteSpace: 'nowrap' }}>New group</span>
+                          <input
+                            type="text"
+                            value={groupName}
+                            onChange={e => { setGroupName(e.target.value); setBulkSaveStatus(null); }}
+                            placeholder="e.g. psr-camt-2026-q3"
+                            style={{ flex: 1, minWidth: '160px', padding: '0.32rem 0.55rem', borderRadius: '4px', border: '1px solid var(--border, #ccc)', fontFamily: 'monospace', fontSize: '0.82rem' }}
+                          />
+                          <button className="btn primary" onClick={saveBulk} disabled={!someSelected || !!bulkSaveStatus?.loading}>
+                            {bulkSaveStatus?.loading ? 'Saving…' : `Save ${[...selectedGroupPatterns].length} selected`}
+                          </button>
+                        </div>
+                        {bulkSaveStatus?.success && <p style={{ color: 'var(--success, #16a34a)', fontSize: '0.82rem', margin: 0 }}>{bulkSaveStatus.success}</p>}
+                        {bulkSaveStatus?.error && <p style={{ color: 'var(--danger, #dc2626)', fontSize: '0.82rem', margin: 0 }}>{bulkSaveStatus.error}</p>}
+
+                        {/* Add selected to existing group */}
+                        {existingGroups.length > 0 && (
+                          <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--muted,#64748b)', whiteSpace: 'nowrap' }}>Add to existing</span>
+                            <select
+                              value={addToGroup}
+                              onChange={e => { setAddToGroup(e.target.value); setAddToGroupStatus(null); }}
+                              style={{ fontSize: '0.82rem', padding: '0.3rem 0.5rem', flex: 1, minWidth: '160px' }}
+                            >
+                              <option value="">— pick a group —</option>
+                              {existingGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                            </select>
+                            <button
+                              className="btn secondary"
+                              disabled={!someSelected || !addToGroup || !!addToGroupStatus?.loading}
+                              onClick={async () => {
+                                const toSave = allSaveable.filter(i => selectedGroupPatterns.has(i.key)).map(i => ({ ...i.toPayload(), pattern_group: addToGroup }));
+                                setAddToGroupStatus({ loading: true });
+                                try {
+                                  const res = await onSaveBulk(addToGroup, toSave);
+                                  setAddToGroupStatus({ success: `Added ${res.created} pattern(s) to "${res.group_name}".${res.skipped > 0 ? ` (${res.skipped} skipped)` : ''}` });
+                                } catch (err) {
+                                  setAddToGroupStatus({ error: err.message || 'Failed.' });
+                                }
+                              }}
+                            >
+                              {addToGroupStatus?.loading ? 'Adding…' : `Add ${[...selectedGroupPatterns].length} selected`}
+                            </button>
+                          </div>
+                        )}
+                        {addToGroupStatus?.success && <p style={{ color: 'var(--success, #16a34a)', fontSize: '0.82rem', margin: 0 }}>{addToGroupStatus.success}</p>}
+                        {addToGroupStatus?.error && <p style={{ color: 'var(--danger, #dc2626)', fontSize: '0.82rem', margin: 0 }}>{addToGroupStatus.error}</p>}
+                      </div>
+                    );
+                  })()}
+                </>
+              )}
+
+              {error && <p className="error-text" style={{ marginTop: '0.5rem' }}>{error}</p>}
+            </div>
+          </div>
+        );
+      })()}
     </section>
   );
 }
@@ -3446,7 +3035,7 @@ export default function App() {
     if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} patternGroups={[...new Set((patterns || []).map((p) => p.pattern_group || 'default').filter(Boolean))].sort()} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
-    if (active === 'pattern-builder') return <PatternBuilder onGenerateMapping={generateRegexMapping} onGeneratePatterns={generatePatternsFromFiles} onSuggestPatterns={generatePatternSuggestions} onSave={saveGeneratedPattern} onSaveBulk={createBulkPatterns} proposedPatterns={proposedPatterns} setProposedPatterns={setProposedPatterns} />;
+    if (active === 'pattern-builder') return <PatternBuilder onGenerateMapping={generateRegexMapping} onGeneratePatterns={generatePatternsFromFiles} onSuggestPatterns={generatePatternSuggestions} onSave={saveGeneratedPattern} onSaveBulk={createBulkPatterns} proposedPatterns={proposedPatterns} setProposedPatterns={setProposedPatterns} patterns={patterns} />;
     if (active === 'patterns') return <PatternManagement patterns={patterns} onCreate={createPattern} onUpdate={tunePattern} onDelete={removePattern} />;
     const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
     const activeBatchName = activeBatch?.batch_name || activeBatch?.batch_id || 'recon';

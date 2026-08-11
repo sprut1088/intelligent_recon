@@ -387,14 +387,12 @@ def _infer_flat_file_format(matched_records: List[Dict[str, object]]) -> Dict[st
                 "ref_approx_start": ref_offset_avg,
             },
             "suggested_regex_map": {
-                "record_type": rf"^{re.escape(dominant_prefix)}",
-                "ref_field": (
-                    r"(?P<ref>TX-\d{4}-\d+"
-                    r"|PMT-REF-\d+"
-                    r"|INV[-]?\d{4}[-]?\d+"
-                    r"|[A-Z]{2,}-\d+)"
-                ),
-                "amount":    r"(?P<amount>\d{8,15})",
+                # Skip the 2-char record-type prefix; lazy \d+ stops before the 8-digit date.
+                "tx_id":     r"^.{2}(?P<tx_id>TX-\d{4}-\d+?)(?=\d{8})",
+                "reference": r"(?P<reference>PMT-REF-\d+)",
+                "invoice":   r"(?P<invoice>INV-?\d{4}-?\d+)",
+                # 12-digit zero-padded amount immediately before CR/DR.
+                "amount":    r"(?P<amount>\d{12})(?=CR|DR)",
                 "direction": r"(?P<direction>CR|DR)",
             },
             "sample_lines": sample_lines,
@@ -407,12 +405,11 @@ def _infer_flat_file_format(matched_records: List[Dict[str, object]]) -> Dict[st
             "delimiter": dominant_delim,
             "field_positions": {},
             "suggested_regex_map": {
-                "ref_field": (
-                    r"(?P<ref>TX-\d{4}-\d+"
-                    r"|PMT-REF-\d+"
-                    r"|INV[-]?\d{4}[-]?\d+"
-                    r"|[A-Z]{2,}-\d+)"
-                ),
+                "tx_id":     r"(?P<tx_id>TX-\d{4}-\d+)",
+                "reference": r"(?P<reference>PMT-REF-\d+)",
+                "invoice":   r"(?P<invoice>INV-?\d{4}-?\d+)",
+                "amount":    r"(?P<amount>\d+(?:\.\d+)?)",
+                "direction": r"(?P<direction>CR|DR)",
             },
             "sample_lines": sample_lines,
         }
