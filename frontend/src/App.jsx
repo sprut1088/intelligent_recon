@@ -181,13 +181,20 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
   );
 }
 
-function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, validatedBatchId, onUpload, onUploadBatch, onValidate, onRunBatch, onNavigate, loading, patternGroups }) {
+function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, batchRunStale, validatedBatchId, onUpload, onUploadBatch, onValidate, onRunBatch, onNavigate, loading, patternGroups }) {
   const [psrFile, setPsrFile] = useState(null);
   const [camtFile, setCamtFile] = useState(null);
   const [batchName, setBatchName] = useState('');
   const [amountDivisor, setAmountDivisor] = useState('auto');
   const [selectedPatternGroup, setSelectedPatternGroup] = useState('');
   const qualityTableRef = useRef(null);
+
+  // Initialise selection once groups are available; keep it if the group still exists after a change
+  useEffect(() => {
+    if (patternGroups && patternGroups.length > 0 && !patternGroups.includes(selectedPatternGroup)) {
+      setSelectedPatternGroup(patternGroups[0]);
+    }
+  }, [patternGroups.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
   const selectedBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
   const batchId = selectedBatch?.batch_id || selectedBatchId || '';
   const issues = quality?.issues || [];
@@ -254,7 +261,11 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
               </div>
               <div className="button-row">
                 <button className="btn secondary" disabled={!batchId || loading} onClick={() => onValidate(batchId)}>Validate quality</button>
-                <button className="btn primary" disabled={!batchId || loading || validatedBatchId !== batchId} onClick={() => onRunBatch(batchId, amountDivisor === 'auto' ? null : Number(amountDivisor), selectedPatternGroup || (patternGroups || [])[0] || null)}>Run uploaded batch</button>
+                <button className="btn primary" disabled={!batchId || loading || validatedBatchId !== batchId} onClick={() => {
+                  const grp = selectedPatternGroup || (patternGroups || [])[0] || null;
+                  if (grp) setSelectedPatternGroup(grp);
+                  onRunBatch(batchId, amountDivisor === 'auto' ? null : Number(amountDivisor), grp);
+                }}>Run uploaded batch</button>
               </div>
 
               {quality && (
@@ -275,6 +286,16 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
               {batchRunResult && (
                 <div style={{ marginTop: '1.25rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
                   <div style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '0.6rem' }}>Batch run results</div>
+                  {batchRunResult.pattern_group && (
+                    <p style={{ fontSize: '0.8rem', color: 'var(--muted)', margin: '0 0 0.5rem' }}>
+                      Pattern group used: <strong>{batchRunResult.pattern_group}</strong>
+                    </p>
+                  )}
+                  {batchRunStale && (
+                    <p style={{ color: 'var(--warning,#d97706)', fontSize: '0.82rem', margin: '0 0 0.6rem', fontWeight: 600 }}>
+                      ⚠️ Pattern registry changed since this run — re-run the batch to apply the latest patterns.
+                    </p>
+                  )}
                   <div className="metric-grid three" style={{ marginBottom: '0.75rem' }}>
                     <div style={{ cursor: 'pointer' }} onClick={() => onNavigate('results')} title="Open Results Workbench">
                       <Metric label="PSR transactions" value={batchRunResult.psr_count || 0} hint="→ Results Workbench" tone="info" />
@@ -518,7 +539,7 @@ function MatchingStudio({ patterns, rules, onTunePattern, onTogglePattern, onCre
   );
 }
 
-function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDelete }) {
+function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDelete, onDeleteGroup }) {
   const BLANK_PATTERN = {
     pattern_name: '',
     pattern_type: 'CUSTOM',
@@ -570,7 +591,12 @@ function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDel
   const [errors, setErrors] = useState({});
   const [dupeName, setDupeName] = useState('');
   const [dupeActive, setDupeActive] = useState(false);
+  const [deleteConfirmActive, setDeleteConfirmActive] = useState(false);
   const [expandedRow, setExpandedRow] = useState(null);
+
+  // Stable ref so the useEffect below can read selectedGroup without it being a dep
+  const selectedGroupRef = useRef('');
+  selectedGroupRef.current = selectedGroup;
 
   const groupedPatterns = useMemo(() => {
     const groups = {};
@@ -588,10 +614,16 @@ function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDel
   }, [patterns]);
 
   useEffect(() => {
-    const target = highlightGroup && groupedPatterns.find((g) => g.groupName === highlightGroup)
-      ? highlightGroup
-      : groupedPatterns[0]?.groupName;
-    if (target) setSelectedGroup(target);
+    // After a bulk-save, jump to the newly populated group
+    if (highlightGroup && groupedPatterns.some((g) => g.groupName === highlightGroup)) {
+      setSelectedGroup(highlightGroup);
+      return;
+    }
+    // Keep the current group as long as it still exists (e.g. after a pattern delete)
+    if (groupedPatterns.some((g) => g.groupName === selectedGroupRef.current)) return;
+    // Initial load or the group itself was removed — fall back to first
+    const first = groupedPatterns[0]?.groupName;
+    if (first) setSelectedGroup(first);
   }, [groupedPatterns, highlightGroup]);
 
   const activeGroup = groupedPatterns.find((g) => g.groupName === selectedGroup) || groupedPatterns[0];
@@ -643,7 +675,7 @@ function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDel
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
               <select
                 value={selectedGroup}
-                onChange={(e) => { setSelectedGroup(e.target.value); setDupeActive(false); setDupeName(''); }}
+                onChange={(e) => { setSelectedGroup(e.target.value); setDupeActive(false); setDupeName(''); setDeleteConfirmActive(false); }}
                 style={{ fontSize: '0.85rem', padding: '0.3rem 0.5rem' }}
               >
                 {groupedPatterns.map((g) => (
@@ -654,7 +686,7 @@ function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDel
                 {activeGroup?.items.length ?? 0} pattern{activeGroup?.items.length !== 1 ? 's' : ''}
               </span>
               {!dupeActive ? (
-                <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => { setDupeName(`${selectedGroup}-copy`); setDupeActive(true); }}>Duplicate group</button>
+                <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => { setDupeName(`${selectedGroup}-copy`); setDupeActive(true); setDeleteConfirmActive(false); }}>Duplicate group</button>
               ) : (
                 <>
                   <input
@@ -679,6 +711,21 @@ function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDel
                   >Save copy</button>
                   <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => setDupeActive(false)}>Cancel</button>
                 </>
+              )}
+              {!dupeActive && (
+                !deleteConfirmActive ? (
+                  <button className="btn ghost" style={{ fontSize: '0.78rem', color: 'var(--danger,#dc2626)' }} onClick={() => setDeleteConfirmActive(true)}>Delete group</button>
+                ) : (
+                  <>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--danger,#dc2626)', fontWeight: 600 }}>Delete all {activeGroup?.items.length} pattern{activeGroup?.items.length !== 1 ? 's' : ''} in &quot;{selectedGroup}&quot;?</span>
+                    <button
+                      className="btn primary"
+                      style={{ fontSize: '0.78rem', background: 'var(--danger,#dc2626)', boxShadow: 'none' }}
+                      onClick={() => { setDeleteConfirmActive(false); onDeleteGroup(selectedGroup); }}
+                    >Yes, delete</button>
+                    <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => setDeleteConfirmActive(false)}>Cancel</button>
+                  </>
+                )
               )}
             </div>
             <button className="btn ghost" style={{ fontSize: '0.82rem' }} onClick={() => openAdd(activeGroup?.groupName)}>+ Add pattern</button>
@@ -800,6 +847,7 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
   const [compareResult, setCompareResult] = useState(null);
   const [compareLoading, setCompareLoading] = useState(false);
   const [compareError, setCompareError] = useState('');
+  const [compareStale, setCompareStale] = useState(false);
 
   // Auto-select all patterns when a new analysis result arrives
   useEffect(() => {
@@ -811,6 +859,11 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
     setSelectedGroupPatterns(allKeys);
     setBulkSaveStatus(null);
   }, [patternResult]);
+
+  // Mark any existing comparison stale whenever the registry changes (add/delete/update)
+  useEffect(() => {
+    if (compareResult) setCompareStale(true);
+  }, [patterns]);
 
   const resetFiles = () => { setMappingResult(null); setPatternResult(null); setProposedPatterns([]); setError(''); };
 
@@ -1112,6 +1165,7 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                       setCompareLoading(true);
                       setCompareError('');
                       setCompareResult(null);
+                      setCompareStale(false);
                       try {
                         const payload = allSaveable.map(i => i.toPayload());
                         const result = await api.comparePatterns(payload, compareGroup);
@@ -1143,7 +1197,7 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                             {compareLoading ? 'Analysing…' : 'Run LLM analysis'}
                           </button>
                           {compareResult && (
-                            <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => { setCompareResult(null); setCompareError(''); }}>Clear ✕</button>
+                            <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => { setCompareResult(null); setCompareError(''); setCompareStale(false); }}>Clear ✕</button>
                           )}
                           {compareResult && !compareResult.llm_available && (
                             <Tag tone="warning" title="LLM unavailable — field-level diff used instead">Field diff only</Tag>
@@ -1151,6 +1205,12 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                         </div>
 
                         {compareError && <p style={{ color: 'var(--danger,#dc2626)', fontSize: '0.82rem', margin: 0 }}>{compareError}</p>}
+
+                        {compareStale && compareResult && (
+                          <p style={{ color: 'var(--warning,#d97706)', fontSize: '0.82rem', margin: '0 0 0.5rem', fontWeight: 600 }}>
+                            ⚠️ The group has changed since this analysis was run — re-run to see up-to-date results.
+                          </p>
+                        )}
 
                         {compareResult && (
                           <>
@@ -3028,6 +3088,7 @@ export default function App() {
   const [selectedBatchId, setSelectedBatchId] = useState('');
   const [quality, setQuality] = useState(null);
   const [batchRunResult, setBatchRunResult] = useState(null);
+  const [batchRunStale, setBatchRunStale] = useState(false);
   const [validatedBatchId, setValidatedBatchId] = useState(null);
   const [exceptions, setExceptions] = useState({ items: [] });
   const [patterns, setPatterns] = useState([]);
@@ -3047,6 +3108,11 @@ export default function App() {
   const [triageRunning, setTriageRunning] = useState(false);
   const [toast, setToast] = useState('');
   const [lastBulkGroup, setLastBulkGroup] = useState('');
+
+  // Mark batch run result stale whenever the pattern registry changes
+  useEffect(() => {
+    if (batchRunResult) setBatchRunStale(true);
+  }, [patterns]);
 
   const refresh = async () => {
     const [summaryData, resultsData, exceptionsData, patternsData, candidatesData, eventsData, batchesData, workspaceData, submissionsData, previewData, predictionData, ruleData, workflowRuleData, dashboardData] = await Promise.all([
@@ -3138,6 +3204,7 @@ export default function App() {
     await safe(async () => {
       result = await api.runBatch(batchId, amountDivisor, patternGroup);
       setBatchRunResult(result);
+      setBatchRunStale(false);
       setQuality(null);
       setValidatedBatchId(null);
     }, () => `Uploaded batch reconciled (divisor: ${result?.amount_divisor ?? 'default'})`);
@@ -3222,6 +3289,10 @@ export default function App() {
     await safe(() => api.deletePattern(patternId), 'Pattern deleted');
   };
 
+  const removePatternGroup = async (groupName) => {
+    await safe(() => api.deletePatternGroup(groupName), `Group "${groupName}" deleted`);
+  };
+
   const updateWorkflow = async (caseId, payload) => {
     await safe(() => api.updateWorkflow(caseId, { ...payload, updated_by: 'analyst_01' }), 'Exception workflow updated');
   };
@@ -3248,11 +3319,11 @@ export default function App() {
 
   const screen = useMemo(() => {
     if (active === 'workspace') return <Workspace workspace={workspace} summary={summary} onLoad={() => safe(api.loadSampleData, 'Sample PSR/CAMT loaded')} onRun={() => safe(api.runRecon, 'Reconciliation completed')} onSnapshot={() => safe(api.createSnapshot, 'Snapshot created')} onExport={exportCsv} loading={loading} />;
-    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} patternGroups={[...new Set((patterns || []).map((p) => p.pattern_group || 'default').filter(Boolean))].sort()} />;
+    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} batchRunStale={batchRunStale} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} patternGroups={[...new Set((patterns || []).map((p) => p.pattern_group || 'default').filter(Boolean))].sort()} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
     if (active === 'pattern-builder') return <PatternBuilder onGenerateMapping={generateRegexMapping} onGeneratePatterns={generatePatternsFromFiles} onSuggestPatterns={generatePatternSuggestions} onSave={saveGeneratedPattern} onSaveBulk={createBulkPatterns} proposedPatterns={proposedPatterns} setProposedPatterns={setProposedPatterns} patterns={patterns} />;
-    if (active === 'patterns') return <PatternManagement patterns={patterns} highlightGroup={lastBulkGroup} onCreate={createPattern} onUpdate={tunePattern} onDelete={removePattern} />;
+    if (active === 'patterns') return <PatternManagement patterns={patterns} highlightGroup={lastBulkGroup} onCreate={createPattern} onUpdate={tunePattern} onDelete={removePattern} onDeleteGroup={removePatternGroup} />;
     const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
     const activeBatchName = activeBatch?.batch_name || activeBatch?.batch_id || 'recon';
     if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;

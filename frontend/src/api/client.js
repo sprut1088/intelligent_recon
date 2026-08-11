@@ -171,6 +171,7 @@ export const api = {
   comparePatterns: (identifiedPatterns, compareGroup) =>
     request('/api/patterns/compare', { method: 'POST', body: JSON.stringify({ identified_patterns: identifiedPatterns, compare_group: compareGroup }) }),
   deletePattern: (patternId) => request(`/api/patterns/${patternId}`, { method: 'DELETE' }),
+  deletePatternGroup: (groupName) => request(`/api/patterns/groups/${encodeURIComponent(groupName)}`, { method: 'DELETE' }),
 
   updatePattern: (patternId, payload) => request(`/api/patterns/${patternId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   activatePattern: (patternId) => request(`/api/patterns/${patternId}/activate`, { method: 'POST' }),
