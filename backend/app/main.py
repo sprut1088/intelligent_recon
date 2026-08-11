@@ -988,11 +988,11 @@ def compare_patterns_route(request: PatternCompareRequest) -> dict:
     """LLM-powered comparison of identified patterns against a saved group."""
     with get_conn() as conn:
         rows = rows_to_dicts(conn.execute(
-            "SELECT * FROM recon_pattern_registry WHERE pattern_group = ?",
+            "SELECT * FROM recon_pattern_registry WHERE pattern_group = ? AND status = 'ACTIVE'",
             (request.compare_group,)
         ).fetchall())
     if not rows:
-        raise HTTPException(status_code=404, detail=f"Group '{request.compare_group}' not found or is empty")
+        raise HTTPException(status_code=404, detail=f"Group '{request.compare_group}' has no active patterns")
     group_patterns = []
     for r in rows:
         try:
