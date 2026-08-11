@@ -168,6 +168,8 @@ export const api = {
   createPattern: (payload) => request('/api/patterns', { method: 'POST', body: JSON.stringify(payload) }),
   createBulkPatterns: (groupName, patterns) =>
     request('/api/patterns/bulk', { method: 'POST', body: JSON.stringify({ group_name: groupName, patterns }) }),
+  comparePatterns: (identifiedPatterns, compareGroup) =>
+    request('/api/patterns/compare', { method: 'POST', body: JSON.stringify({ identified_patterns: identifiedPatterns, compare_group: compareGroup }) }),
   deletePattern: (patternId) => request(`/api/patterns/${patternId}`, { method: 'DELETE' }),
 
   updatePattern: (patternId, payload) => request(`/api/patterns/${patternId}`, { method: 'PATCH', body: JSON.stringify(payload) }),

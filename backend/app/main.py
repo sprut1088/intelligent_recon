@@ -11,13 +11,13 @@ from fastapi.responses import JSONResponse, StreamingResponse
 from .config import settings
 from .db import get_conn, init_db, json_dumps, row_to_dict, rows_to_dicts
 from .learning import approve_candidate, run_learning, seed_demo_learning_signals
-from .filepatternrecognition import generate_mapping_regex, generate_reconciliation_patterns, recognize_files, _write_upload_to_temp, suggest_patterns_for_unmatched
+from .filepatternrecognition import generate_mapping_regex, generate_reconciliation_patterns, recognize_files, _write_upload_to_temp, suggest_patterns_for_unmatched, compare_patterns_with_llm
 from .ingestion import get_batch, list_batches, run_uploaded_batch, store_uploaded_file
 from .loader import load_samples_and_reconcile, rerun_reconciliation_only
 from .quality import get_quality_report, validate_batch
 from .workflow import get_exception_workflow, list_exception_workflow, mark_workflow_resolved, update_exception_workflow
 from .workspace import create_snapshot, export_reconciliation_results, get_dashboard_model, get_data_preview, get_no_code_rules, get_workspace_overview, get_workflow_rules, list_submissions, predict_match_fields
-from .schemas import BulkPatternSaveRequest, AiVerifyRequest, CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
+from .schemas import BulkPatternSaveRequest, PatternCompareRequest, AiVerifyRequest, CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
 from .ai_triage import build_ai_snapshot, find_candidates, run_tier2c, verify_exception_cases
 
 # Module-level logger — format applied in startup() after uvicorn finishes its own logging setup
@@ -981,6 +981,27 @@ def create_bulk_patterns(request: BulkPatternSaveRequest) -> dict:
         "pattern_ids": created,
         "group_name": request.group_name,
     }
+
+
+@app.post("/api/patterns/compare")
+def compare_patterns_route(request: PatternCompareRequest) -> dict:
+    """LLM-powered comparison of identified patterns against a saved group."""
+    with get_conn() as conn:
+        rows = rows_to_dicts(conn.execute(
+            "SELECT * FROM recon_pattern_registry WHERE pattern_group = ?",
+            (request.compare_group,)
+        ).fetchall())
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Group '{request.compare_group}' not found or is empty")
+    group_patterns = []
+    for r in rows:
+        try:
+            r["pattern_rule"] = json.loads(r.get("pattern_rule_json") or "{}")
+        except Exception:
+            r["pattern_rule"] = {}
+        group_patterns.append(r)
+    identified = [p.model_dump() for p in request.identified_patterns]
+    return compare_patterns_with_llm(identified, group_patterns, request.compare_group)
 
 
 @app.patch("/api/patterns/{pattern_id}")
