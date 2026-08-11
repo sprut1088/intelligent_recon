@@ -2367,6 +2367,9 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
               style={{ minWidth: '160px' }}
             >
               <option value="">All statuses</option>
+              <option value="ai_agree">AI: Agree</option>
+              <option value="ai_caution">AI: Caution</option>
+              <option value="ai_disagree">AI: Disagree</option>
               {STATUS_OPTIONS.filter(Boolean).map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
