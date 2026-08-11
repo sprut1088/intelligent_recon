@@ -957,6 +957,13 @@ def generate_reconciliation_patterns(
     unmatched_camt: List[CamtTransaction] = det["unmatched_camt"]
     unmatched_flat: List[Dict] = det["unmatched_flat"]
 
+    logger.info(
+        "[reconcile-patterns] det complete — matched=%d unmatched_camt=%d unmatched_flat=%d",
+        det["stats"]["camt_matched"], len(unmatched_camt), len(unmatched_flat),
+    )
+    for p in det["patterns"]:
+        logger.info("  det pattern: %-20s  matches=%d", p["rule"], p["matched_count"])
+
     llm_result: Dict[str, object] = {"llm_available": False}
     if unmatched_camt or unmatched_flat:
         prompt = _build_unmatched_pattern_prompt(unmatched_camt, unmatched_flat)
@@ -966,15 +973,25 @@ def generate_reconciliation_patterns(
             llm_result["llm_available"] = True
             llm_result["llm_patterns"] = out.get("patterns", [])
             llm_result["llm_explanation"] = out.get("explanation", "")
+            logger.info(
+                "[reconcile-patterns] LLM returned %d pattern(s): %s",
+                len(llm_result["llm_patterns"]),
+                [p.get("rule_id") for p in llm_result["llm_patterns"]],
+            )
+            logger.info("[reconcile-patterns] LLM explanation: %s", llm_result["llm_explanation"])
+            logger.debug("[reconcile-patterns] LLM raw output: %s", out)
         except ValueError as exc:
+            logger.warning("[reconcile-patterns] LLM error: %s", exc)
             llm_result["llm_error"] = str(exc)
         except Exception as exc:
+            logger.warning("[reconcile-patterns] LLM error: %s", exc)
             llm_result["llm_error"] = str(exc)
     else:
         llm_result["llm_patterns"] = []
         llm_result["llm_explanation"] = (
             "All entries matched deterministically — no LLM pass needed."
         )
+        logger.info("[reconcile-patterns] skipping LLM — all entries matched deterministically")
 
     return {
         "deterministic_patterns": det["patterns"],

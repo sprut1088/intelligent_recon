@@ -538,6 +538,9 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
   const [addDraft, setAddDraft] = useState({ ...BLANK_PATTERN });
   const [addToGroup, setAddToGroup] = useState('');
   const [errors, setErrors] = useState({});
+  const [dupeName, setDupeName] = useState('');
+  const [dupeActive, setDupeActive] = useState(false);
+  const [expandedRow, setExpandedRow] = useState(null);
 
   const groupedPatterns = useMemo(() => {
     const groups = {};
@@ -590,7 +593,7 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
       <div className="screen-title">
         <div>
           <div className="eyebrow">Pattern manager</div>
-          <h1>Pattern groups</h1>
+          <h1>Pattern Groups</h1>
           <p>Named sets of reconciliation patterns applied during a batch run.</p>
         </div>
         <button className="btn ghost" style={{ fontSize: '0.82rem' }} onClick={() => openAdd('new-group')}>+ New group</button>
@@ -604,10 +607,10 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
         <Panel>
           {/* ── Group selector + action row ── */}
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
               <select
                 value={selectedGroup}
-                onChange={(e) => setSelectedGroup(e.target.value)}
+                onChange={(e) => { setSelectedGroup(e.target.value); setDupeActive(false); setDupeName(''); }}
                 style={{ fontSize: '0.85rem', padding: '0.3rem 0.5rem' }}
               >
                 {groupedPatterns.map((g) => (
@@ -617,6 +620,33 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
               <span style={{ fontSize: '0.78rem', color: 'var(--muted, #64748b)' }}>
                 {activeGroup?.items.length ?? 0} pattern{activeGroup?.items.length !== 1 ? 's' : ''}
               </span>
+              {!dupeActive ? (
+                <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => { setDupeName(`${selectedGroup}-copy`); setDupeActive(true); }}>Duplicate group</button>
+              ) : (
+                <>
+                  <input
+                    autoFocus
+                    value={dupeName}
+                    onChange={(e) => setDupeName(e.target.value)}
+                    placeholder="New group name"
+                    style={{ fontSize: '0.82rem', padding: '0.28rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border,#ccc)', minWidth: '160px' }}
+                  />
+                  <button
+                    className="btn primary"
+                    style={{ fontSize: '0.78rem' }}
+                    disabled={!dupeName.trim()}
+                    onClick={async () => {
+                      const name = dupeName.trim();
+                      for (const p of activeGroup?.items ?? []) {
+                        await onCreate({ pattern_name: p.pattern_name, pattern_type: p.pattern_type, pattern_group: name, pattern_rule: p.pattern_rule, status: p.status, execution_mode: p.execution_mode, confidence_threshold: p.confidence_threshold, approved_by: p.approved_by ?? 'prototype_user' });
+                      }
+                      setDupeActive(false); setDupeName('');
+                      setSelectedGroup(name);
+                    }}
+                  >Save copy</button>
+                  <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => setDupeActive(false)}>Cancel</button>
+                </>
+              )}
             </div>
             <button className="btn ghost" style={{ fontSize: '0.82rem' }} onClick={() => openAdd(activeGroup?.groupName)}>+ Add pattern</button>
           </div>
@@ -635,18 +665,44 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
                 </tr>
               </thead>
               <tbody>
-                {activeGroup?.items.map((p) => (
-                  <tr key={p.pattern_id}>
-                    <td style={{ fontWeight: 500 }}>{p.pattern_name}</td>
-                    <td><Tag tone={statusTone(p.status)}>{fmtLabel(p.status)}</Tag></td>
-                    <td><Tag tone={modeTone(p.execution_mode)}>{fmtLabel(p.execution_mode)}</Tag></td>
-                    <td style={{ color: 'var(--muted, #64748b)', fontSize: '0.85rem' }} title="Minimum match confidence required for this pattern to accept a reconciliation match">{Math.round((p.confidence_threshold ?? 0.8) * 100)}%</td>
-                    <td>
-                      <button className="btn ghost" onClick={() => onCreate({ pattern_name: `Copy of ${p.pattern_name}`, pattern_type: p.pattern_type, pattern_group: p.pattern_group, pattern_rule: p.pattern_rule, status: p.status, execution_mode: p.execution_mode, confidence_threshold: p.confidence_threshold, approved_by: p.approved_by ?? 'prototype_user' })}>Duplicate</button>
-                      <button className="btn ghost" onClick={() => onDelete(p.pattern_id)}>Remove</button>
-                    </td>
-                  </tr>
-                ))}
+                {activeGroup?.items.map((p) => {
+                  const expanded = expandedRow === p.pattern_id;
+                  return (
+                    <>
+                      <tr key={p.pattern_id}>
+                        <td style={{ fontWeight: 500 }}>
+                          <button
+                            onClick={() => setExpandedRow(expanded ? null : p.pattern_id)}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600, fontSize: '0.88rem', color: 'var(--primary,#2563eb)', marginRight: '0.4rem' }}
+                            title={expanded ? 'Hide details' : 'Show details'}
+                          >{expanded ? '▾' : '▸'}</button>
+                          {p.pattern_name}
+                        </td>
+                        <td><Tag tone={statusTone(p.status)}>{fmtLabel(p.status)}</Tag></td>
+                        <td><Tag tone={modeTone(p.execution_mode)}>{fmtLabel(p.execution_mode)}</Tag></td>
+                        <td style={{ color: 'var(--muted, #64748b)', fontSize: '0.85rem' }} title="Minimum match confidence required for this pattern to accept a reconciliation match">{Math.round((p.confidence_threshold ?? 0.8) * 100)}%</td>
+                        <td>
+                          <button className="btn ghost" onClick={() => onDelete(p.pattern_id)}>Remove</button>
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr key={`${p.pattern_id}-detail`}>
+                          <td colSpan={5} style={{ background: 'var(--surface,#f8fafc)', padding: '0.75rem 1.25rem 0.85rem', borderTop: 'none' }}>
+                            <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                              <div><span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--muted,#64748b)', letterSpacing: '0.05em' }}>Type</span><div style={{ fontSize: '0.84rem', marginTop: '0.15rem' }}>{p.pattern_type || '—'}</div></div>
+                              <div><span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--muted,#64748b)', letterSpacing: '0.05em' }}>Approved by</span><div style={{ fontSize: '0.84rem', marginTop: '0.15rem' }}>{p.approved_by || '—'}</div></div>
+                              <div><span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--muted,#64748b)', letterSpacing: '0.05em' }}>Version</span><div style={{ fontSize: '0.84rem', marginTop: '0.15rem' }}>{p.pattern_version || '—'}</div></div>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--muted,#64748b)', letterSpacing: '0.05em' }}>Rule</span>
+                              <pre style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', background: 'var(--panel,#fff)', border: '1px solid var(--border,#e2e8f0)', borderRadius: '6px', padding: '0.6rem 0.85rem', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{JSON.stringify(p.pattern_rule || {}, null, 2)}</pre>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  );
+                })}
               </tbody>
             </table>
           )}
