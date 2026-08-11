@@ -1039,6 +1039,18 @@ def delete_pattern(pattern_id: str) -> dict:
     rerun_reconciliation_only()
     return {"pattern_id": pattern_id, "deleted": True}
 
+@app.delete("/api/patterns/groups/{group_name}")
+def delete_pattern_group(group_name: str) -> dict:
+    with get_conn() as conn:
+        result = conn.execute("SELECT COUNT(*) FROM recon_pattern_registry WHERE pattern_group=?", (group_name,)).fetchone()
+        count = result[0] if result else 0
+        if count == 0:
+            raise HTTPException(status_code=404, detail=f"Group '{group_name}' not found or is already empty")
+        conn.execute("DELETE FROM recon_pattern_registry WHERE pattern_group=?", (group_name,))
+        conn.commit()
+    rerun_reconciliation_only()
+    return {"group_name": group_name, "deleted_count": count}
+
 @app.post("/api/patterns/{pattern_id}/activate")
 def activate_pattern(pattern_id: str) -> dict:
     return update_pattern(pattern_id, PatternUpdateRequest(status="ACTIVE"))

@@ -259,6 +259,7 @@ def run_uploaded_batch(batch_id: str, amount_divisor: Optional[float] = None, re
         set_meta(conn, "active_batch_id", batch_id)
         set_meta(conn, "last_load_header", json.dumps(asdict(header) if header else {}))
         set_meta(conn, "last_amount_divisor", amount_divisor or settings.psr_amount_divisor)
+        set_meta(conn, "last_pattern_group", pattern_group or '')
         set_meta(conn, "psr_count", len(psr_transactions))
         set_meta(conn, "camt_count", len(camt_transactions))
         set_meta(conn, "case_count", len(cases))
@@ -271,4 +272,5 @@ def run_uploaded_batch(batch_id: str, amount_divisor: Optional[float] = None, re
         "camt_count": len(camt_transactions),
         "case_count": len(cases),
         "amount_divisor": amount_divisor or settings.psr_amount_divisor,
+        "pattern_group": pattern_group or '',
     }

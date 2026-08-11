@@ -235,7 +235,7 @@ def pattern_config(pattern_registry_rows: Sequence[Dict]) -> Dict[str, Dict]:
 
 def pattern_is_active(config: Dict[str, Dict], pattern_id: str) -> bool:
     row = config.get(pattern_id)
-    return not row or row.get("status") == "ACTIVE"
+    return bool(row) and row.get("status") == "ACTIVE"
 
 
 def pattern_rule_value(config: Dict[str, Dict], pattern_id: str, key: str, default):
