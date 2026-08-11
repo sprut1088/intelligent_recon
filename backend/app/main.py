@@ -488,6 +488,10 @@ def list_cases(status: Optional[str]=None, exception_only: bool=False, search: O
     with get_conn() as conn:
         total=conn.execute(f"SELECT COUNT(*) AS cnt FROM recon_cases {where}", params).fetchone()["cnt"]
         rows=rows_to_dicts(conn.execute(f"SELECT * FROM recon_cases {where} ORDER BY exception_flag DESC, match_confidence ASC, case_id ASC LIMIT ? OFFSET ?", [*params,limit,offset]).fetchall())
+    logger.info(
+        "list_cases: status=%r exception_only=%s search=%r group_id=%r -> total=%d returned=%d (offset=%d limit=%d)",
+        status, exception_only, search, group_id, total, len(rows), offset, limit,
+    )
     return {"total":total,"limit":limit,"offset":offset,"items":rows}
 
 @app.get("/api/reconcile/cases/{case_id}")
