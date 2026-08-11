@@ -52,6 +52,19 @@ class BulkPatternSaveRequest(BaseModel):
     patterns: List["PatternCreateRequest"]
 
 
+class IdentifiedPatternItem(BaseModel):
+    pattern_name: str
+    pattern_type: str = "FILE_DETECTED"
+    pattern_rule: Dict[str, Any] = Field(default_factory=dict)
+    execution_mode: str = "SUGGESTION"
+    confidence_threshold: float = 0.80
+
+
+class PatternCompareRequest(BaseModel):
+    identified_patterns: List[IdentifiedPatternItem]
+    compare_group: str
+
+
 class PatternUpdateRequest(BaseModel):
     pattern_name: Optional[str] = None
     pattern_type: Optional[str] = None

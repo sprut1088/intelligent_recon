@@ -518,7 +518,7 @@ function MatchingStudio({ patterns, rules, onTunePattern, onTogglePattern, onCre
   );
 }
 
-function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
+function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDelete }) {
   const BLANK_PATTERN = {
     pattern_name: '',
     pattern_type: 'CUSTOM',
@@ -532,6 +532,36 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
   const fmtLabel = (s) => (s || '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
   const statusTone = (s) => s === 'ACTIVE' ? 'success' : s === 'DRAFT' ? 'warning' : 'neutral';
   const modeTone  = (m) => m === 'AUTO_CLOSE' ? 'success' : m === 'SUGGESTION' ? 'warning' : 'neutral';
+  const confTooltip = (p) => {
+    const rule = p.pattern_rule || {};
+    const fields = new Set(rule.fields || []);
+    const pct = Math.round((p.confidence_threshold ?? 0.8) * 100);
+    if (rule.route_to === 'manual_review')
+      return `${pct}% — exception catch-all; unmatched items routed to manual review`;
+    if (fields.has('end_to_end_id'))
+      return `${pct}% — exact end-to-end ID; unique identifier, collision risk near zero`;
+    if (fields.has('pmt_ref') && fields.has('amount_sum') && rule.max_split_size)
+      return `${pct}% — split settlement (1:N, max ${rule.max_split_size}); subset-sum across bank entries, shared reference confidence ${rule.shared_reference_confidence ?? '—'}%`;
+    if (fields.has('pmt_ref') && fields.has('amount_sum'))
+      return `${pct}% — group settlement; fuzzy counterparty + multi-field subset-sum`;
+    if (fields.has('pmt_ref') && fields.has('amount') && fields.size === 2)
+      return `${pct}% — PMT-REF + amount exact match; structured fields, very low false-positive rate`;
+    if (fields.has('pmt_ref') && fields.size === 1)
+      return `${pct}% — PMT-REF exact match; structured reference, very low false-positive rate`;
+    if (fields.has('invoice') && fields.has('amount') && fields.size === 2)
+      return `${pct}% — invoice + amount exact match; reliable but invoice numbers can be reused`;
+    if (fields.has('invoice') && fields.size === 1)
+      return `${pct}% — invoice exact match; reliable reference, occasionally reused`;
+    if (fields.has('counterparty'))
+      return `${pct}% — fuzzy counterparty (≥${Math.round((rule.threshold ?? 0.85) * 100)}% similarity) + amount; similarity-weighted, higher ambiguity`;
+    if (fields.has('amount_variance'))
+      return `${pct}% — amount variance ≤${rule.minor_tolerance ?? 50} minor units; amounts can coincide across parties`;
+    if (fields.has('amount') && fields.has('direction'))
+      return `${pct}% — amount + direction exact match; amounts can coincide, higher ambiguity`;
+    if ((p.pattern_type || '').toUpperCase() === 'LLM_SUGGESTED')
+      return `${pct}% — AI-proposed pattern; lower certainty baseline, requires human review`;
+    return `${pct}% — user-defined confidence threshold`;
+  };
 
   const [selectedGroup, setSelectedGroup] = useState('');
   const [showAddModal, setShowAddModal] = useState(false);
@@ -558,8 +588,11 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
   }, [patterns]);
 
   useEffect(() => {
-    if (!selectedGroup && groupedPatterns[0]) setSelectedGroup(groupedPatterns[0].groupName);
-  }, [groupedPatterns, selectedGroup]);
+    const target = highlightGroup && groupedPatterns.find((g) => g.groupName === highlightGroup)
+      ? highlightGroup
+      : groupedPatterns[0]?.groupName;
+    if (target) setSelectedGroup(target);
+  }, [groupedPatterns, highlightGroup]);
 
   const activeGroup = groupedPatterns.find((g) => g.groupName === selectedGroup) || groupedPatterns[0];
 
@@ -660,7 +693,7 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
                   <th>Name</th>
                   <th>Status</th>
                   <th>Mode</th>
-                  <th title="Minimum match confidence required for this pattern to accept a reconciliation match" style={{ cursor: 'help' }}>Confidence ↑</th>
+                  <th title="Hover a value to see the rationale behind each pattern's confidence score" style={{ cursor: 'help' }}>Confidence ↑</th>
                   <th></th>
                 </tr>
               </thead>
@@ -680,7 +713,7 @@ function PatternManagement({ patterns, onCreate, onUpdate, onDelete }) {
                         </td>
                         <td><Tag tone={statusTone(p.status)}>{fmtLabel(p.status)}</Tag></td>
                         <td><Tag tone={modeTone(p.execution_mode)}>{fmtLabel(p.execution_mode)}</Tag></td>
-                        <td style={{ color: 'var(--muted, #64748b)', fontSize: '0.85rem' }} title="Minimum match confidence required for this pattern to accept a reconciliation match">{Math.round((p.confidence_threshold ?? 0.8) * 100)}%</td>
+                        <td style={{ color: 'var(--muted, #64748b)', fontSize: '0.85rem' }} title={confTooltip(p)}>{Math.round((p.confidence_threshold ?? 0.8) * 100)}%</td>
                         <td>
                           <button className="btn ghost" onClick={() => onDelete(p.pattern_id)}>Remove</button>
                         </td>
@@ -763,6 +796,10 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
   const [groupName, setGroupName] = useState(`auto-${today}`);
   const [selectedGroupPatterns, setSelectedGroupPatterns] = useState(new Set());
   const [bulkSaveStatus, setBulkSaveStatus] = useState(null);
+  const [compareGroup, setCompareGroup] = useState('');
+  const [compareResult, setCompareResult] = useState(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareError, setCompareError] = useState('');
 
   // Auto-select all patterns when a new analysis result arrives
   useEffect(() => {
@@ -1042,7 +1079,7 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                           <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0 }}>
                             <Tag tone={item.originTone}>{item.origin}</Tag>
                             <Tag tone={item.mode === 'AUTO_CLOSE' ? 'success' : 'warning'}>{item.mode}</Tag>
-                            <Tag tone="neutral" title="Minimum match confidence required for this pattern to accept a reconciliation match">{Math.round((item.toPayload().confidence_threshold ?? 0.8) * 100)}% confidence</Tag>
+                            <Tag tone="neutral" title={item.reason || `${Math.round((item.toPayload().confidence_threshold ?? 0.8) * 100)}% — minimum match confidence threshold`}>{Math.round((item.toPayload().confidence_threshold ?? 0.8) * 100)}% confidence</Tag>
                           </div>
                         </label>
                       ))}
@@ -1050,6 +1087,124 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                   ) : (
                     <p className="empty" style={{ marginBottom: '1rem' }}>No patterns identified.</p>
                   )}
+
+                  {/* ── Compare with group ─────────────────────────────── */}
+                  {allSaveable.length > 0 && (() => {
+                    const existingGroups = [...new Set((patterns || []).map(p => (p.pattern_group || 'default').trim()).filter(Boolean))].sort();
+                    const relTone = { exact_match: 'success', looser_subset: 'warning', stricter_superset: 'warning', partial_overlap: 'neutral', novel: 'success' };
+                    const recTone = { skip: 'neutral', add: 'success', review: 'warning' };
+                    const relLabel  = { exact_match: 'Already exists', looser_subset: 'Broader version', stricter_superset: 'More specific version', partial_overlap: 'Partially similar', novel: 'Brand new' };
+                    const relTitle  = {
+                      exact_match:        'Identical matching fields — this rule is already in the group.',
+                      looser_subset:      'Catches more transactions but with fewer checks, increasing false-positive risk.',
+                      stricter_superset:  'Adds extra checks on top of an existing rule — more precise but may miss some cases.',
+                      partial_overlap:    'Shares some matching fields with an existing rule but also differs — assess whether both are needed.',
+                      novel:              'No similar rule exists in this group — covers a genuinely new matching scenario.',
+                    };
+                    const recLabel  = { skip: 'Already covered', add: 'Worth adding', review: 'Needs review' };
+                    const recTitle  = {
+                      skip:   'An existing rule already handles this — adding it would create a duplicate.',
+                      add:    'This rule covers something new and should be added to the group.',
+                      review: 'Similar to an existing rule — confirm whether the extra coverage is intentional before adding.',
+                    };
+                    const runComparison = async () => {
+                      if (!compareGroup) return;
+                      setCompareLoading(true);
+                      setCompareError('');
+                      setCompareResult(null);
+                      try {
+                        const payload = allSaveable.map(i => i.toPayload());
+                        const result = await api.comparePatterns(payload, compareGroup);
+                        setCompareResult(result);
+                      } catch (err) {
+                        setCompareError(err.message || 'Comparison failed.');
+                      } finally {
+                        setCompareLoading(false);
+                      }
+                    };
+                    return (
+                      <div style={{ margin: '0.5rem 0 1rem', padding: '0.85rem 1rem', border: '1px solid var(--border,#e2e8f0)', borderRadius: '8px', background: 'var(--surface,#f8fafc)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: compareResult || compareError ? '0.85rem' : 0 }}>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--ink,#1e293b)', whiteSpace: 'nowrap' }}>Compare with group</span>
+                          <select
+                            value={compareGroup}
+                            onChange={e => { setCompareGroup(e.target.value); setCompareResult(null); setCompareError(''); }}
+                            style={{ fontSize: '0.82rem', padding: '0.3rem 0.5rem', flex: 1, maxWidth: '220px', borderRadius: '4px', border: '1px solid var(--border,#ccc)' }}
+                          >
+                            <option value="">— pick a group —</option>
+                            {existingGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                          </select>
+                          <button
+                            className="btn secondary"
+                            disabled={!compareGroup || compareLoading}
+                            onClick={runComparison}
+                            style={{ fontSize: '0.82rem' }}
+                          >
+                            {compareLoading ? 'Analysing…' : 'Run LLM analysis'}
+                          </button>
+                          {compareResult && (
+                            <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => { setCompareResult(null); setCompareError(''); }}>Clear ✕</button>
+                          )}
+                          {compareResult && !compareResult.llm_available && (
+                            <Tag tone="warning" title="LLM unavailable — field-level diff used instead">Field diff only</Tag>
+                          )}
+                        </div>
+
+                        {compareError && <p style={{ color: 'var(--danger,#dc2626)', fontSize: '0.82rem', margin: 0 }}>{compareError}</p>}
+
+                        {compareResult && (
+                          <>
+                            <table className="data-table" style={{ fontSize: '0.82rem', marginBottom: '0.5rem' }}>
+                              <thead>
+                                <tr>
+                                  <th>Identified pattern</th>
+                                  <th>Fields</th>
+                                  <th>Closest in {compareResult.group_name}</th>
+                                  <th>Relationship</th>
+                                  <th>LLM explanation</th>
+                                  <th>Action</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(compareResult.comparisons || []).map((row, i) => {
+                                  const matchedItem = allSaveable.find(it => it.label === row.identified_name);
+                                  return (
+                                    <tr key={i}>
+                                      <td style={{ fontWeight: 600 }}>{row.identified_name}</td>
+                                      <td>
+                                        {matchedItem && matchedItem.fields.length > 0
+                                          ? <code style={{ fontSize: '0.76rem' }}>[{matchedItem.fields.join(', ')}]</code>
+                                          : <em style={{ color: 'var(--muted,#94a3b8)' }}>—</em>
+                                        }
+                                      </td>
+                                      <td>
+                                        {row.closest_existing_name
+                                          ? <><span style={{ fontWeight: 500 }}>{row.closest_existing_name}</span>{row.closest_existing_id && <><br /><code style={{ fontSize: '0.72rem', color: 'var(--muted,#94a3b8)' }}>{row.closest_existing_id}</code></>}</>
+                                          : <em style={{ color: 'var(--muted,#94a3b8)' }}>none</em>
+                                        }
+                                      </td>
+                                      <td><Tag tone={relTone[row.relationship] || 'neutral'} title={relTitle[row.relationship] || ''}>{relLabel[row.relationship] || row.relationship}</Tag></td>
+                                      <td style={{ color: 'var(--muted,#64748b)', maxWidth: '280px', lineHeight: 1.4 }}>{row.explanation}</td>
+                                      <td>
+                                        <Tag tone={recTone[row.recommendation] || 'neutral'}
+                                          title={recTitle[row.recommendation] || ''}
+                                        >
+                                          {recLabel[row.recommendation] || row.recommendation}
+                                        </Tag>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                            {compareResult.summary && (
+                              <p style={{ fontSize: '0.8rem', color: 'var(--muted,#64748b)', margin: 0, fontStyle: 'italic' }}>{compareResult.summary}</p>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
 
                   {allSaveable.length > 0 && (() => {
                     const existingGroups = [...new Set((patterns || []).map(p => (p.pattern_group || 'default').trim()).filter(Boolean))].sort();
@@ -2891,6 +3046,7 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [triageRunning, setTriageRunning] = useState(false);
   const [toast, setToast] = useState('');
+  const [lastBulkGroup, setLastBulkGroup] = useState('');
 
   const refresh = async () => {
     const [summaryData, resultsData, exceptionsData, patternsData, candidatesData, eventsData, batchesData, workspaceData, submissionsData, previewData, predictionData, ruleData, workflowRuleData, dashboardData] = await Promise.all([
@@ -3001,10 +3157,11 @@ export default function App() {
 
   const createBulkPatterns = async (groupName, patterns) => {
     const result = await api.createBulkPatterns(groupName, patterns);
-    // Refresh patterns immediately so the new group appears in the
-    // Data Intake "Run batch with pattern group" dropdown without a page reload.
     const fresh = await api.patterns();
     setPatterns(fresh);
+    setLastBulkGroup(groupName);
+    setToast(`Patterns saved to group "${groupName}"`);
+    setTimeout(() => setToast(''), 3200);
     return result;
   };
 
@@ -3095,7 +3252,7 @@ export default function App() {
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
     if (active === 'pattern-builder') return <PatternBuilder onGenerateMapping={generateRegexMapping} onGeneratePatterns={generatePatternsFromFiles} onSuggestPatterns={generatePatternSuggestions} onSave={saveGeneratedPattern} onSaveBulk={createBulkPatterns} proposedPatterns={proposedPatterns} setProposedPatterns={setProposedPatterns} patterns={patterns} />;
-    if (active === 'patterns') return <PatternManagement patterns={patterns} onCreate={createPattern} onUpdate={tunePattern} onDelete={removePattern} />;
+    if (active === 'patterns') return <PatternManagement patterns={patterns} highlightGroup={lastBulkGroup} onCreate={createPattern} onUpdate={tunePattern} onDelete={removePattern} />;
     const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
     const activeBatchName = activeBatch?.batch_name || activeBatch?.batch_id || 'recon';
     if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;

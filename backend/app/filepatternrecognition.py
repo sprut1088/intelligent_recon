@@ -1167,6 +1167,131 @@ def _llm_json_completion(prompt: str) -> Dict[str, object]:
 
 
 
+def compare_patterns_with_llm(
+    identified: List[Dict[str, object]],
+    group_patterns: List[Dict[str, object]],
+    group_name: str,
+) -> Dict[str, object]:
+    """Use the LLM to compare newly identified patterns against a saved group.
+
+    Returns a dict with a *comparisons* list (one entry per identified pattern)
+    and a short *summary* sentence.  Falls back to a field-only diff if the LLM
+    is unavailable.
+    """
+    import json as _json
+
+    def _fields(p: Dict) -> List[str]:
+        rule = p.get("pattern_rule") or {}
+        if isinstance(rule, str):
+            try:
+                rule = _json.loads(rule)
+            except Exception:
+                rule = {}
+        return rule.get("fields") or []
+
+    def _fmt(p: Dict, include_id: bool = False) -> str:
+        pid = f"[{p['pattern_id']}] " if include_id and p.get("pattern_id") else ""
+        fields = _fields(p)
+        conf = int(float(p.get("confidence_threshold", 0.8)) * 100)
+        mode = p.get("execution_mode", "SUGGESTION")
+        return f"{pid}{p['pattern_name']}: fields={fields}, mode={mode}, confidence={conf}%"
+
+    identified_block = "\n".join(f"  - {_fmt(p)}" for p in identified) or "  (none)"
+    group_block = "\n".join(f"  - {_fmt(p, include_id=True)}" for p in group_patterns) or "  (none)"
+
+    prompt = (
+        "You are an expert payment reconciliation pattern analyst.\n\n"
+        f"Newly identified patterns (from file analysis):\n{identified_block}\n\n"
+        f"Existing patterns in group \"{group_name}\":\n{group_block}\n\n"
+        "For each identified pattern, determine its relationship to the existing group.\n"
+        "Consider not just field names but their semantic roles:\n"
+        "  - Is the identified pattern a looser version (fewer fields = higher recall, more false positives)?\n"
+        "  - Is it stricter (more fields = lower recall, fewer false positives)?\n"
+        "  - Does it cover a genuinely different matching scenario?\n"
+        "  - Would adding it alongside existing patterns create redundancy or useful coverage?\n\n"
+        "Return ONLY valid JSON:\n"
+        "{\n"
+        '  "comparisons": [\n'
+        "    {\n"
+        '      "identified_name": "<exact name from identified list>",\n'
+        '      "closest_existing_id": "<pattern_id or null>",\n'
+        '      "closest_existing_name": "<name or null>",\n'
+        '      "relationship": "exact_match|looser_subset|stricter_superset|partial_overlap|novel",\n'
+        '      "explanation": "<1–2 sentences explaining the difference or why it is novel>",\n'
+        '      "recommendation": "skip|add|review"\n'
+        "    }\n"
+        "  ],\n"
+        '  "summary": "<one sentence overall assessment>"\n'
+        "}\n\n"
+        "Relationship definitions:\n"
+        "  exact_match       – fields are identical to an existing pattern\n"
+        "  looser_subset     – identified uses fewer fields (higher recall, lower precision)\n"
+        "  stricter_superset – identified uses more fields (lower recall, higher precision)\n"
+        "  partial_overlap   – shares some fields but also uses different ones\n"
+        "  novel             – no meaningful field overlap with any existing pattern\n"
+        "Recommendation: skip = already covered; add = genuinely new value; review = borderline"
+    )
+
+    try:
+        result = _llm_json_completion(prompt)
+        result["group_name"] = group_name
+        result["group_pattern_count"] = len(group_patterns)
+        result["llm_available"] = True
+        return result
+    except Exception as exc:
+        logger.warning("[compare_patterns] LLM unavailable (%s); falling back to field diff", exc)
+        # Deterministic fallback: Jaccard-based field comparison
+        comparisons = []
+        for ip in identified:
+            i_fields = set(_fields(ip))
+            best: Optional[Dict] = None
+            best_score = -1.0
+            for gp in group_patterns:
+                g_fields = set(_fields(gp))
+                inter = len(i_fields & g_fields)
+                union = len(i_fields | g_fields)
+                score = inter / union if union else 0.0
+                if score > best_score:
+                    best_score = score
+                    best = gp
+            if best is None or best_score == 0:
+                rel, rec, expl = "novel", "add", "No field overlap with any existing pattern."
+            else:
+                g_fields = set(_fields(best))
+                missing = sorted(g_fields - i_fields)   # in group, not in identified
+                extra   = sorted(i_fields - g_fields)   # in identified, not in group
+                if not missing and not extra:
+                    rel, rec = "exact_match", "skip"
+                    expl = f"Identical fields to {best['pattern_name']}."
+                elif not extra:
+                    rel, rec = "looser_subset", "review"
+                    expl = f"{best['pattern_name']} also requires [{', '.join(missing)}] — this pattern is less selective."
+                elif not missing:
+                    rel, rec = "stricter_superset", "add"
+                    expl = f"Adds [{', '.join(extra)}] on top of {best['pattern_name']} — more selective."
+                else:
+                    rel, rec = "partial_overlap", "review"
+                    expl = (
+                        f"Shares [{', '.join(sorted(i_fields & g_fields))}] with "
+                        f"{best['pattern_name']}, but differs on [{', '.join(missing)}] vs [{', '.join(extra)}]."
+                    )
+            comparisons.append({
+                "identified_name": ip["pattern_name"],
+                "closest_existing_id": best["pattern_id"] if best else None,
+                "closest_existing_name": best["pattern_name"] if best else None,
+                "relationship": rel,
+                "explanation": expl,
+                "recommendation": rec,
+            })
+        return {
+            "comparisons": comparisons,
+            "summary": "Field-level comparison (LLM unavailable).",
+            "group_name": group_name,
+            "group_pattern_count": len(group_patterns),
+            "llm_available": False,
+        }
+
+
 def generate_mapping_regex(camt_path: Path, other_path: Path, max_examples: int = 10) -> Dict[str, object]:
     """Build LLM prompt samples using the large-file-safe ref index + streaming scanner."""
     value_to_entry, all_values = _build_camt_ref_index(camt_path)
