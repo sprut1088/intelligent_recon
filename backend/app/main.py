@@ -362,6 +362,9 @@ def export_cases(
         clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
     elif status == 'matched':
         clauses.append("reconciliation_status IN ('Matched & Settled (Auto-Close)', 'Resolved Manually')")
+    elif status in ('ai_agree', 'ai_caution', 'ai_disagree'):
+        clauses.append("json_extract(feature_snapshot_json, '$.ai_verification.verdict') = ?")
+        params.append(status.split('_', 1)[1].upper())
     elif status: clauses.append("reconciliation_status = ?"); params.append(status)
     if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI Confirmed \u2014 No Match')")
     if search:
@@ -401,6 +404,9 @@ def list_cases(status: Optional[str]=None, exception_only: bool=False, search: O
         clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
     elif status == 'matched':
         clauses.append("reconciliation_status IN ('Matched & Settled (Auto-Close)', 'Resolved Manually')")
+    elif status in ('ai_agree', 'ai_caution', 'ai_disagree'):
+        clauses.append("json_extract(feature_snapshot_json, '$.ai_verification.verdict') = ?")
+        params.append(status.split('_', 1)[1].upper())
     elif status: clauses.append("reconciliation_status = ?"); params.append(status)
     if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI Confirmed \u2014 No Match')")
     if search:
