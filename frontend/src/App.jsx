@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api/client';
 
+const fmtGroupName = (name) => name === 'default' ? 'Default Group' : name;
+
 const tabs = [
   ['workspace', 'Control Room'],
   ['intake', 'Data Intake'],
@@ -255,7 +257,7 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
                 <label title="Only patterns in this group will be used during reconciliation.">Pattern group</label>
                 <select value={selectedPatternGroup || (patternGroups || [])[0] || ''} onChange={(e) => setSelectedPatternGroup(e.target.value)}>
                   {(patternGroups || []).map((g) => (
-                    <option key={g} value={g}>{g}</option>
+                    <option key={g} value={g}>{fmtGroupName(g)}</option>
                   ))}
                 </select>
               </div>
@@ -539,7 +541,7 @@ function MatchingStudio({ patterns, rules, onTunePattern, onTogglePattern, onCre
   );
 }
 
-function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDelete, onDeleteGroup }) {
+function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDelete, onDeleteGroup, onToggle }) {
   const BLANK_PATTERN = {
     pattern_name: '',
     pattern_type: 'CUSTOM',
@@ -679,7 +681,7 @@ function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDel
                 style={{ fontSize: '0.85rem', padding: '0.3rem 0.5rem' }}
               >
                 {groupedPatterns.map((g) => (
-                  <option key={g.groupName} value={g.groupName}>{g.groupName} ({g.items.length})</option>
+                  <option key={g.groupName} value={g.groupName}>{fmtGroupName(g.groupName)} ({g.items.length})</option>
                 ))}
               </select>
               <span style={{ fontSize: '0.78rem', color: 'var(--muted, #64748b)' }}>
@@ -717,7 +719,7 @@ function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDel
                   <button className="btn ghost" style={{ fontSize: '0.78rem', color: 'var(--danger,#dc2626)' }} onClick={() => setDeleteConfirmActive(true)}>Delete group</button>
                 ) : (
                   <>
-                    <span style={{ fontSize: '0.8rem', color: 'var(--danger,#dc2626)', fontWeight: 600 }}>Delete all {activeGroup?.items.length} pattern{activeGroup?.items.length !== 1 ? 's' : ''} in &quot;{selectedGroup}&quot;?</span>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--danger,#dc2626)', fontWeight: 600 }}>Delete all {activeGroup?.items.length} pattern{activeGroup?.items.length !== 1 ? 's' : ''} in &quot;{fmtGroupName(selectedGroup)}&quot;?</span>
                     <button
                       className="btn primary"
                       style={{ fontSize: '0.78rem', background: 'var(--danger,#dc2626)', boxShadow: 'none' }}
@@ -762,6 +764,12 @@ function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDel
                         <td><Tag tone={modeTone(p.execution_mode)}>{fmtLabel(p.execution_mode)}</Tag></td>
                         <td style={{ color: 'var(--muted, #64748b)', fontSize: '0.85rem' }} title={confTooltip(p)}>{Math.round((p.confidence_threshold ?? 0.8) * 100)}%</td>
                         <td>
+                          <button
+                            className="btn ghost"
+                            style={{ fontSize: '0.78rem', color: p.status === 'ACTIVE' ? 'var(--warning,#d97706)' : 'var(--success,#16a34a)' }}
+                            onClick={() => onToggle(p)}
+                            title={p.status === 'ACTIVE' ? 'Deactivate this pattern' : 'Activate this pattern'}
+                          >{p.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}</button>
                           <button className="btn ghost" onClick={() => onDelete(p.pattern_id)}>Remove</button>
                         </td>
                       </tr>
@@ -1149,8 +1157,8 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                     const relLabel  = { exact_match: 'Already exists', looser_subset: 'Broader version', stricter_superset: 'More specific version', partial_overlap: 'Partially similar', novel: 'Brand new' };
                     const relTitle  = {
                       exact_match:        'Identical matching fields — this rule is already in the group.',
-                      looser_subset:      'Catches more transactions but with fewer checks, increasing false-positive risk.',
-                      stricter_superset:  'Adds extra checks on top of an existing rule — more precise but may miss some cases.',
+                      looser_subset:      'Uses fewer fields than an existing rule — higher false-positive risk. Check if the existing stricter rule is sufficient.',
+                      stricter_superset:  'Uses more fields than an existing rule — higher precision, fewer false positives. Generally worth adding.',
                       partial_overlap:    'Shares some matching fields with an existing rule but also differs — assess whether both are needed.',
                       novel:              'No similar rule exists in this group — covers a genuinely new matching scenario.',
                     };
@@ -1186,7 +1194,7 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                             style={{ fontSize: '0.82rem', padding: '0.3rem 0.5rem', flex: 1, maxWidth: '220px', borderRadius: '4px', border: '1px solid var(--border,#ccc)' }}
                           >
                             <option value="">— pick a group —</option>
-                            {existingGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                            {existingGroups.map(g => <option key={g} value={g}>{fmtGroupName(g)}</option>)}
                           </select>
                           <button
                             className="btn secondary"
@@ -1194,7 +1202,7 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                             onClick={runComparison}
                             style={{ fontSize: '0.82rem' }}
                           >
-                            {compareLoading ? 'Analysing…' : 'Run LLM analysis'}
+                            {compareLoading ? 'Analysing…' : 'Run AI Comparison'}
                           </button>
                           {compareResult && (
                             <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => { setCompareResult(null); setCompareError(''); setCompareStale(false); }}>Clear ✕</button>
@@ -1239,7 +1247,18 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                                       </td>
                                       <td>
                                         {row.closest_existing_name
-                                          ? <><span style={{ fontWeight: 500 }}>{row.closest_existing_name}</span>{row.closest_existing_id && <><br /><code style={{ fontSize: '0.72rem', color: 'var(--muted,#94a3b8)' }}>{row.closest_existing_id}</code></>}</>
+                                          ? (() => {
+                                              const cp = (patterns || []).find(p => p.pattern_id === row.closest_existing_id);
+                                              const cpFields = cp?.pattern_rule?.fields || cp?.pattern_rule?.route_to && ['→ manual review'] || [];
+                                              const tip = cpFields.length ? `Fields: [${cpFields.join(', ')}]` : '';
+                                              return (
+                                                <>
+                                                  <span style={{ fontWeight: 500 }} title={tip}>{row.closest_existing_name}</span>
+                                                  {row.closest_existing_id && <><br /><code style={{ fontSize: '0.72rem', color: 'var(--muted,#94a3b8)' }}>{row.closest_existing_id}</code></>}
+                                                  {cpFields.length > 0 && <><br /><code style={{ fontSize: '0.72rem', color: 'var(--muted,#64748b)' }} title={tip}>[{cpFields.join(', ')}]</code></>}
+                                                </>
+                                              );
+                                            })()
                                           : <em style={{ color: 'var(--muted,#94a3b8)' }}>none</em>
                                         }
                                       </td>
@@ -1297,7 +1316,7 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                               style={{ fontSize: '0.82rem', padding: '0.3rem 0.5rem', flex: 1, minWidth: '160px' }}
                             >
                               <option value="">— pick a group —</option>
-                              {existingGroups.map(g => <option key={g} value={g}>{g}</option>)}
+                              {existingGroups.map(g => <option key={g} value={g}>{fmtGroupName(g)}</option>)}
                             </select>
                             <button
                               className="btn secondary"
@@ -3323,7 +3342,7 @@ export default function App() {
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
     if (active === 'pattern-builder') return <PatternBuilder onGenerateMapping={generateRegexMapping} onGeneratePatterns={generatePatternsFromFiles} onSuggestPatterns={generatePatternSuggestions} onSave={saveGeneratedPattern} onSaveBulk={createBulkPatterns} proposedPatterns={proposedPatterns} setProposedPatterns={setProposedPatterns} patterns={patterns} />;
-    if (active === 'patterns') return <PatternManagement patterns={patterns} highlightGroup={lastBulkGroup} onCreate={createPattern} onUpdate={tunePattern} onDelete={removePattern} onDeleteGroup={removePatternGroup} />;
+    if (active === 'patterns') return <PatternManagement patterns={patterns} highlightGroup={lastBulkGroup} onCreate={createPattern} onUpdate={tunePattern} onDelete={removePattern} onDeleteGroup={removePatternGroup} onToggle={togglePattern} />;
     const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
     const activeBatchName = activeBatch?.batch_name || activeBatch?.batch_id || 'recon';
     if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;

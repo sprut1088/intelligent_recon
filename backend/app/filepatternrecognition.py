@@ -1200,15 +1200,46 @@ def compare_patterns_with_llm(
     group_block = "\n".join(f"  - {_fmt(p, include_id=True)}" for p in group_patterns) or "  (none)"
 
     prompt = (
-        "You are an expert payment reconciliation pattern analyst.\n\n"
+        "You are an expert payment reconciliation engineer.\n\n"
+        "DOMAIN CONTEXT — fields available for matching:\n"
+        "  PSR (internal payment settlement record) fields:\n"
+        "    end_to_end_id  – unique transaction identifier; strongest match key when present\n"
+        "    pmt_ref        – payment reference string; highly reliable when unique per payment\n"
+        "    invoice        – invoice number extracted from remittance; reliable when structured\n"
+        "    amount         – settlement amount; use only alongside a reference field to avoid collisions\n"
+        "    direction      – CR or DR; adds safety when pairing amount-only rules\n"
+        "    counterparty   – payer/payee name; fuzzy-match only, high false-positive risk alone\n"
+        "    amount_sum     – sum of a group of PSR amounts; used in batch/split settlement patterns\n"
+        "    amount_variance– tolerance band around amount; used for minor rounding or FX patterns\n"
+        "  CAMT.053 (bank statement) fields: same set above, sourced from the bank entry.\n\n"
+        "FIELD TAXONOMY:\n"
+        "  Primary-key fields (drive pattern identity — what makes a payment unique):\n"
+        "    end_to_end_id, pmt_ref, invoice, counterparty, amount_sum\n"
+        "  Qualifier fields (guards/constraints, NOT primary identifiers):\n"
+        "    amount, direction, amount_variance\n"
+        "  CRITICAL: Two patterns that share ONLY qualifier fields (e.g. both use 'amount')\n"
+        "  with NO shared primary-key field are NOVEL to each other — they match completely\n"
+        "  different payment scenarios. Do NOT classify them as partial_overlap.\n"
+        "  Example: [amount, direction] vs [counterparty, amount] → novel (no shared PK field).\n\n"
+        "RECONCILIATION PRECISION RULE:\n"
+        "  More matching fields = higher precision = fewer false positives = PREFERRED.\n"
+        "  A pattern that uses [pmt_ref, amount] is BETTER than one using [pmt_ref] alone —\n"
+        "  it adds the amount guard to prevent reference collisions.\n"
+        "  A pattern using fewer fields than an existing one is RISKIER, not simpler.\n\n"
         f"Newly identified patterns (from file analysis):\n{identified_block}\n\n"
-        f"Existing patterns in group \"{group_name}\":\n{group_block}\n\n"
+        f"Existing active patterns in group \"{group_name}\":\n{group_block}\n\n"
         "For each identified pattern, determine its relationship to the existing group.\n"
-        "Consider not just field names but their semantic roles:\n"
-        "  - Is the identified pattern a looser version (fewer fields = higher recall, more false positives)?\n"
-        "  - Is it stricter (more fields = lower recall, fewer false positives)?\n"
-        "  - Does it cover a genuinely different matching scenario?\n"
-        "  - Would adding it alongside existing patterns create redundancy or useful coverage?\n\n"
+        "Consider the SEMANTIC role of each field, not just field count:\n"
+        "  - Is the identified pattern a LOOSER version (fewer fields → higher false-positive risk)?\n"
+        "  - Is it STRICTER (more fields → stronger precision, lower false-positive risk)?\n"
+        "  - Does it cover a genuinely different matching scenario (different primary key field)?\n"
+        "  - Would adding it alongside existing patterns create redundancy or useful extra precision?\n\n"
+        "Recommendation guidance:\n"
+        "  exact_match       → skip (duplicate)\n"
+        "  stricter_superset → add  (more fields = higher precision, strengthens the group)\n"
+        "  looser_subset     → review (fewer fields = more false positives; check if existing stricter rule is sufficient)\n"
+        "  partial_overlap   → review (overlapping but divergent; assess whether both are needed)\n"
+        "  novel             → add  (covers a new matching scenario)\n\n"
         "Return ONLY valid JSON:\n"
         "{\n"
         '  "comparisons": [\n'
@@ -1217,7 +1248,7 @@ def compare_patterns_with_llm(
         '      "closest_existing_id": "<pattern_id or null>",\n'
         '      "closest_existing_name": "<name or null>",\n'
         '      "relationship": "exact_match|looser_subset|stricter_superset|partial_overlap|novel",\n'
-        '      "explanation": "<1–2 sentences explaining the difference or why it is novel>",\n'
+        '      "explanation": "<1–2 sentences: focus on which fields differ and the reconciliation precision impact>",\n'
         '      "recommendation": "skip|add|review"\n'
         "    }\n"
         "  ],\n"
@@ -1225,11 +1256,10 @@ def compare_patterns_with_llm(
         "}\n\n"
         "Relationship definitions:\n"
         "  exact_match       – fields are identical to an existing pattern\n"
-        "  looser_subset     – identified uses fewer fields (higher recall, lower precision)\n"
-        "  stricter_superset – identified uses more fields (lower recall, higher precision)\n"
+        "  looser_subset     – identified uses fewer fields (more false-positive risk)\n"
+        "  stricter_superset – identified uses more fields (higher precision, preferred)\n"
         "  partial_overlap   – shares some fields but also uses different ones\n"
-        "  novel             – no meaningful field overlap with any existing pattern\n"
-        "Recommendation: skip = already covered; add = genuinely new value; review = borderline"
+        "  novel             – no meaningful field overlap with any existing pattern"
     )
 
     try:
@@ -1240,7 +1270,10 @@ def compare_patterns_with_llm(
         return result
     except Exception as exc:
         logger.warning("[compare_patterns] LLM unavailable (%s); falling back to field diff", exc)
-        # Deterministic fallback: Jaccard-based field comparison
+        # Deterministic fallback: primary-key-aware Jaccard comparison
+        # Qualifier fields (amount, direction, amount_variance) are guards, not identifiers —
+        # sharing only qualifiers means the patterns are novel to each other, not similar.
+        _PK_FIELDS = {"end_to_end_id", "pmt_ref", "invoice", "counterparty", "amount_sum"}
         comparisons = []
         for ip in identified:
             i_fields = set(_fields(ip))
@@ -1248,14 +1281,15 @@ def compare_patterns_with_llm(
             best_score = -1.0
             for gp in group_patterns:
                 g_fields = set(_fields(gp))
-                inter = len(i_fields & g_fields)
-                union = len(i_fields | g_fields)
-                score = inter / union if union else 0.0
+                pk_i = i_fields & _PK_FIELDS
+                pk_g = g_fields & _PK_FIELDS
+                pk_union = len(pk_i | pk_g)
+                score = len(pk_i & pk_g) / pk_union if pk_union else 0.0
                 if score > best_score:
                     best_score = score
                     best = gp
             if best is None or best_score == 0:
-                rel, rec, expl = "novel", "add", "No field overlap with any existing pattern."
+                rel, rec, expl = "novel", "add", "No primary-key field overlap with any existing pattern."
             else:
                 g_fields = set(_fields(best))
                 missing = sorted(g_fields - i_fields)   # in group, not in identified
@@ -1268,7 +1302,7 @@ def compare_patterns_with_llm(
                     expl = f"{best['pattern_name']} also requires [{', '.join(missing)}] — this pattern is less selective."
                 elif not missing:
                     rel, rec = "stricter_superset", "add"
-                    expl = f"Adds [{', '.join(extra)}] on top of {best['pattern_name']} — more selective."
+                    expl = f"Adds [{', '.join(extra)}] on top of {best['pattern_name']} — higher precision, fewer false positives."
                 else:
                     rel, rec = "partial_overlap", "review"
                     expl = (
