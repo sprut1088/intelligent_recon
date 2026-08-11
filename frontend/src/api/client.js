@@ -81,9 +81,30 @@ export const api = {
     if (batchName) form.append('batch_name', batchName);
     return request('/api/files/upload', { method: 'POST', body: form });
   },
+  generateMapping: (camtFile, otherFile, maxExamples = 10) => {
+    const form = new FormData();
+    form.append('camt_file', camtFile);
+    form.append('other_file', otherFile);
+    form.append('max_examples', String(maxExamples));
+    return request('/api/files/generate-mapping', { method: 'POST', body: form });
+  },
+  patternSuggestions: (camtFile, otherFile, maxExamples = 8) => {
+    const form = new FormData();
+    form.append('camt_file', camtFile);
+    form.append('other_file', otherFile);
+    form.append('max_examples', String(maxExamples));
+    return request('/api/files/pattern-suggestions', { method: 'POST', body: form });
+  },
+  generateReconciliationPatterns: (camtFile, otherFile, providedRegexMap = null) => {
+    const form = new FormData();
+    form.append('camt_file', camtFile);
+    form.append('other_file', otherFile);
+    if (providedRegexMap != null) form.append('provided_regex_map', JSON.stringify(providedRegexMap));
+    return request('/api/files/reconcile-patterns', { method: 'POST', body: form });
+  },
   validateBatch: (batchId) => request(`/api/data-quality/batches/${batchId}/validate`, { method: 'POST' }),
   quality: (batchId) => request(`/api/data-quality/batches/${batchId}`),
-  runBatch: (batchId, amountDivisor = null) => request(`/api/files/batches/${batchId}/run`, { method: 'POST', body: JSON.stringify({ reset: true, ...(amountDivisor != null ? { amount_divisor: amountDivisor } : {}) }) }),
+  runBatch: (batchId, amountDivisor = null, patternGroup = null) => request(`/api/files/batches/${batchId}/run`, { method: 'POST', body: JSON.stringify({ reset: true, ...(amountDivisor != null ? { amount_divisor: amountDivisor } : {}), ...(patternGroup ? { pattern_group: patternGroup } : {}) }) }),
   loadSampleData: (amountDivisor = null) => request('/api/load-sample', { method: 'POST', body: JSON.stringify({ reset: true, ...(amountDivisor != null ? { amount_divisor: amountDivisor } : {}) }) }),
   runRecon: () => request('/api/reconcile/run', { method: 'POST' }),
   aiTriage: () => request('/api/reconcile/ai-triage', { method: 'POST' }),
@@ -145,6 +166,9 @@ export const api = {
   }),
   patterns: async () => (await request('/api/patterns')).items || [],
   createPattern: (payload) => request('/api/patterns', { method: 'POST', body: JSON.stringify(payload) }),
+  createBulkPatterns: (groupName, patterns) =>
+    request('/api/patterns/bulk', { method: 'POST', body: JSON.stringify({ group_name: groupName, patterns }) }),
+  deletePattern: (patternId) => request(`/api/patterns/${patternId}`, { method: 'DELETE' }),
 
   updatePattern: (patternId, payload) => request(`/api/patterns/${patternId}`, { method: 'PATCH', body: JSON.stringify(payload) }),
   activatePattern: (patternId) => request(`/api/patterns/${patternId}/activate`, { method: 'POST' }),

@@ -32,3 +32,41 @@ def test_pattern_registry_can_create_update_and_toggle_pattern():
         on_resp = client.post("/api/patterns/PX-TEST/activate")
         assert on_resp.status_code == 200
         assert on_resp.json()["status"] == "ACTIVE"
+
+
+def test_pattern_listing_groups_by_name_and_version():
+    with TestClient(app) as client:
+        client.post(
+            "/api/patterns",
+            json={
+                "pattern_id": "PX-GROUP-1",
+                "pattern_name": "P1",
+                "pattern_type": "CUSTOM",
+                "pattern_group": "Group1",
+                "pattern_version": "1.0",
+                "pattern_rule": {"fields": ["invoice"]},
+                "status": "DRAFT",
+                "execution_mode": "SUGGESTION",
+                "confidence_threshold": 0.75,
+            },
+        )
+        client.post(
+            "/api/patterns",
+            json={
+                "pattern_id": "PX-GROUP-2",
+                "pattern_name": "P2",
+                "pattern_type": "CUSTOM",
+                "pattern_group": "Group1",
+                "pattern_version": "1.0",
+                "pattern_rule": {"fields": ["amount"]},
+                "status": "DRAFT",
+                "execution_mode": "SUGGESTION",
+                "confidence_threshold": 0.8,
+            },
+        )
+
+        response = client.get("/api/patterns")
+        assert response.status_code == 200
+        body = response.json()
+        assert body["grouped_patterns"][0]["group_name"] == "Group1"
+        assert [item["pattern_name"] for item in body["grouped_patterns"][0]["items"]] == ["P1", "P2"]
