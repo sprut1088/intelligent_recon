@@ -44,6 +44,7 @@ function mapSummary(payload) {
     learning_candidates: payload.learning_candidate_count || 0,
     statuses: payload.by_status || [],
     reasons: payload.by_reason || [],
+    by_rule: payload.by_rule || [],
     ai_verified_count: (payload.kpi || {}).ai_verified_count || 0,
     raw: payload,
   };
