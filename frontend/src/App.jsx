@@ -2529,11 +2529,73 @@ function AiTriageLoader() {
   );
 }
 
+function PatternBreakdownPanel({ byRule = [], total = 0 }) {
+  if (!byRule.length) return <p className="empty small">No pattern data yet — run a batch first.</p>;
+  const sorted = [...byRule].sort((a, b) => (b.count || 0) - (a.count || 0));
+  const max = Math.max(...sorted.map(r => r.count || 0), 1);
+  const cell = { padding: '0.4rem 0.6rem', textAlign: 'right', fontSize: '0.82rem' };
+  const badge = (n, tone) => n > 0
+    ? <span style={{ display: 'inline-block', minWidth: '1.8rem', padding: '0.1rem 0.4rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600, textAlign: 'center', background: tone === 'good' ? '#dcfce7' : tone === 'warn' ? '#fef9c3' : tone === 'bad' ? '#fee2e2' : '#e2e8f0', color: tone === 'good' ? '#16a34a' : tone === 'warn' ? '#ca8a04' : tone === 'bad' ? '#dc2626' : '#64748b' }}>{n}</span>
+    : <span style={{ color: 'var(--muted,#aaa)', fontSize: '0.75rem' }}>—</span>;
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+        <thead>
+          <tr style={{ borderBottom: '2px solid var(--border,#e2e8f0)', textAlign: 'left' }}>
+            <th style={{ padding: '0.4rem 0.6rem', fontWeight: 600 }}>Rule applied</th>
+            <th style={{ padding: '0.4rem 0.6rem', fontWeight: 600, width: '28%' }}>Distribution</th>
+            <th style={{ ...cell, color: '#16a34a' }}>Matched</th>
+            <th style={{ ...cell, color: '#dc2626' }}>Exceptions</th>
+            <th style={{ ...cell, color: '#ca8a04' }}>In-Transit</th>
+            <th style={{ ...cell, color: '#64748b' }}>Bank Only</th>
+            <th style={{ ...cell }}>Total</th>
+            <th style={{ ...cell }}>%</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r, i) => {
+            const pct = total > 0 ? ((r.count || 0) / total * 100).toFixed(1) : '0.0';
+            return (
+              <tr key={i} style={{ borderBottom: '1px solid var(--border,#e2e8f0)' }}>
+                <td style={{ padding: '0.4rem 0.6rem', fontFamily: 'monospace', fontSize: '0.76rem' }}>{r.rule_applied || '—'}</td>
+                <td style={{ padding: '0.4rem 0.6rem' }}>
+                  <div style={{ background: 'var(--surface2,#f1f5f9)', borderRadius: '3px', height: '7px' }}>
+                    <div style={{ width: `${Math.max(2, ((r.count || 0) / max) * 100)}%`, height: '100%', background: 'var(--primary,#3b82f6)', borderRadius: '3px' }} />
+                  </div>
+                </td>
+                <td style={cell}>{badge(r.matched_count || 0, 'good')}</td>
+                <td style={cell}>{badge(r.exception_count || 0, 'bad')}</td>
+                <td style={cell}>{badge(r.in_transit_count || 0, 'warn')}</td>
+                <td style={cell}>{badge(r.bank_only_count || 0, 'neutral')}</td>
+                <td style={{ ...cell, fontWeight: 600 }}>{r.count || 0}</td>
+                <td style={{ ...cell, color: 'var(--muted,#888)' }}>{pct}%</td>
+              </tr>
+            );
+          })}
+        </tbody>
+        <tfoot>
+          <tr style={{ borderTop: '2px solid var(--border,#e2e8f0)', fontWeight: 600 }}>
+            <td style={{ padding: '0.4rem 0.6rem' }}>Total</td>
+            <td />
+            <td style={cell}>{sorted.reduce((s, r) => s + (r.matched_count || 0), 0)}</td>
+            <td style={cell}>{sorted.reduce((s, r) => s + (r.exception_count || 0), 0)}</td>
+            <td style={cell}>{sorted.reduce((s, r) => s + (r.in_transit_count || 0), 0)}</td>
+            <td style={cell}>{sorted.reduce((s, r) => s + (r.bank_only_count || 0), 0)}</td>
+            <td style={cell}>{total}</td>
+            <td style={cell}>100%</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
 function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, onResolve, loading, triageRunning, batchName }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
   const [page, setPage] = useState(0);
+  const [activeTab, setActiveTab] = useState('records');
 
   const total = results.total || 0;
   const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -2576,7 +2638,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
       {triageRunning && <AiTriageLoader />}
       <div className="screen-title split">
         <div>
-          <div className="eyebrow">Results workbench</div>
+          <div className="eyebrow">Results workbench{batchName ? <span style={{ marginLeft: '0.6rem', fontWeight: 400, color: 'var(--muted,#888)', fontSize: '0.78rem' }}>· {batchName}</span> : null}</div>
           <h1>Matched, proposed and unresolved records</h1>
           <p>Drill into match evidence, failed fields, confidence and next-best action.</p>
         </div>
@@ -2641,6 +2703,15 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
         </div>
       </div>
       <SummaryBar summary={summary} total={total} activeFilter={activeFilter} onFilter={onFilter} />
+      <div style={{ display: 'flex', gap: '0.25rem', borderBottom: '2px solid var(--border,#e2e8f0)', marginBottom: '0.75rem' }}>
+        {[['records', 'Records'], ['patterns', 'Pattern breakdown']].map(([id, label]) => (
+          <button key={id} onClick={() => setActiveTab(id)} style={{ padding: '0.4rem 0.9rem', fontSize: '0.82rem', fontWeight: activeTab === id ? 600 : 400, border: 'none', borderBottom: activeTab === id ? '2px solid var(--primary,#3b82f6)' : '2px solid transparent', background: 'none', color: activeTab === id ? 'var(--primary,#3b82f6)' : 'var(--muted,#888)', cursor: 'pointer', marginBottom: '-2px' }}>{label}</button>
+        ))}
+      </div>
+      {activeTab === 'patterns' && (
+        <PatternBreakdownPanel byRule={summary.by_rule || []} total={total} />
+      )}
+      {activeTab === 'records' && <>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.25rem 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <button
@@ -2674,6 +2745,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
         </div>
         <span style={{ fontSize: '0.8rem', color: 'var(--muted, #888)' }}>{countLabel}</span>
       </div>
+      </>}{/* end activeTab === 'records' */}
       <EvidenceDrawer
         selected={selected}
         onClose={() => setSelected(null)}

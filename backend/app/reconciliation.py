@@ -40,6 +40,41 @@ def similarity(left: str, right: str) -> float:
     wr = _rfuzz.WRatio(a, b) / 100.0
     return max(ts, wr)
 
+# IDs of built-in seed patterns with hard-coded engine logic
+_SEED_IDS = frozenset({"P1", "P2", "P3", "P4", "P5", "P6", "P7", "P10"})
+# Fields supported by the generic matcher (excludes group/variance fields)
+_GENERIC_FIELDS = frozenset({"end_to_end_id", "pmt_ref", "invoice", "amount", "direction"})
+
+def _generic_psr_key(psr, fields) -> Optional[tuple]:
+    """Composite match key from PSR fields for generic pattern matching."""
+    parts = []
+    for f in fields:
+        if f == "end_to_end_id":   v = (psr.id or "").strip().upper()
+        elif f == "pmt_ref":       v = (psr.reference or "").strip().upper()
+        elif f == "invoice":       v = (psr.invoice or "").strip().upper()
+        elif f == "amount":        v = str(round(float(psr.amount), 2)) if psr.amount is not None else ""
+        elif f == "direction":     v = (psr.direction or "").strip().upper()
+        else:                      v = ""
+        if not v:
+            return None
+        parts.append(v)
+    return tuple(parts)
+
+def _generic_camt_key(camt, fields) -> Optional[tuple]:
+    """Composite match key from CAMT fields for generic pattern matching."""
+    parts = []
+    for f in fields:
+        if f == "end_to_end_id":   v = (camt.end_to_end_id or "").strip().upper()
+        elif f == "pmt_ref":       v = (camt.pmt_ref or "").strip().upper()
+        elif f == "invoice":       v = (camt.invoice or "").strip().upper()
+        elif f == "amount":        v = str(round(float(camt.amount), 2)) if camt.amount is not None else ""
+        elif f == "direction":     v = (camt.direction or "").strip().upper()
+        else:                      v = ""
+        if not v:
+            return None
+        parts.append(v)
+    return tuple(parts)
+
 
 # ── Counterparty normalisation (TASK-35) ───────────────────────────────────────
 # Used by P6 partitioning and (post TASK-37) by P4 fuzzy gate. Keep deterministic.
@@ -230,6 +265,35 @@ def pattern_config(pattern_registry_rows: Sequence[Dict]) -> Dict[str, Dict]:
             except json.JSONDecodeError:
                 rule = {}
         config[row.get("pattern_id")] = {**row, "rule": rule or {}}
+
+    # Copied groups have PX-* IDs; add seed aliases so the engine's hard-coded
+    # P1/P2/… checks still fire when field signatures match the seed pattern.
+    _SEED_SIGS: Dict[frozenset, str] = {
+        frozenset(["end_to_end_id"]): "P1",
+        frozenset(["pmt_ref", "amount"]): "P2",
+        frozenset(["invoice", "amount"]): "P3",
+        frozenset(["counterparty", "amount"]): "P4",
+        frozenset(["identity", "amount_variance"]): "P7",
+    }
+    _P6_P10_FIELDS = frozenset(["pmt_ref", "invoice", "amount_sum"])
+    for pid, entry in list(config.items()):
+        if pid in _SEED_IDS:
+            continue  # already a native seed pattern
+        rule = entry.get("rule") or {}
+        fields = frozenset(rule.get("fields") or [])
+        if rule.get("route_to") == "manual_review":
+            if "P5" not in config:
+                config["P5"] = entry
+        elif fields in _SEED_SIGS:
+            alias = _SEED_SIGS[fields]
+            if alias not in config:
+                config[alias] = entry
+        elif fields == _P6_P10_FIELDS:
+            if "max_split_size" in rule and "P10" not in config:
+                config["P10"] = entry
+            elif "max_split_size" not in rule and "P6" not in config:
+                config["P6"] = entry
+
     return config
 
 
@@ -241,6 +305,46 @@ def pattern_is_active(config: Dict[str, Dict], pattern_id: str) -> bool:
 def pattern_rule_value(config: Dict[str, Dict], pattern_id: str, key: str, default):
     row = config.get(pattern_id) or {}
     rule = row.get("rule") or {}
+    return rule.get(key, default)
+
+
+def _find_by_cap(config: Dict[str, Dict], *,
+                 fields: Optional[frozenset] = None,
+                 has_field: Optional[str] = None,
+                 has_rule_key: Optional[str] = None,
+                 route_to: Optional[str] = None) -> Optional[Dict]:
+    """Return first ACTIVE pattern entry matching the given capability signature.
+
+    Checks are cumulative — all supplied criteria must match.
+    Seed-ID patterns (P1, P2 …) are checked first so they win ties."""
+    def _matches(entry: Dict) -> bool:
+        if entry.get("status") != "ACTIVE":
+            return False
+        rule = entry.get("rule") or {}
+        f = frozenset(rule.get("fields") or [])
+        if route_to and rule.get("route_to") != route_to:
+            return False
+        if has_rule_key and has_rule_key not in rule:
+            return False
+        if has_field and has_field not in f:
+            return False
+        if fields is not None and f != fields:
+            return False
+        return True
+
+    # Prefer seed-ID entries (P1, P2 …) for determinism
+    for pid in sorted(config):
+        if pid in _SEED_IDS and _matches(config[pid]):
+            return config[pid]
+    for pid, entry in config.items():
+        if pid not in _SEED_IDS and _matches(entry):
+            return entry
+    return None
+
+
+def _rule_val(entry: Optional[Dict], key: str, default):
+    """Read a rule knob from a pattern entry (returned by _find_by_cap)."""
+    rule = (entry or {}).get("rule") or {}
     return rule.get(key, default)
 
 def active_learned_patterns(pattern_registry_rows: Sequence[Dict]) -> List[Dict]:
@@ -330,22 +434,23 @@ def find_one_to_many_groups(
         camt, psrs, anchor_psr, confidence, rule_applied, reason_code,
         explanation, ambiguous, group_variance, alternative_psrs
     """
-    if not pattern_is_active(config, "P6"):
+    p6 = _find_by_cap(config, has_rule_key="max_group_size")
+    if not p6:
         return []
 
     # TASK-35: bank-vs-partition similarity is the only fuzzy gate; in-partition
     # membership is exact on the normalised key. The legacy P6.counterparty_threshold
     # rule is deprecated — it no longer affects matching.
-    bank_cp_min  = float(pattern_rule_value(config, "P6", "bank_counterparty_min_similarity", 0.95))
-    max_grp_size = int(pattern_rule_value(config, "P6", "max_group_size", 6))
-    date_window  = int(pattern_rule_value(config, "P6", "date_window_days", 3))
-    var_subpass      = bool(pattern_rule_value(config, "P6", "variance_subpass_enabled", True))
-    var_max_size     = int(pattern_rule_value(config, "P6", "variance_subpass_max_group_size", 3))
-    major_var_factor = float(pattern_rule_value(config, "P6", "major_variance_factor", 4.0))
+    bank_cp_min  = float(_rule_val(p6, "bank_counterparty_min_similarity", 0.95))
+    max_grp_size = int(_rule_val(p6, "max_group_size", 6))
+    date_window  = int(_rule_val(p6, "date_window_days", 3))
+    var_subpass      = bool(_rule_val(p6, "variance_subpass_enabled", True))
+    var_max_size     = int(_rule_val(p6, "variance_subpass_max_group_size", 3))
+    major_var_factor = float(_rule_val(p6, "major_variance_factor", 4.0))
     # TASK-36: bank-side batch markers (e.g. end_to_end_id = "BATCH-GRP-A") seed grouping
     # first and earn a higher confidence (default 92 vs 88 for unflagged subset-sum hits).
-    marker_regex      = str(pattern_rule_value(config, "P6", "batch_marker_regex", _DEFAULT_BATCH_MARKER_REGEX))
-    marker_confidence = int(pattern_rule_value(config, "P6", "marker_seeded_confidence", 92))
+    marker_regex      = str(_rule_val(p6, "batch_marker_regex", _DEFAULT_BATCH_MARKER_REGEX))
+    marker_confidence = int(_rule_val(p6, "marker_seeded_confidence", 92))
 
     groups: List[Dict] = []
     used_psr_ids: set = set()
@@ -542,16 +647,17 @@ def find_one_to_n_splits(
         reason_code, explanation, marker_detected, ambiguous,
         alternative_camts, variance
     """
-    if not pattern_is_active(config, "P10"):
+    p10 = _find_by_cap(config, has_rule_key="max_split_size")
+    if not p10:
         return []
 
-    max_split        = int(pattern_rule_value(config, "P10", "max_split_size", 5))
-    date_window      = int(pattern_rule_value(config, "P10", "date_window_days", 3))
-    cp_min_sim       = float(pattern_rule_value(config, "P10", "bank_counterparty_min_similarity", 0.95))
-    marker_regex     = str(pattern_rule_value(config, "P10", "split_marker_regex", _DEFAULT_SPLIT_MARKER_REGEX))
-    ref_conf         = int(pattern_rule_value(config, "P10", "shared_reference_confidence", 92))
-    sum_conf         = int(pattern_rule_value(config, "P10", "subset_sum_confidence", 86))
-    major_var_factor = float(pattern_rule_value(config, "P10", "major_variance_factor", 4.0))
+    max_split        = int(_rule_val(p10, "max_split_size", 5))
+    date_window      = int(_rule_val(p10, "date_window_days", 3))
+    cp_min_sim       = float(_rule_val(p10, "bank_counterparty_min_similarity", 0.95))
+    marker_regex     = str(_rule_val(p10, "split_marker_regex", _DEFAULT_SPLIT_MARKER_REGEX))
+    ref_conf         = int(_rule_val(p10, "shared_reference_confidence", 92))
+    sum_conf         = int(_rule_val(p10, "subset_sum_confidence", 86))
+    major_var_factor = float(_rule_val(p10, "major_variance_factor", 4.0))
 
     splits: List[Dict] = []
     used_psr_ids: set = set()
@@ -789,18 +895,26 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     logger.info("reconcile_transactions: psr=%d camt=%d patterns=%d", len(psr_transactions), len(camt_transactions), len(pattern_registry_rows))
     cases=[]; used=set(); idx=1; p5_pending: List[PsrTransaction]=[]
     config = pattern_config(pattern_registry_rows)
+
+    # Resolve each engine capability once — no hard-coded IDs beyond this point.
+    _p1 = _find_by_cap(config, fields=frozenset(["end_to_end_id"]))
+    _p2 = _find_by_cap(config, fields=frozenset(["pmt_ref", "amount"]))
+    _p3 = _find_by_cap(config, fields=frozenset(["invoice", "amount"]))
+    _p4 = _find_by_cap(config, has_field="counterparty")
+    _p7 = _find_by_cap(config, has_field="amount_variance")
+
     # TASK-37: P4 hardened. similarity_floor replaces threshold (legacy key still honoured).
-    _legacy_p4_threshold = pattern_rule_value(config, "P4", "threshold", None)
+    _legacy_p4_threshold = _rule_val(_p4, "threshold", None)
     if _legacy_p4_threshold is not None:
         logger.warning("P4.threshold is deprecated; use P4.similarity_floor (default 0.92). Legacy value=%s applied as floor.", _legacy_p4_threshold)
         p4_sim_floor = float(_legacy_p4_threshold)
     else:
-        p4_sim_floor = float(pattern_rule_value(config, "P4", "similarity_floor", 0.92))
-    p4_conf_cap            = int(pattern_rule_value(config, "P4", "confidence_cap", 89))
-    p4_corrob_required     = bool(pattern_rule_value(config, "P4", "corroboration_required", True))
-    p4_shared_sub_min_len  = int(pattern_rule_value(config, "P4", "shared_substring_min_len", 5))
-    p4_date_window_days    = int(pattern_rule_value(config, "P4", "date_window_days", 1))
-    p7_minor_tolerance = float(pattern_rule_value(config, "P7", "minor_tolerance", settings.minor_variance_tolerance))
+        p4_sim_floor = float(_rule_val(_p4, "similarity_floor", 0.92))
+    p4_conf_cap            = int(_rule_val(_p4, "confidence_cap", 89))
+    p4_corrob_required     = bool(_rule_val(_p4, "corroboration_required", True))
+    p4_shared_sub_min_len  = int(_rule_val(_p4, "shared_substring_min_len", 5))
+    p4_date_window_days    = int(_rule_val(_p4, "date_window_days", 1))
+    p7_minor_tolerance = float(_rule_val(_p7, "minor_tolerance", settings.minor_variance_tolerance))
     by_e2e={b.end_to_end_id:b for b in camt_transactions if b.end_to_end_id}
     by_ref_amt={}; by_inv_amt={}; by_inv={}; by_amt={}
     for b in camt_transactions:
@@ -811,12 +925,12 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     learned = active_learned_patterns(pattern_registry_rows)
     for psr in psr_transactions:
         bank = by_e2e.get(psr.id)
-        if pattern_is_active(config, "P1") and bank and bank.ntry_id not in used:
+        if _p1 and bank and bank.ntry_id not in used:
             var = amount_variance(psr.amount, bank.amount) or 0
             if amount_equal(psr.amount, bank.amount):
                 status, reason, conf, rule, flag, expl = "Matched & Settled (Auto-Close)", "EXACT_MATCH", 100, "P1_EXACT_END_TO_END_ID", "N", "Exact EndToEndId match and exact amount match. Auto-close is safe."
                 sugg=[]
-            elif pattern_is_active(config, "P7") and abs(var) <= p7_minor_tolerance:
+            elif _p7 and abs(var) <= p7_minor_tolerance:
                 status, reason, conf, rule, flag, expl = "Post to Short or Over Ledger", "AMOUNT_VARIANCE_MINOR", 86, "P7_AMOUNT_VARIANCE", "Y", f"Identity matched but amount variance {var} is within configured minor tolerance."
                 sugg=[{"action":"POST_LEDGER_CANDIDATE","confidence":0.86,"variance":var}]
             else:
@@ -824,13 +938,13 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
                 sugg=[{"action":"ROUTE_TO_REVIEW","confidence":0.70,"variance":var}]
             used.add(bank.ntry_id); cases.append(build_case(idx, psr, bank, status, reason, "1_TO_1", conf, rule, flag, expl, sugg)); idx+=1; continue
         secondary = next((b for b in by_ref_amt.get((psr.reference,psr.amount),[]) if b.ntry_id not in used), None)
-        if pattern_is_active(config, "P2") and secondary:
+        if _p2 and secondary:
             used.add(secondary.ntry_id); cases.append(build_case(idx, psr, secondary, "Matched & Settled (Auto-Close)", "PMT_REF_AMOUNT_MATCH", "1_TO_1", 96, "P2_PMT_REF_AMOUNT", "N", "EndToEndId was not available or did not match, but PMT-REF and amount matched.")); idx+=1; continue
         inv = next((b for b in by_inv_amt.get((psr.invoice,psr.amount),[]) if b.ntry_id not in used), None)
-        if pattern_is_active(config, "P3") and inv:
+        if _p3 and inv:
             used.add(inv.ntry_id); cases.append(build_case(idx, psr, inv, "Matched & Settled (Auto-Close)", "INVOICE_AMOUNT_MATCH", "1_TO_1", 92, "P3_INVOICE_USTRD_AMOUNT", "N", "Invoice extracted from CAMT remittance matched PSR invoice and amount.")); idx+=1; continue
         inv_near = next((b for b in by_inv.get(psr.invoice or "", []) if b.ntry_id not in used and abs((amount_variance(psr.amount, b.amount) or 0)) <= p7_minor_tolerance), None) if psr.invoice else None
-        if pattern_is_active(config, "P3") and pattern_is_active(config, "P7") and inv_near:
+        if _p3 and _p7 and inv_near:
             var = amount_variance(psr.amount, inv_near.amount) or 0
             used.add(inv_near.ntry_id); cases.append(build_case(idx, psr, inv_near, "Post to Short or Over Ledger", "INVOICE_MATCH_AMOUNT_VARIANCE_MINOR", "1_TO_1", 86, "P3_P7_INVOICE_MINOR_VARIANCE", "Y", f"Invoice matched but amount variance {var} is within configured minor tolerance. Post to short/over ledger.", [{"action":"POST_LEDGER_CANDIDATE","confidence":0.86,"variance":var}])); idx+=1; continue
         learned_match = learned_invoice_suffix_match(psr, camt_transactions, used, learned)
@@ -843,7 +957,7 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     # ── P6 One-to-Many residual-pool pass (runs BEFORE P4 — TASK-34) ──────────
     p6_consumed_psr_ids: set = set()
     p6_groups: List[Dict] = []
-    if pattern_is_active(config, "P6") and p5_pending:
+    if _find_by_cap(config, has_rule_key="max_group_size") and p5_pending:
         residual_camts = [b for b in camt_transactions if b.ntry_id not in used]
         p6_groups = find_one_to_many_groups(p5_pending, residual_camts, config)
 
@@ -931,7 +1045,7 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     # before P4 so a partial-payment PSR isn't fuzzy-matched to one of its CAMTs.
     p10_consumed_psr_ids: set = set()
     p10_splits: List[Dict] = []
-    if pattern_is_active(config, "P10") and post_p6_residual:
+    if _find_by_cap(config, has_rule_key="max_split_size") and post_p6_residual:
         residual_camts_for_p10 = [b for b in camt_transactions if b.ntry_id not in used]
         p10_splits = find_one_to_n_splits(post_p6_residual, residual_camts_for_p10, config)
 
@@ -1010,6 +1124,54 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
                 used.add(camt_s.ntry_id)
             p10_consumed_psr_ids.add(psr_s.id)
 
+    # ── Generic field-driven pass (FILE_DETECTED / CUSTOM exact patterns) ────────
+    # Runs after P6/P10 so group patterns have first refusal. Handles any ACTIVE
+    # non-seed pattern whose fields are all in _GENERIC_FIELDS. Sorted by field
+    # count descending so more-specific patterns (e.g. [pmt_ref, amount]) run
+    # before less-specific ones (e.g. [pmt_ref]).
+    generic_consumed_psr_ids: set = set()
+    _generic_entries = sorted(
+        [(pid, e) for pid, e in config.items()
+         if pid not in _SEED_IDS
+         and e.get("status") == "ACTIVE"
+         and e.get("rule", {}).get("fields")
+         and all(f in _GENERIC_FIELDS for f in e.get("rule", {}).get("fields", []))],
+        key=lambda x: len(x[1]["rule"]["fields"]), reverse=True,
+    )
+    for _gpid, _ge in _generic_entries:
+        _gfields = _ge["rule"]["fields"]
+        _gconf   = int(float(_ge.get("confidence_threshold", 0.8)) * 100)
+        _gmode   = _ge.get("execution_mode", "SUGGESTION")
+        _gname   = _ge.get("pattern_name", _gpid)
+        # Build a hash index over remaining CAMTs for this field tuple
+        _camt_idx: Dict[tuple, CamtTransaction] = {}
+        for _cb in camt_transactions:
+            if _cb.ntry_id in used:
+                continue
+            _ck = _generic_camt_key(_cb, _gfields)
+            if _ck and _ck not in _camt_idx:
+                _camt_idx[_ck] = _cb
+        for _psr in post_p6_residual:
+            if _psr.id in p10_consumed_psr_ids or _psr.id in generic_consumed_psr_ids:
+                continue
+            _pk = _generic_psr_key(_psr, _gfields)
+            if not _pk:
+                continue
+            _mc = _camt_idx.get(_pk)
+            if not _mc or _mc.ntry_id in used:
+                continue
+            _gstatus = "Matched & Settled (Auto-Close)" if _gmode == "AUTO_CLOSE" else "Suggested Match - Analyst Review"
+            _gflag   = "N" if _gmode == "AUTO_CLOSE" else "Y"
+            used.add(_mc.ntry_id)
+            cases.append(build_case(
+                idx, _psr, _mc, _gstatus,
+                f"GENERIC_{'_'.join(f.upper() for f in _gfields)}",
+                "1_TO_1", _gconf, f"GENERIC_{_gpid}", _gflag,
+                f"Matched on [{', '.join(_gfields)}] via pattern '{_gname}' ({_gpid}).",
+            ))
+            idx += 1
+            generic_consumed_psr_ids.add(_psr.id)
+
     # ── P4 fuzzy 1-to-1 pass (runs AFTER P6 — TASK-34, hardened TASK-37) ───────
     # Lifted out of the per-PSR loop so P6 has first refusal on residuals.
     # P6 uses stronger evidence (subset-sum + counterparty + date window) and should
@@ -1022,9 +1184,9 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
     # are blocked by trailing_single_char_diff regardless of score. Confidence is
     # capped (default 89) so the suggestion can never appear auto-closable.
     p4_consumed_psr_ids: set = set()
-    if pattern_is_active(config, "P4") and post_p6_residual:
+    if _p4 and post_p6_residual:
         for psr in post_p6_residual:
-            if psr.id in p10_consumed_psr_ids:
+            if psr.id in p10_consumed_psr_ids or psr.id in generic_consumed_psr_ids:
                 continue
             cands = [b for b in by_amt.get(psr.amount, []) if b.ntry_id not in used]
             if not cands:
@@ -1078,7 +1240,7 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
 
     # ── P5 exception emission for everything still unmatched ───────────────────
     for psr in post_p6_residual:
-        if psr.id in p4_consumed_psr_ids or psr.id in p10_consumed_psr_ids:
+        if psr.id in p4_consumed_psr_ids or psr.id in p10_consumed_psr_ids or psr.id in generic_consumed_psr_ids:
             continue
         cases.append(build_case(idx, psr, None, "Uncleared / In-Transit Payment",
             "NO_ACCEPTABLE_CANDIDATES", "UNMATCHED_PSR", 45, "P5_EXCEPTION_HANDLING", "Y",
@@ -1092,8 +1254,8 @@ def reconcile_transactions(psr_transactions: Sequence[PsrTransaction], camt_tran
         if bank.ntry_id in used: continue
         cases.append(build_case(idx, None, bank, "Bank-only Item - Investigation", "BANK_ONLY_UNMATCHED", "UNMATCHED_BANK", 40, "P5_EXCEPTION_HANDLING", "Y", "Bank entry was present in CAMT but no matching expected payment was found in PSR.", [{"action":"INVESTIGATE_BANK_ONLY","confidence":0.40}])); idx+=1
     exceptions = sum(1 for c in cases if c.exception_flag == "Y")
-    logger.info("reconcile_transactions done: %d cases, %d exceptions (p6_groups=%d, p10_splits=%d, p4_matches=%d)",
-                len(cases), exceptions, len(p6_groups), len(p10_splits), len(p4_consumed_psr_ids))
+    logger.info("reconcile_transactions done: %d cases, %d exceptions (p6_groups=%d, p10_splits=%d, generic=%d, p4_matches=%d)",
+                len(cases), exceptions, len(p6_groups), len(p10_splits), len(generic_consumed_psr_ids), len(p4_consumed_psr_ids))
     return cases
 
 def case_to_db_tuple(case: ReconCase) -> tuple:
