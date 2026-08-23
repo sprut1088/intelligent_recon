@@ -607,6 +607,7 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
     """
     import os
     import json
+    import time
     import concurrent.futures
     from datetime import datetime
 
@@ -618,10 +619,12 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
     provider = settings.llm_provider
     model    = settings.llm_model
     max_tok  = settings.llm_max_tokens
+    started_at = time.monotonic()
 
     logger.info(
-        "AI verifier starting | provider=%s model=%s target_statuses=%s",
-        provider, model, VERIFIABLE_STATUSES,
+        "AI verifier starting | provider=%s model=%s max_tokens=%s target_statuses=%s case_ids=%s",
+        provider, model, max_tok, VERIFIABLE_STATUSES,
+        (case_ids if case_ids else "<auto>"),
     )
 
     if provider == "anthropic":
@@ -815,5 +818,15 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
             if res:
                 results.append(res)
 
-    logger.info("AI verifier complete: %d/%d cases annotated", len(results), len(rows))
+    elapsed = time.monotonic() - started_at
+    verdict_counts = {"AGREE": 0, "CAUTION": 0, "DISAGREE": 0}
+    for r in results:
+        v = r.get("verdict")
+        if v in verdict_counts:
+            verdict_counts[v] += 1
+    failed = len(rows) - len(results)
+    logger.info(
+        "AI verifier complete: annotated=%d/%d failed=%d verdicts=%s elapsed=%.2fs",
+        len(results), len(rows), failed, verdict_counts, elapsed,
+    )
     return results

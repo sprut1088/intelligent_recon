@@ -2708,6 +2708,9 @@ function ResultsWorkbench({ results, summary, patterns = [], selected, setSelect
               style={{ minWidth: '160px' }}
             >
               <option value="">All statuses</option>
+              <option value="ai_agree">AI: Agree</option>
+              <option value="ai_caution">AI: Caution</option>
+              <option value="ai_disagree">AI: Disagree</option>
               {STATUS_OPTIONS.filter(Boolean).map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
@@ -2743,7 +2746,7 @@ function ResultsWorkbench({ results, summary, patterns = [], selected, setSelect
                 a.click();
               }}
             >↓ Download Report</button>
-            <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI triage</button>
+            <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI Pass</button>
           </div>
         </div>
       </div>
@@ -3374,13 +3377,13 @@ export default function App() {
     setTriageRunning(true);
     await safe(
       async () => {
-        result = await api.aiTriage();
+        result = await api.aiPass();
         await refreshResults({ search: '', exceptionOnly: false, status: '' });
       },
       () => {
-        const inserted = result?.inserted_count ?? 0;
-        const adjudicated = result?.llm_adjudicated_count ?? 0;
-        return `AI triage complete — ${inserted} candidate${inserted !== 1 ? 's' : ''} found, ${adjudicated} LLM-reviewed`;
+        const triaged = result?.triaged_count ?? 0;
+        const verified = result?.verified_count ?? 0;
+        return `AI pass complete — ${triaged} candidate${triaged !== 1 ? 's' : ''} triaged, ${verified} exception${verified !== 1 ? 's' : ''} verified`;
       },
     );
     setTriageRunning(false);
