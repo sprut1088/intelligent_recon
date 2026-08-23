@@ -2359,7 +2359,12 @@ const RULE_LABELS = {
   TIER2C_ROUTE_ANALYST: 'AI reviewed — analyst review required',
   TIER2C_CONFIRM:       'AI reviewed — match confirmed',
 };
-const ruleLabel = (code) => RULE_LABELS[code] ?? code;
+const ruleLabel = (code) => {
+  if (!code) return code;
+  if (RULE_LABELS[code]) return RULE_LABELS[code];
+  if (code.startsWith('GENERIC_')) return 'File-detected pattern';
+  return code;
+};
 
 const PAGE_SIZE = 100;
 const MINOR_VARIANCE_TOLERANCE = 50;
@@ -2529,8 +2534,19 @@ function AiTriageLoader() {
   );
 }
 
-function PatternBreakdownPanel({ byRule = [], total = 0 }) {
+function PatternBreakdownPanel({ byRule = [], total = 0, patterns = [] }) {
   if (!byRule.length) return <p className="empty small">No pattern data yet — run a batch first.</p>;
+  // Build pattern_id → pattern_name lookup to resolve GENERIC_ and other dynamic rule codes
+  const patternNameMap = Object.fromEntries(patterns.map(p => [p.pattern_id, p.pattern_name]));
+  const resolveRuleName = (code) => {
+    if (!code) return null;
+    if (RULE_LABELS[code]) return RULE_LABELS[code];
+    if (code.startsWith('GENERIC_')) {
+      const pid = code.slice('GENERIC_'.length);
+      return patternNameMap[pid] || 'File-detected pattern';
+    }
+    return null;
+  };
   const sorted = [...byRule].sort((a, b) => (b.count || 0) - (a.count || 0));
   const max = Math.max(...sorted.map(r => r.count || 0), 1);
   const cell = { padding: '0.4rem 0.6rem', textAlign: 'right', fontSize: '0.82rem' };
@@ -2557,7 +2573,19 @@ function PatternBreakdownPanel({ byRule = [], total = 0 }) {
             const pct = total > 0 ? ((r.count || 0) / total * 100).toFixed(1) : '0.0';
             return (
               <tr key={i} style={{ borderBottom: '1px solid var(--border,#e2e8f0)' }}>
-                <td style={{ padding: '0.4rem 0.6rem', fontFamily: 'monospace', fontSize: '0.76rem' }}>{r.rule_applied || '—'}</td>
+                <td style={{ padding: '0.4rem 0.6rem', fontSize: '0.76rem' }}>
+                  {r.rule_applied
+                    ? (() => {
+                        const resolved = resolveRuleName(r.rule_applied);
+                        const label = resolved || r.rule_applied;
+                        const hasLabel = !!resolved;
+                        return <>
+                          <span style={{ fontWeight: hasLabel ? 500 : 400 }}>{label}</span>
+                          {hasLabel && <><br /><span style={{ fontFamily: 'monospace', color: 'var(--muted,#888)', fontSize: '0.72rem' }}>[{r.rule_applied}]</span></>}
+                        </>;
+                      })()
+                    : '—'}
+                </td>
                 <td style={{ padding: '0.4rem 0.6rem' }}>
                   <div style={{ background: 'var(--surface2,#f1f5f9)', borderRadius: '3px', height: '7px' }}>
                     <div style={{ width: `${Math.max(2, ((r.count || 0) / max) * 100)}%`, height: '100%', background: 'var(--primary,#3b82f6)', borderRadius: '3px' }} />
@@ -2590,7 +2618,7 @@ function PatternBreakdownPanel({ byRule = [], total = 0 }) {
   );
 }
 
-function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiTriage, onResolve, loading, triageRunning, batchName }) {
+function ResultsWorkbench({ results, summary, patterns = [], selected, setSelected, refreshResults, onAiTriage, onResolve, loading, triageRunning, batchName, batches = [], selectedBatchId = '', setSelectedBatchId, onSwitchBatch }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
@@ -2638,7 +2666,24 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
       {triageRunning && <AiTriageLoader />}
       <div className="screen-title split">
         <div>
-          <div className="eyebrow">Results workbench{batchName ? <span style={{ marginLeft: '0.6rem', fontWeight: 400, color: 'var(--muted,#888)', fontSize: '0.78rem' }}>· {batchName}</span> : null}</div>
+          <div className="eyebrow" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            Results workbench
+            {batches.length > 0 && (
+              <select
+                value={selectedBatchId}
+                onChange={(e) => {
+                  const bid = e.target.value;
+                  setSelectedBatchId(bid);
+                  if (onSwitchBatch) onSwitchBatch(bid);
+                }}
+                style={{ fontSize: '0.78rem', fontWeight: 400, color: 'var(--muted,#555)', border: '1px solid var(--border,#e2e8f0)', borderRadius: '5px', padding: '0.15rem 0.4rem', background: 'var(--surface,#fff)', cursor: 'pointer' }}
+              >
+                {batches.map((b) => (
+                  <option key={b.batch_id} value={b.batch_id}>{b.batch_name || b.batch_id}</option>
+                ))}
+              </select>
+            )}
+          </div>
           <h1>Matched, proposed and unresolved records</h1>
           <p>Drill into match evidence, failed fields, confidence and next-best action.</p>
         </div>
@@ -2709,7 +2754,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
         ))}
       </div>
       {activeTab === 'patterns' && (
-        <PatternBreakdownPanel byRule={summary.by_rule || []} total={total} />
+        <PatternBreakdownPanel byRule={summary.by_rule || []} total={total} patterns={patterns} />
       )}
       {activeTab === 'records' && <>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.25rem 0' }}>
@@ -3414,7 +3459,7 @@ export default function App() {
     if (active === 'patterns') return <PatternManagement patterns={patterns} highlightGroup={lastBulkGroup} onCreate={createPattern} onUpdate={tunePattern} onDelete={removePattern} onDeleteGroup={removePatternGroup} onToggle={togglePattern} />;
     const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
     const activeBatchName = activeBatch?.batch_name || activeBatch?.batch_id || 'recon';
-    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;
+    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} patterns={patterns} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} batches={batches.items || []} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} onSwitchBatch={runSelectedBatch} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;
