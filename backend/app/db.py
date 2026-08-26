@@ -97,3 +97,7 @@ def json_dumps(value: Any) -> str:
 
 def set_meta(conn: sqlite3.Connection, key: str, value: Any) -> None:
     conn.execute("INSERT OR REPLACE INTO run_metadata (key, value) VALUES (?, ?)", (key, str(value)))
+
+def get_meta(conn: sqlite3.Connection, key: str, default: Any = None) -> Any:
+    row = conn.execute("SELECT value FROM run_metadata WHERE key=?", (key,)).fetchone()
+    return row["value"] if row else default

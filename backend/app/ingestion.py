@@ -17,8 +17,9 @@ logger = logging.getLogger(__name__)
 from .config import settings
 from .db import get_conn, json_dumps, row_to_dict, rows_to_dicts, set_meta
 from .loader import CASE_INSERT_SQL
-from .parsers import CamtTransaction, PsrTransaction, parse_camt_file, parse_psr_file
+from .parsers import CamtTransaction, PsrTransaction, parse_camt_file, parse_psr_file, parse_fix_file, parse_ccf_file
 from .reconciliation import case_to_db_tuple, reconcile_transactions
+from .trade_reconciliation import reconcile_trades, trade_case_to_db_tuple
 from .workflow import sync_exception_workflow
 
 UPLOAD_ROOT = settings.runtime_data_dir / "uploads"
@@ -65,8 +66,8 @@ def store_uploaded_file(
     created_by: str = "prototype_user",
 ) -> Dict:
     file_type = (file_type or "").upper().strip()
-    if file_type not in {"PSR", "CAMT"}:
-        raise ValueError("file_type must be PSR or CAMT")
+    if file_type not in {"PSR", "CAMT", "FIX", "CCF"}:
+        raise ValueError("file_type must be PSR, CAMT, FIX, or CCF")
     logger.info("Storing uploaded file: type=%s batch_id=%s filename=%s", file_type, batch_id, upload.filename)
 
     if not batch_id:
@@ -103,10 +104,16 @@ def store_uploaded_file(
                 "UPDATE file_ingestion_batch SET psr_file_id=?, status='UPLOADED', updated_at=CURRENT_TIMESTAMP WHERE batch_id=?",
                 (file_id, batch_id),
             )
-        else:
+        elif file_type == "CAMT":
             conn.execute(
                 "UPDATE file_ingestion_batch SET camt_file_id=?, status='UPLOADED', updated_at=CURRENT_TIMESTAMP WHERE batch_id=?",
                 (file_id, batch_id),
+            )
+        else:
+            # FIX and CCF stored via generic file table; batch status updated
+            conn.execute(
+                "UPDATE file_ingestion_batch SET status='UPLOADED', updated_at=CURRENT_TIMESTAMP WHERE batch_id=?",
+                (batch_id,),
             )
         conn.commit()
 
@@ -258,4 +265,42 @@ def run_uploaded_batch(batch_id: str, amount_divisor: Optional[float] = None, re
         "camt_count": len(camt_transactions),
         "case_count": len(cases),
         "amount_divisor": amount_divisor or settings.psr_amount_divisor,
+    }
+
+
+def _trade_batch_file_paths(batch_id: str) -> tuple[Path, Path]:
+    batch = get_batch(batch_id)
+    fix_file = next((f for f in batch["files"] if f["file_type"] == "FIX"), None)
+    ccf_file = next((f for f in batch["files"] if f["file_type"] == "CCF"), None)
+    if not fix_file or not ccf_file:
+        raise ValueError("Batch must contain one FIX file and one CCF file for trade reconciliation")
+    return Path(fix_file["stored_path"]), Path(ccf_file["stored_path"])
+
+
+def run_trade_batch(batch_id: str, reset_transactions: bool = True) -> Dict:
+    fix_path, ccf_path = _trade_batch_file_paths(batch_id)
+    fix_transactions = parse_fix_file(fix_path)
+    ccf_transactions = parse_ccf_file(ccf_path)
+
+    with get_conn() as conn:
+        if reset_transactions:
+            conn.execute("DELETE FROM recon_cases")
+
+        cases = reconcile_trades(fix_transactions, ccf_transactions)
+        conn.executemany(CASE_INSERT_SQL, [trade_case_to_db_tuple(case) for case in cases])
+        sync_exception_workflow(conn)
+        set_meta(conn, "active_batch_id", batch_id)
+        set_meta(conn, "recon_type", "TRADE")
+        set_meta(conn, "fix_count", len(fix_transactions))
+        set_meta(conn, "ccf_count", len(ccf_transactions))
+        set_meta(conn, "case_count", len(cases))
+        conn.execute("UPDATE file_ingestion_batch SET status='RECONCILED', updated_at=CURRENT_TIMESTAMP WHERE batch_id=?", (batch_id,))
+        conn.commit()
+
+    return {
+        "batch_id": batch_id,
+        "recon_type": "TRADE",
+        "fix_count": len(fix_transactions),
+        "ccf_count": len(ccf_transactions),
+        "case_count": len(cases),
     }

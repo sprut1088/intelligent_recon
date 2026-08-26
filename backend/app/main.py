@@ -5,9 +5,9 @@ from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFi
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from .config import settings
-from .db import get_conn, init_db, json_dumps, row_to_dict, rows_to_dicts
+from .db import get_conn, get_meta, init_db, json_dumps, row_to_dict, rows_to_dicts
 from .learning import approve_candidate, run_learning, seed_demo_learning_signals
-from .ingestion import get_batch, list_batches, run_uploaded_batch, store_uploaded_file
+from .ingestion import get_batch, list_batches, run_uploaded_batch, run_trade_batch, store_uploaded_file
 from .loader import load_samples_and_reconcile, rerun_reconciliation_only
 from .quality import get_quality_report, validate_batch
 from .workflow import get_exception_workflow, list_exception_workflow, mark_workflow_resolved, update_exception_workflow
@@ -96,6 +96,14 @@ def run_uploaded_file_batch(batch_id: str, request: ReconcileRunRequest = Reconc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
+@app.post("/api/files/batches/{batch_id}/run-trade")
+def run_trade_file_batch(batch_id: str) -> dict:
+    try:
+        return run_trade_batch(batch_id)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
 @app.post("/api/data-quality/batches/{batch_id}/validate")
 def validate_uploaded_batch(batch_id: str) -> dict:
     try:
@@ -154,20 +162,30 @@ def run_ai_verify(body: AiVerifyRequest = None) -> dict:
 @app.post("/api/reconcile/ai-pass")
 def run_ai_pass() -> dict:
     """
-    Combined AI full pass: triage unmatched PSRs then verify exception cases.
-    Equivalent to calling ai-triage followed by ai-verify in sequence.
-    Returns combined stats: {triaged_count, verified_count}.
+    Combined AI full pass: triage unmatched PSRs, verify payment exceptions,
+    then verify trade exceptions.
+    Returns combined stats: {triaged_count, verified_count, trade_verified_count}.
     """
+    from .ai_triage import verify_trade_exceptions
     logger.info("AI full pass requested")
     # Phase 1 — triage (reuses same logic as /ai-triage endpoint)
     triage_result = run_ai_triage()
     triaged = triage_result.get("inserted_count", 0)
     logger.info("AI full pass: triage complete — %d candidates inserted", triaged)
-    # Phase 2 — verify exception cases
+    # Phase 2 — verify payment exception cases
     verify_results = verify_exception_cases()
     verified = len(verify_results)
     logger.info("AI full pass: verify complete — %d cases annotated", verified)
-    return {"status": "ok", "triaged_count": triaged, "verified_count": verified}
+    # Phase 3 — verify trade exception cases
+    trade_results = verify_trade_exceptions()
+    trade_verified = len(trade_results)
+    logger.info("AI full pass: trade verify complete — %d cases annotated", trade_verified)
+    return {
+        "status": "ok",
+        "triaged_count": triaged,
+        "verified_count": verified + trade_verified,
+        "trade_verified_count": trade_verified,
+    }
 
 
 @app.post("/api/reconcile/ai-triage")
@@ -307,7 +325,10 @@ def summary() -> dict:
         manual_resolution_count=conn.execute("SELECT COUNT(*) AS cnt FROM recon_manual_resolution").fetchone()["cnt"]
         learning_candidate_count=conn.execute("SELECT COUNT(*) AS cnt FROM recon_pattern_candidate").fetchone()["cnt"]
         kpi=row_to_dict(conn.execute("SELECT COALESCE(SUM(COALESCE(internal_amount,0)),0) AS internal_amount, COALESCE(SUM(COALESCE(bank_amount,0)),0) AS bank_amount, COALESCE(SUM(ABS(COALESCE(variance,0))),0) AS absolute_variance, COALESCE(AVG(match_confidence),0) AS average_confidence, SUM(CASE WHEN exception_flag='Y' THEN 1 ELSE 0 END) AS exception_count, SUM(CASE WHEN reconciliation_status LIKE 'Matched%' OR reconciliation_status = 'Resolved Manually' THEN 1 ELSE 0 END) AS auto_matched_count, SUM(CASE WHEN json_extract(feature_snapshot_json, '$.ai_verification') IS NOT NULL AND rule_applied NOT LIKE 'TIER2C%' THEN 1 ELSE 0 END) AS ai_verified_count FROM recon_cases").fetchone())
-    return {"total_cases":total,"psr_count":psr_count,"camt_count":camt_count,"manual_resolution_count":manual_resolution_count,"learning_candidate_count":learning_candidate_count,"kpi":kpi,"by_status":status_rows,"by_reason":reason_rows,"by_rule":pattern_rows}
+        recon_type = get_meta(conn, "recon_type", "PAYMENT")
+        fix_count = int(get_meta(conn, "fix_count", 0))
+        ccf_count = int(get_meta(conn, "ccf_count", 0))
+    return {"total_cases":total,"psr_count":psr_count,"camt_count":camt_count,"fix_count":fix_count,"ccf_count":ccf_count,"recon_type":recon_type,"manual_resolution_count":manual_resolution_count,"learning_candidate_count":learning_candidate_count,"kpi":kpi,"by_status":status_rows,"by_reason":reason_rows,"by_rule":pattern_rows}
 
 
 @app.get("/api/workspace/overview")

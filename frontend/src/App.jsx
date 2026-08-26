@@ -26,8 +26,8 @@ function classForStatus(value = '') {
   if (v.startsWith('ai-assisted')) return 'ai';
   if (v.startsWith('ai -') || v.startsWith('ai –')) return 'ai-maybe';
   if (v.includes('ai confirmed')) return 'ai-nomatch';
-  if (v.includes('matched') || v.includes('active') || v.includes('processed') || v.includes('ok') || v.includes('complete')) return 'success';
-  if (v.includes('variance') || v.includes('ledger') || v.includes('warning') || v.includes('review') || v.includes('candidate')) return 'warning';
+  if (v.includes('matched') && !v.includes('unmatched') || v.includes('active') || v.includes('processed') || v.includes('ok') || v.includes('complete')) return 'success';
+  if (v.includes('unmatched') || v.includes('variance') || v.includes('ledger') || v.includes('warning') || v.includes('review') || v.includes('candidate')) return 'warning';
   if (v.includes('transit') || v.includes('new') || v.includes('manual')) return 'info';
   if (v.includes('error') || v.includes('high') || v.includes('failed')) return 'danger';
   return 'neutral';
@@ -115,7 +115,7 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
           <h1>{process.name || 'Cash Account Real-Time Reconciliation'}</h1>
           <p>
             A distinct operations cockpit covering intake, data prep, no-code matching, exception workflow, dashboards,
-            audit and human-in-the-loop learning for PSR versus CAMT.053 reconciliation.
+            audit and human-in-the-loop learning for multi-domain reconciliation.
           </p>
           <div className="hero-meta">
             <Tag tone="success">{process.status || 'Ready'}</Tag>
@@ -124,7 +124,7 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
           </div>
         </div>
         <div className="hero-buttons">
-          <button className="btn secondary" onClick={onLoad} disabled={loading}>Load sample PSR/CAMT</button>
+          <button className="btn secondary" onClick={onLoad} disabled={loading}>Load sample data</button>
           <button className="btn primary" onClick={onRun} disabled={loading}>Run reconciliation</button>
           <button className="btn ghost" onClick={onSnapshot} disabled={loading}>Create snapshot</button>
           <button className="btn ghost" onClick={onExport}>Export CSV</button>
@@ -132,8 +132,8 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
       </div>
 
       <div className="metric-grid six">
-        <Metric label="PSR records" value={summary?.psr_records || summary?.raw?.psr_count || 0} hint="Internal settlement rows" tone="info" />
-        <Metric label="CAMT entries" value={summary?.camt_entries || summary?.raw?.camt_count || 0} hint="Bank statement entries" tone="info" />
+        <Metric label={summary?.recon_type === 'TRADE' ? 'FIX trades' : 'PSR records'} value={summary?.recon_type === 'TRADE' ? (summary?.fix_count || 0) : (summary?.psr_records || summary?.raw?.psr_count || 0)} hint={summary?.recon_type === 'TRADE' ? 'Front office executions' : 'Internal settlement rows'} tone="info" />
+        <Metric label={summary?.recon_type === 'TRADE' ? 'CCF records' : 'CAMT entries'} value={summary?.recon_type === 'TRADE' ? (summary?.ccf_count || 0) : (summary?.camt_entries || summary?.raw?.camt_count || 0)} hint={summary?.recon_type === 'TRADE' ? 'Custodian records' : 'Bank statement entries'} tone="info" />
         <Metric label="Auto-closed" value={summary?.auto_closed || 0} hint={`${pct(summary?.match_rate)} match rate`} tone="success" />
         <Metric label="Open exceptions" value={summary?.exceptions || 0} hint="Manual, ledger and in-transit" tone="warning" />
         <Metric label="Learning signals" value={summary?.manual_resolutions || 0} hint="Captured analyst decisions" tone="neutral" />
@@ -166,12 +166,15 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
   );
 }
 
-function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, validatedBatchId, onUpload, onUploadBatch, onValidate, onRunBatch, onNavigate, loading }) {
+function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, validatedBatchId, onUpload, onUploadBatch, onUploadTradeBatch, onValidate, onRunBatch, onRunTradeBatch, onNavigate, loading }) {
   const [psrFile, setPsrFile] = useState(null);
   const [camtFile, setCamtFile] = useState(null);
+  const [fixFile, setFixFile] = useState(null);
+  const [ccfFile, setCcfFile] = useState(null);
   const [batchName, setBatchName] = useState('');
   const [amountDivisor, setAmountDivisor] = useState('auto');
   const qualityTableRef = useRef(null);
+  const [uploadMode, setUploadMode] = useState('payment');
   const selectedBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
   const batchId = selectedBatch?.batch_id || selectedBatchId || '';
   const issues = quality?.issues || [];
@@ -185,54 +188,98 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
         <div>
           <div className="eyebrow">Data intake</div>
           <h1>Submissions, snapshots and feed readiness</h1>
-          <p>Upload PSR and CAMT.053 feeds, inspect processing state, validate quality, and trigger reconciliation snapshots.</p>
+          <p>Upload reconciliation feeds (Payment or Trade), inspect processing state, validate quality, and trigger reconciliation snapshots.</p>
         </div>
       </div>
 
       <div className="grid two intake-grid">
-        <Panel title="Create upload batch" subtitle="Manual upload for the prototype; the same API can be connected to SFTP or bank feed later.">
-          <div className="form-grid">
-            <label>Batch name</label>
-            <input
-              value={batchName}
-              placeholder="e.g. Treasury cash daily upload"
-              onChange={(e) => setBatchName(e.target.value)}
-            />
-            <label>PSR payment settlement file</label>
-            <input type="file" accept=".txt,.dat,.psr,text/plain" onChange={(e) => setPsrFile(e.target.files?.[0] || null)} />
-            <label>CAMT.053 bank statement</label>
-            <input type="file" accept=".xml,application/xml,text/xml" onChange={(e) => setCamtFile(e.target.files?.[0] || null)} />
-            <button
-              className="btn primary"
-              style={{ gridColumn: '1 / -1', marginTop: '0.25rem' }}
-              disabled={!psrFile || !camtFile || !batchName.trim() || loading}
-              onClick={() => onUploadBatch(psrFile, camtFile, batchName.trim())}
-            >
-              Upload batch
-            </button>
+        <Panel title="Create upload batch" subtitle="Select reconciliation type and upload the corresponding file pair.">
+          <div style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.75rem' }}>
+            <button className={`btn small ${uploadMode === 'payment' ? 'primary' : 'ghost'}`} onClick={() => setUploadMode('payment')}>Payment Recon</button>
+            <button className={`btn small ${uploadMode === 'trade' ? 'primary' : 'ghost'}`} onClick={() => setUploadMode('trade')}>Trade Recon</button>
           </div>
+          {uploadMode === 'payment' ? (
+            <div className="form-grid">
+              <label>Batch name</label>
+              <input
+                value={batchName}
+                placeholder="e.g. Treasury cash daily upload"
+                onChange={(e) => setBatchName(e.target.value)}
+              />
+              <label>PSR payment settlement file</label>
+              <input type="file" accept=".txt,.dat,.psr,text/plain" onChange={(e) => setPsrFile(e.target.files?.[0] || null)} />
+              <label>CAMT.053 bank statement</label>
+              <input type="file" accept=".xml,application/xml,text/xml" onChange={(e) => setCamtFile(e.target.files?.[0] || null)} />
+              <button
+                className="btn primary"
+                style={{ gridColumn: '1 / -1', marginTop: '0.25rem' }}
+                disabled={!psrFile || !camtFile || !batchName.trim() || loading}
+                onClick={() => onUploadBatch(psrFile, camtFile, batchName.trim())}
+              >
+                Upload batch
+              </button>
+            </div>
+          ) : (
+            <div className="form-grid">
+              <label>Batch name</label>
+              <input
+                value={batchName}
+                placeholder="e.g. EOD trade settlement recon"
+                onChange={(e) => setBatchName(e.target.value)}
+              />
+              <label>FIX execution report (front office)</label>
+              <input type="file" accept=".fix,.txt,.dat,text/plain" onChange={(e) => setFixFile(e.target.files?.[0] || null)} />
+              <label>CCF custodian statement</label>
+              <input type="file" accept=".ccf,.txt,.dat,text/plain" onChange={(e) => setCcfFile(e.target.files?.[0] || null)} />
+              <button
+                className="btn primary"
+                style={{ gridColumn: '1 / -1', marginTop: '0.25rem' }}
+                disabled={!fixFile || !ccfFile || !batchName.trim() || loading}
+                onClick={() => onUploadTradeBatch(fixFile, ccfFile, batchName.trim())}
+              >
+                Upload trade batch
+              </button>
+            </div>
+          )}
         </Panel>
 
         <Panel title="Selected batch control" subtitle="Data quality validation should run before auto-close decisions are trusted.">
-          {selectedBatch ? (
+          {selectedBatch ? (() => {
+            const isTradeBatch = !selectedBatch.psr_file_id && !selectedBatch.camt_file_id;
+            return (
             <>
               <dl className="kv">
                 <dt>Batch</dt><dd>{selectedBatch.batch_name}</dd>
                 <dt>Status</dt><dd><Tag tone={classForStatus(selectedBatch.status)}>{selectedBatch.status}</Tag></dd>
-                <dt>PSR file</dt><dd>{selectedBatch.psr_file_id || '-'}</dd>
-                <dt>CAMT file</dt><dd>{selectedBatch.camt_file_id || '-'}</dd>
+                {isTradeBatch ? (
+                  <>
+                    <dt>FIX file</dt><dd>{(selectedBatch.files || []).find(f => f.file_type === 'FIX')?.file_id || 'Uploaded'}</dd>
+                    <dt>CCF file</dt><dd>{(selectedBatch.files || []).find(f => f.file_type === 'CCF')?.file_id || 'Uploaded'}</dd>
+                  </>
+                ) : (
+                  <>
+                    <dt>PSR file</dt><dd>{selectedBatch.psr_file_id || '-'}</dd>
+                    <dt>CAMT file</dt><dd>{selectedBatch.camt_file_id || '-'}</dd>
+                  </>
+                )}
               </dl>
-              <div className="form-grid" style={{ marginBottom: '0.75rem' }}>
-                <label title="Divide raw PSR integer amounts by this value. Auto detects by comparing PSR references to CAMT amounts.">PSR amount divisor</label>
-                <select value={amountDivisor} onChange={(e) => setAmountDivisor(e.target.value)}>
-                  <option value="auto">Auto-detect</option>
-                  <option value="1">1 — amounts already match CAMT scale</option>
-                  <option value="100">100 — amounts in minor units (cents)</option>
-                </select>
-              </div>
+              {!isTradeBatch && (
+                <div className="form-grid" style={{ marginBottom: '0.75rem' }}>
+                  <label title="Divide raw PSR integer amounts by this value. Auto detects by comparing PSR references to CAMT amounts.">PSR amount divisor</label>
+                  <select value={amountDivisor} onChange={(e) => setAmountDivisor(e.target.value)}>
+                    <option value="auto">Auto-detect</option>
+                    <option value="1">1 — amounts already match CAMT scale</option>
+                    <option value="100">100 — amounts in minor units (cents)</option>
+                  </select>
+                </div>
+              )}
               <div className="button-row">
                 <button className="btn secondary" disabled={!batchId || loading} onClick={() => onValidate(batchId)}>Validate quality</button>
-                <button className="btn primary" disabled={!batchId || loading || validatedBatchId !== batchId} onClick={() => onRunBatch(batchId, amountDivisor === 'auto' ? null : Number(amountDivisor))}>Run uploaded batch</button>
+                {isTradeBatch ? (
+                  <button className="btn primary" disabled={!batchId || loading} onClick={() => onRunTradeBatch(batchId)}>Run trade recon</button>
+                ) : (
+                  <button className="btn primary" disabled={!batchId || loading || validatedBatchId !== batchId} onClick={() => onRunBatch(batchId, amountDivisor === 'auto' ? null : Number(amountDivisor))}>Run uploaded batch</button>
+                )}
               </div>
 
               {quality && (
@@ -255,10 +302,10 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
                   <div style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '0.6rem' }}>Batch run results</div>
                   <div className="metric-grid three" style={{ marginBottom: '0.75rem' }}>
                     <div style={{ cursor: 'pointer' }} onClick={() => onNavigate('results')} title="Open Results Workbench">
-                      <Metric label="PSR transactions" value={batchRunResult.psr_count || 0} hint="→ Results Workbench" tone="info" />
+                      <Metric label={batchRunResult.recon_type === 'TRADE' ? 'FIX trades' : 'PSR transactions'} value={batchRunResult.recon_type === 'TRADE' ? (batchRunResult.fix_count || 0) : (batchRunResult.psr_count || 0)} hint="→ Results Workbench" tone="info" />
                     </div>
                     <div style={{ cursor: 'pointer' }} onClick={() => onNavigate('results')} title="Open Results Workbench">
-                      <Metric label="CAMT entries" value={batchRunResult.camt_count || 0} hint="→ Results Workbench" tone="info" />
+                      <Metric label={batchRunResult.recon_type === 'TRADE' ? 'CCF records' : 'CAMT entries'} value={batchRunResult.recon_type === 'TRADE' ? (batchRunResult.ccf_count || 0) : (batchRunResult.camt_count || 0)} hint="→ Results Workbench" tone="info" />
                     </div>
                     <div style={{ cursor: 'pointer' }} onClick={() => onNavigate('results')} title="Open Results Workbench">
                       <Metric label="Cases created" value={batchRunResult.case_count || 0} hint="→ Results Workbench" tone="good" />
@@ -271,7 +318,7 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
                 </div>
               )}
             </>
-          ) : <p className="empty small">Upload a PSR file to create a batch.</p>}
+          );})() : <p className="empty small">Upload files to create a batch.</p>}
         </Panel>
       </div>
 
@@ -596,8 +643,10 @@ function ResultTable({ rows, onSelect }) {
                   <Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag>
                   {r.feature_snapshot?.ai_verification && (() => {
                     const v = r.feature_snapshot.ai_verification.verdict;
-                    const tone = v === 'AGREE' ? 'success' : v === 'DISAGREE' ? 'danger' : 'warning';
-                    const label = v === 'AGREE' ? 'AI: Agree' : v === 'DISAGREE' ? 'AI: Disagree' : 'AI: Caution';
+                    const toneMap = { AGREE: 'success', DISAGREE: 'danger', AUTO_CLOSE: 'success', ESCALATE: 'danger' };
+                    const labelMap = { AGREE: 'AI: Agree', DISAGREE: 'AI: Disagree', CAUTION: 'AI: Caution', AUTO_CLOSE: 'AI: Auto-Close', INVESTIGATE: 'AI: Investigate', ESCALATE: 'AI: Escalate' };
+                    const tone = toneMap[v] || 'warning';
+                    const label = labelMap[v] || `AI: ${v}`;
                     return <Tag tone={tone} className="tag-verdict" title={r.feature_snapshot.ai_verification.note || ''}>{label}</Tag>;
                   })()}
                 </td>
@@ -626,6 +675,9 @@ function FieldDiff({ item }) {
   const isGroupP6 = item.match_type === 'N_TO_1' && item.psr_members?.length > 0;
   const isGroupP10 = item.match_type === '1_TO_N' && item.camt_members?.length > 0;
   const noVariance = Math.abs(item.variance ?? 0) < 0.005;
+  const isTrade = (item.case_id || '').startsWith('TCASE-') || (item.rule_applied || '').startsWith('T');
+  const internalLabel = isTrade ? 'Front Office (FIX)' : 'PSR (Internal)';
+  const externalLabel = isTrade ? 'Custodian (CCF)' : 'Bank (CAMT)';
   const colHeaders = ['ID', 'Amount', 'Direction', 'Date', 'Reference', 'Counterparty', 'Invoice', 'Remittance'];
 
   // P6: N PSRs → 1 CAMT — show each PSR as its own row, then a sum row, then the CAMT row
@@ -640,7 +692,7 @@ function FieldDiff({ item }) {
             <tbody>
               {item.psr_members.map(m => (
                 <tr key={m.psr_id} className="group-member-row">
-                  <th scope="row">PSR (Internal)</th>
+                  <th scope="row">{internalLabel}</th>
                   <td>{isValidId(m.psr_id) ? <a className="source-link" href={`#psr-${m.psr_id}`}>{m.psr_id}</a> : fmt(m.psr_id)}</td>
                   <td>{Number(m.amount).toFixed(2)}</td>
                   <td>{fmt(item.psr_direction)}</td>
@@ -658,7 +710,7 @@ function FieldDiff({ item }) {
                 <td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td><td>{'\u2014'}</td>
               </tr>
               <tr>
-                <th scope="row">Bank (CAMT)</th>
+                <th scope="row">{externalLabel}</th>
                 <td>{hasCamtData && isValidId(item.camt_id) ? <a className="source-link" href={`#camt-${item.camt_id}`}>{item.camt_id}</a> : fmt(hasCamtData ? item.camt_id : null)}</td>
                 <td className={!noVariance ? 'mismatch' : ''}>{fmt(hasCamtData ? item.bank_amount : null)}</td>
                 <td>{fmt(hasCamtData ? item.camt_direction : null)}</td>
@@ -686,7 +738,7 @@ function FieldDiff({ item }) {
             </thead>
             <tbody>
               <tr>
-                <th scope="row">PSR (Internal)</th>
+                <th scope="row">{internalLabel}</th>
                 <td>{hasPsr && isValidId(item.psr_id) ? <a className="source-link" href={`#psr-${item.psr_id}`}>{item.psr_id}</a> : fmt(hasPsr ? item.psr_id : null)}</td>
                 <td>{fmt(hasPsr ? item.internal_amount : null)}</td>
                 <td>{fmt(hasPsr ? item.psr_direction : null)}</td>
@@ -698,7 +750,7 @@ function FieldDiff({ item }) {
               </tr>
               {item.camt_members.map(m => (
                 <tr key={m.ntry_id} className="group-member-row">
-                  <th scope="row">Bank (CAMT)</th>
+                  <th scope="row">{externalLabel}</th>
                   <td>{isValidId(m.camt_id) ? <a className="source-link" href={`#camt-${m.camt_id}`}>{m.camt_id}</a> : fmt(m.camt_id)}</td>
                   <td>{Number(m.amount).toFixed(2)}</td>
                   <td>{'\u2014'}</td>
@@ -756,11 +808,11 @@ function FieldDiff({ item }) {
           </thead>
           <tbody>
             <tr>
-              <th scope="row">PSR (Internal)</th>
+              <th scope="row">{internalLabel}</th>
               {fields.map((f) => <td key={`psr-${f.key}`} className={mismatch(f.psrRaw, f.camtRaw) ? 'mismatch' : ''}>{f.psr}</td>)}
             </tr>
             <tr>
-              <th scope="row">Bank (CAMT)</th>
+              <th scope="row">{externalLabel}</th>
               {fields.map((f) => <td key={`camt-${f.key}`} className={mismatch(f.psrRaw, f.camtRaw) ? 'mismatch' : ''}>{f.camt}</td>)}
             </tr>
           </tbody>
@@ -1032,17 +1084,24 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           })()}
           {item.feature_snapshot?.ai_verification && (() => {
             const av = item.feature_snapshot.ai_verification;
-            const tone = av.verdict === 'AGREE' ? 'success' : av.verdict === 'DISAGREE' ? 'danger' : 'warning';
-            const label = av.verdict === 'AGREE' ? 'AI: Agree' : av.verdict === 'DISAGREE' ? 'AI: Disagree' : 'AI: Caution';
+            const toneMap = { AGREE: 'success', DISAGREE: 'danger', AUTO_CLOSE: 'success', ESCALATE: 'danger' };
+            const labelMap = { AGREE: 'AI: Agree', DISAGREE: 'AI: Disagree', CAUTION: 'AI: Caution', AUTO_CLOSE: 'AI: Auto-Close', INVESTIGATE: 'AI: Investigate', ESCALATE: 'AI: Escalate' };
+            const tone = toneMap[av.verdict] || 'warning';
+            const label = labelMap[av.verdict] || `AI: ${av.verdict}`;
+            const isTrade = (item.case_id || '').startsWith('TCASE-');
             return (
               <Panel title="AI Verification" className="nested-panel">
                 <div className="ai-verification-panel">
                   <div className="ai-verification-header">
                     <Tag tone={tone}>{label}</Tag>
                     {av.confidence_pct != null && <span className="ai-verification-conf">{av.confidence_pct}% confidence</span>}
+                    {av.routing_desk && <span className="ai-verification-conf">→ {av.routing_desk}</span>}
                   </div>
-                  {av.note && <p className="ai-verification-note">{av.note}</p>}
-                  <p className="ai-verification-disclaimer">AI second opinion on rule-proposed match \u2014 does not change status</p>
+                  {av.diagnosis && <p className="ai-verification-note"><strong>Diagnosis:</strong> {av.diagnosis}</p>}
+                  {av.root_cause && <p className="ai-verification-note"><strong>Root cause:</strong> {av.root_cause}</p>}
+                  {av.recommended_action && <p className="ai-verification-note"><strong>Action:</strong> {av.recommended_action}</p>}
+                  {!isTrade && av.note && <p className="ai-verification-note">{av.note}</p>}
+                  <p className="ai-verification-disclaimer">{isTrade ? 'AI trade exception analysis \u2014 recommended routing above' : 'AI second opinion on rule-proposed match \u2014 does not change status'}</p>
                 </div>
               </Panel>
             );
@@ -1064,7 +1123,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
                       If the bank posting is delayed, this payment may be matched in the next CAMT statement cycle. If it remains unmatched, route to the exception queue for investigation.
                     </p>
                     <div style={{ marginTop: '1rem', background: 'var(--bg, #f8fafc)', border: '1px solid var(--line, #e2e8f0)', borderRadius: '6px', padding: '0.5rem 0.75rem', fontSize: '0.8rem' }}>
-                      <p style={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted, #64748b)', marginBottom: '0.35rem' }}>PSR (Internal)</p>
+                      <p style={{ fontSize: '0.72rem', fontWeight: 600, textTransform: 'uppercase', letterSpacing: '0.05em', color: 'var(--muted, #64748b)', marginBottom: '0.35rem' }}>{(item.case_id || '').startsWith('TCASE-') ? 'Front Office (FIX)' : 'PSR (Internal)'}</p>
                       <div style={{ color: '#334155', fontWeight: 600 }}>{item.counterparty || '—'}</div>
                       <div style={{ marginTop: '0.15rem', color: '#475569' }}>
                         {item.internal_amount != null && <span>{item.currency || ''} {Number(item.internal_amount).toLocaleString('en-EU', {minimumFractionDigits:2})}</span>}
@@ -1486,6 +1545,12 @@ const RULE_LABELS = {
   P5_EXCEPTION_HANDLING:    'No match found',
   P7_AMOUNT_VARIANCE:       'Amount variance rule',
   P8_LEARNED_INVOICE_SUFFIX:'Learned: invoice suffix match',
+  // Trade reconciliation rules
+  T1_ORDER_REF_EXACT:       'Order reference exact match',
+  T2_PRICE_BREAK:           'Price variance (order ref matched)',
+  T3_QUANTITY_BREAK:        'Quantity mismatch (order ref matched)',
+  T4_ORPHAN_TRADE:          'Unmatched front-office trade',
+  T5_ORPHAN_CUSTODIAN:      'Unmatched custodian record',
   // Short codes (used in kv display)
   P1: 'EndToEnd ID exact match',
   P2: 'PMT reference + amount match',
@@ -1494,6 +1559,10 @@ const RULE_LABELS = {
   P5: 'No match found',
   P6: 'One-to-many grouping match',
   P7: 'Amount variance rule',
+  T1: 'ISIN + quantity exact match',
+  T2: 'ISIN matched, quantity mismatch',
+  T3: 'Unmatched front-office trade',
+  T4: 'Unmatched custodian record',
   // AI triage codes
   AI_DOMAIN_SCORED:     'AI candidate identified — awaiting adjudication',
   AI_PENDING_LLM:       'AI candidate identified — awaiting adjudication',
@@ -1546,6 +1615,9 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
   const baseExceptions   = Math.max(0, exceptionCount - statusCount(s => s.includes('In-Transit') || s.includes('Uncleared')) - bankOnlyCount - aiNoMatchCount);
   const psrTotal  = summary?.psr_records ?? summary?.raw?.psr_count ?? 0;
   const camtTotal = summary?.camt_entries ?? summary?.raw?.camt_count ?? 0;
+  const isTrade = (summary?.recon_type) === 'TRADE';
+  const fixTotal = summary?.fix_count ?? 0;
+  const ccfTotal = summary?.ccf_count ?? 0;
   const chips = [
     { label: 'Matched',    value: statusCount(s => s.includes('Matched') || s.includes('Auto-Close') || s === 'Resolved Manually'), filter: 'matched' },
     { label: 'Exceptions', value: baseExceptions,  filter: 'exceptions' },
@@ -1557,10 +1629,10 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
     <div className="summary-bar" style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
       <div style={{ display: 'flex', gap: '1.25rem', flexWrap: 'wrap' }}>
         <span style={{ fontSize: '0.8rem', color: 'var(--muted, #888)', fontWeight: 500 }}>
-          PSR records: <strong style={{ color: 'var(--ink)', fontWeight: 700 }}>{psrTotal}</strong>
+          {isTrade ? 'FIX trades' : 'PSR records'}: <strong style={{ color: 'var(--ink)', fontWeight: 700 }}>{isTrade ? fixTotal : psrTotal}</strong>
         </span>
         <span style={{ fontSize: '0.8rem', color: 'var(--muted, #888)', fontWeight: 500 }}>
-          CAMT entries: <strong style={{ color: 'var(--ink)', fontWeight: 700 }}>{camtTotal}</strong>
+          {isTrade ? 'CCF records' : 'CAMT entries'}: <strong style={{ color: 'var(--ink)', fontWeight: 700 }}>{isTrade ? ccfTotal : camtTotal}</strong>
         </span>
       </div>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '0.5rem' }}>
@@ -1604,7 +1676,7 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
 
 function AiTriageLoader() {
   const steps = [
-    { label: 'Scanning unmatched PSR records', duration: 0, phase: 'triage' },
+    { label: 'Scanning unmatched records', duration: 0, phase: 'triage' },
     { label: 'Scoring candidates (Tier 2b)', duration: 3000, phase: 'triage' },
     { label: 'LLM adjudication — finding matches (Tier 2c)', duration: 7000, phase: 'triage' },
     { label: 'Reviewing exception cases for second opinion', duration: 20000, phase: 'verify' },
@@ -1730,7 +1802,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
               value={search}
               onChange={(e) => setSearch(e.target.value)}
               onKeyDown={(e) => e.key === 'Enter' && runSearch()}
-              placeholder="Search PSR, CAMT, invoice, party"
+              placeholder="Search trade ID, ISIN, reference, party"
               style={{ minWidth: '180px', flex: 1 }}
             />
             <select
@@ -2341,6 +2413,28 @@ export default function App() {
     }, 'PSR and CAMT files uploaded — ready to validate');
   };
 
+  const uploadTradeBatch = async (fixFile, ccfFile, batchName) => {
+    await safe(async () => {
+      const fixResp = await api.uploadFile(fixFile, 'FIX', '', batchName);
+      const newBatchId = fixResp.batch.batch_id;
+      setSelectedBatchId(newBatchId);
+      await api.uploadFile(ccfFile, 'CCF', newBatchId, '');
+      setQuality(null);
+      setBatchRunResult(null);
+      setValidatedBatchId(null);
+    }, 'FIX and CCF files uploaded — ready to validate');
+  };
+
+  const runTradeBatch = async (batchId) => {
+    let result;
+    await safe(async () => {
+      result = await api.runTradeBatch(batchId);
+      setBatchRunResult(result);
+      setQuality(null);
+      setValidatedBatchId(null);
+    }, () => `Trade batch reconciled — ${result?.case_count ?? 0} cases`);
+  };
+
   const validateSelectedBatch = async (batchId) => {
     await safe(async () => {
       const report = await api.validateBatch(batchId);
@@ -2426,7 +2520,7 @@ export default function App() {
 
   const screen = useMemo(() => {
     if (active === 'workspace') return <Workspace workspace={workspace} summary={summary} onLoad={() => safe(api.loadSampleData, 'Sample PSR/CAMT loaded')} onRun={() => safe(api.runRecon, 'Reconciliation completed')} onSnapshot={() => safe(api.createSnapshot, 'Snapshot created')} onExport={exportCsv} loading={loading} />;
-    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onNavigate={setActive} loading={loading} />;
+    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onUploadTradeBatch={uploadTradeBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onRunTradeBatch={runTradeBatch} onNavigate={setActive} loading={loading} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
     const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];

@@ -817,3 +817,210 @@ def verify_exception_cases(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
     logger.info("AI verifier complete: %d/%d cases annotated", len(results), len(rows))
     return results
+
+
+# ---------------------------------------------------------------------------
+# Trade exception AI verification
+# ---------------------------------------------------------------------------
+
+TRADE_EXCEPTION_STATUSES = [
+    "Exception - Price Variance",
+    "Exception - Quantity Mismatch",
+    "Exception - Unmatched Trade",
+    "Exception - Unmatched Custodian Record",
+]
+
+TRADE_SYSTEM_PROMPT = (
+    "You are a trade operations AI analyst. You are reviewing exception cases from an "
+    "automated trade reconciliation engine that matches Front Office FIX execution reports "
+    "against Custodian settlement confirmations (CCF).\n\n"
+    "For each case you receive:\n"
+    "- The exception type and rule that triggered it\n"
+    "- Front Office fields (order ref, ISIN, side, quantity, price)\n"
+    "- Custodian fields (clearing ref, ISIN, side, quantity, price)\n"
+    "- The computed variance\n\n"
+    "Your job: provide an intelligent diagnosis and recommended action.\n\n"
+    "Return raw JSON only — no markdown:\n"
+    '{"verdict":"AUTO_CLOSE|INVESTIGATE|ESCALATE",'
+    '"confidence_pct":0-100,'
+    '"diagnosis":"string",'
+    '"root_cause":"string",'
+    '"recommended_action":"string",'
+    '"routing_desk":"string"}\n\n'
+    "Verdict meanings:\n"
+    "- AUTO_CLOSE: AI can resolve this without human intervention (e.g. minor rounding, known fee structure)\n"
+    "- INVESTIGATE: Likely explainable but needs analyst confirmation (e.g. transposition error, partial fill)\n"
+    "- ESCALATE: Serious break requiring immediate attention (e.g. missing settlement, unknown counterparty)\n\n"
+    "Guidelines:\n"
+    "- Price differences < $1 on otherwise perfect matches → likely regulatory fee → AUTO_CLOSE\n"
+    "- Price differences that look like digit transpositions (e.g. 174.95 vs 164.95) → keyboard error → INVESTIGATE\n"
+    "- Quantity mismatches with matching ISIN/price → partial allocation or late fill → INVESTIGATE\n"
+    "- Orphan trades near batch cutoff times → predict next-day settlement → INVESTIGATE\n"
+    "- Orphan custodian records with no reference → unsolicited → ESCALATE\n"
+    "Max 25 words each for diagnosis, root_cause, and recommended_action."
+)
+
+
+def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
+    """
+    AI verification pass for trade reconciliation exceptions (TCASE-* cases).
+
+    Sends each exception to an LLM for intelligent diagnosis and routing.
+    Results are stored in feature_snapshot_json under 'ai_verification'.
+    """
+    import os
+    import json
+    import concurrent.futures
+    from datetime import datetime
+
+    provider = settings.llm_provider
+    model = settings.llm_model
+    max_tok = settings.llm_max_tokens
+
+    logger.info("Trade AI verifier starting | provider=%s model=%s", provider, model)
+
+    if provider == "anthropic":
+        api_key = os.getenv("ANTHROPIC_API_KEY")
+        if not api_key:
+            logger.warning("Trade AI verifier skipped — ANTHROPIC_API_KEY not set.")
+            return []
+        import anthropic as _anthropic
+        _anthropic_client = _anthropic.Anthropic(api_key=api_key)
+        _openai_client = None
+    else:
+        api_key = os.getenv("OPENROUTER_API_KEY")
+        if not api_key:
+            logger.warning("Trade AI verifier skipped — OPENROUTER_API_KEY not set.")
+            return []
+        from openai import OpenAI
+        _openai_client = OpenAI(api_key=api_key, base_url="https://openrouter.ai/api/v1")
+        _anthropic_client = None
+
+    with get_conn() as conn:
+        if case_ids:
+            placeholders = ",".join("?" * len(case_ids))
+            rows = rows_to_dicts(conn.execute(
+                f"SELECT * FROM recon_cases WHERE case_id IN ({placeholders})",
+                case_ids,
+            ).fetchall())
+        else:
+            status_ph = ",".join("?" * len(TRADE_EXCEPTION_STATUSES))
+            rows = rows_to_dicts(conn.execute(
+                f"""SELECT * FROM recon_cases
+                    WHERE case_id LIKE 'TCASE-%'
+                      AND reconciliation_status IN ({status_ph})
+                      AND (feature_snapshot_json NOT LIKE '%ai_verification%'
+                           OR feature_snapshot_json IS NULL)""",
+                TRADE_EXCEPTION_STATUSES,
+            ).fetchall())
+
+    if not rows:
+        logger.info("Trade AI verifier: no eligible cases — nothing to do.")
+        return []
+
+    logger.info("Trade AI verifier: %d exception cases to process", len(rows))
+    results: List[Dict] = []
+
+    def _build_trade_prompt(case: Dict) -> str:
+        snap = json.loads(case.get("feature_snapshot_json") or "{}")
+        return (
+            f"Exception Type: {case.get('reconciliation_status', '')}\n"
+            f"Rule Applied: {case.get('rule_applied', '')} "
+            f"(engine confidence: {case.get('match_confidence', '')}%)\n\n"
+            f"Front Office (FIX):\n"
+            f"- Order Reference: {case.get('reference', '') or 'N/A'}\n"
+            f"- ISIN: {snap.get('isin_match', 'unknown')} (matched={snap.get('isin_match', False)})\n"
+            f"- Side: {snap.get('side', 'N/A')}\n"
+            f"- Quantity: {case.get('internal_amount', 'N/A')}\n"
+            f"- Price: {snap.get('price_variance', 'N/A')} variance\n\n"
+            f"Custodian (CCF):\n"
+            f"- Clearing Reference: {case.get('camt_id', '') or 'N/A'}\n"
+            f"- Execution ID: {case.get('counterparty', '') or 'N/A'}\n"
+            f"- Quantity: {case.get('bank_amount', 'N/A')}\n\n"
+            f"Variance: {case.get('variance', 'N/A')}\n"
+            f"Quantity Match: {snap.get('quantity_match', 'N/A')}\n"
+            f"Quantity Variance: {snap.get('quantity_variance', 'N/A')}\n"
+            f"Price Match: {snap.get('price_match', 'N/A')}\n"
+            f"Price Variance: {snap.get('price_variance', 'N/A')}"
+        )
+
+    def _verify_trade_case(case: Dict) -> Optional[Dict]:
+        case_id = case["case_id"]
+        logger.info("Trade AI verifier: processing %s | status=%s", case_id, case.get("reconciliation_status"))
+
+        user_prompt = _build_trade_prompt(case)
+
+        try:
+            if provider == "anthropic":
+                response = _anthropic_client.messages.create(
+                    model=model, system=TRADE_SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": user_prompt}],
+                    temperature=0, max_tokens=max_tok,
+                )
+                raw = response.content[0].text
+            else:
+                response = _openai_client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": TRADE_SYSTEM_PROMPT},
+                        {"role": "user", "content": user_prompt},
+                    ],
+                    response_format={"type": "json_object"},
+                    temperature=0, max_tokens=max_tok,
+                )
+                raw = response.choices[0].message.content
+
+            raw = raw.strip()
+            raw = re.sub(r'^```(?:json)?\s*', '', raw)
+            raw = re.sub(r'\s*```$', '', raw).strip()
+
+            try:
+                result = json.loads(raw)
+            except json.JSONDecodeError as e:
+                logger.error("Trade AI verifier: %s JSON parse failed — %s", case_id, e)
+                return None
+
+            verdict = result.get("verdict", "INVESTIGATE")
+            if verdict not in ("AUTO_CLOSE", "INVESTIGATE", "ESCALATE"):
+                verdict = "INVESTIGATE"
+
+            annotation = {
+                "verdict": verdict,
+                "confidence_pct": result.get("confidence_pct"),
+                "diagnosis": result.get("diagnosis", ""),
+                "root_cause": result.get("root_cause", ""),
+                "recommended_action": result.get("recommended_action", ""),
+                "routing_desk": result.get("routing_desk", ""),
+                "note": result.get("diagnosis", ""),
+                "verified_at": datetime.utcnow().isoformat(),
+            }
+
+            with get_conn() as conn:
+                existing = conn.execute(
+                    "SELECT feature_snapshot_json FROM recon_cases WHERE case_id = ?",
+                    (case_id,),
+                ).fetchone()
+                snapshot = json.loads(existing["feature_snapshot_json"] or "{}") if existing else {}
+                snapshot["ai_verification"] = annotation
+                conn.execute(
+                    "UPDATE recon_cases SET feature_snapshot_json = ?, updated_at = CURRENT_TIMESTAMP WHERE case_id = ?",
+                    (json_dumps(snapshot), case_id),
+                )
+                conn.commit()
+
+            logger.info("Trade AI verifier: %s -> verdict=%s confidence=%s%%", case_id, verdict, result.get("confidence_pct"))
+            return {"case_id": case_id, **annotation}
+
+        except Exception as exc:
+            logger.error("Trade AI verifier: FAILED for %s (%s: %s)", case_id, type(exc).__name__, exc)
+            return None
+
+    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
+        futures = {executor.submit(_verify_trade_case, row): row for row in rows}
+        for future in concurrent.futures.as_completed(futures):
+            res = future.result()
+            if res:
+                results.append(res)
+
+    logger.info("Trade AI verifier complete: %d/%d cases annotated", len(results), len(rows))
+    return results

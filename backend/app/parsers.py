@@ -170,5 +170,115 @@ def parse_camt_file(path: Path) -> List[CamtTransaction]:
     logger.info("CAMT parse complete: %d transactions", len(transactions))
     return transactions
 
+
+# ── Trade reconciliation dataclasses ───────────────────────────────────────────
+
+@dataclass
+class FixTransaction:
+    trade_id: str
+    exec_id: str
+    isin: str
+    side: str          # "BUY" or "SELL"
+    quantity: float
+    price: float
+    transact_time: str
+    sender: str
+    currency: str
+    raw_line: str
+
+@dataclass
+class CcfTransaction:
+    clearing_ref: str
+    exec_id: str
+    isin: str
+    side: str          # "BUY" or "SELL"
+    quantity: float
+    price: float
+    settlement_date: str
+    raw_line: str
+
+
+FIX_SIDE_MAP = {"1": "BUY", "2": "SELL", "3": "BUY_MINUS", "4": "SELL_PLUS", "5": "SELL_SHORT", "6": "SELL_SHORT_EXEMPT"}
+
+
+def parse_fix_file(path: Path) -> List[FixTransaction]:
+    """Parse a pipe-delimited FIX 4.x execution report file."""
+    logger.info("Parsing FIX file: %s", path)
+    transactions: List[FixTransaction] = []
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.rstrip("\n\r")
+            if not line:
+                continue
+            tags: Dict[str, str] = {}
+            for pair in line.split("|"):
+                if "=" in pair:
+                    k, v = pair.split("=", 1)
+                    tags[k] = v
+            # Only process execution reports (MsgType 35=8)
+            if tags.get("35") != "8":
+                continue
+            trade_id = tags.get("11", "")
+            exec_id = tags.get("37", "")
+            isin = tags.get("48", tags.get("55", ""))
+            side = FIX_SIDE_MAP.get(tags.get("54", ""), "UNKNOWN")
+            try:
+                quantity = float(tags.get("38", "0"))
+            except ValueError:
+                quantity = 0.0
+            try:
+                price = float(tags.get("44", "0"))
+            except ValueError:
+                price = 0.0
+            transact_time = tags.get("52", "")
+            sender = tags.get("49", "")
+            # FIX doesn't carry an explicit currency in tag 15 always; default USD
+            currency = tags.get("15", "USD")
+            transactions.append(FixTransaction(
+                trade_id=trade_id, exec_id=exec_id, isin=isin, side=side,
+                quantity=quantity, price=price, transact_time=transact_time,
+                sender=sender, currency=currency, raw_line=line,
+            ))
+    logger.info("FIX parse complete: %d transactions", len(transactions))
+    return transactions
+
+
+CCF_SIDE_MAP = {"B": "BUY", "S": "SELL"}
+
+
+def parse_ccf_file(path: Path) -> List[CcfTransaction]:
+    """Parse a fixed-width custodian/clearing file (.ccf).
+
+    Format (72 chars): record_type(0:10) seq(10:18) order_ref(18:30)
+    exec_id(30:42) isin(42:54) side(54) qty(55:63) price(63:72)
+    """
+    logger.info("Parsing CCF file: %s", path)
+    transactions: List[CcfTransaction] = []
+    with Path(path).open("r", encoding="utf-8") as handle:
+        for raw in handle:
+            line = raw.rstrip("\n\r")
+            if len(line) < 72:
+                continue
+            clearing_ref = line[18:30].strip()
+            exec_id = line[30:42].strip()
+            isin = line[42:54].strip()
+            side = CCF_SIDE_MAP.get(line[54], "UNKNOWN")
+            try:
+                quantity = float(line[55:63])
+            except ValueError:
+                quantity = 0.0
+            try:
+                price = float(line[63:72])
+            except ValueError:
+                price = 0.0
+            transactions.append(CcfTransaction(
+                clearing_ref=clearing_ref, exec_id=exec_id, isin=isin,
+                side=side, quantity=quantity, price=price,
+                settlement_date="", raw_line=line,
+            ))
+    logger.info("CCF parse complete: %d transactions", len(transactions))
+    return transactions
+
+
 def dataclass_to_dict(item):
     return asdict(item)

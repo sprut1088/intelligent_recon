@@ -45,6 +45,9 @@ function mapSummary(payload) {
     statuses: payload.by_status || [],
     reasons: payload.by_reason || [],
     ai_verified_count: (payload.kpi || {}).ai_verified_count || 0,
+    recon_type: payload.recon_type || 'PAYMENT',
+    fix_count: payload.fix_count || 0,
+    ccf_count: payload.ccf_count || 0,
     raw: payload,
   };
 }
@@ -84,6 +87,7 @@ export const api = {
   validateBatch: (batchId) => request(`/api/data-quality/batches/${batchId}/validate`, { method: 'POST' }),
   quality: (batchId) => request(`/api/data-quality/batches/${batchId}`),
   runBatch: (batchId, amountDivisor = null) => request(`/api/files/batches/${batchId}/run`, { method: 'POST', body: JSON.stringify({ reset: true, ...(amountDivisor != null ? { amount_divisor: amountDivisor } : {}) }) }),
+  runTradeBatch: (batchId) => request(`/api/files/batches/${batchId}/run-trade`, { method: 'POST' }),
   loadSampleData: (amountDivisor = null) => request('/api/load-sample', { method: 'POST', body: JSON.stringify({ reset: true, ...(amountDivisor != null ? { amount_divisor: amountDivisor } : {}) }) }),
   runRecon: () => request('/api/reconcile/run', { method: 'POST' }),
   aiTriage: () => request('/api/reconcile/ai-triage', { method: 'POST' }),
