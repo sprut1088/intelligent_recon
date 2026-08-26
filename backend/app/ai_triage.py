@@ -95,7 +95,7 @@ def _passes_prefilter(psr: Dict, camt: Dict) -> bool:
     """
     Deterministic guard rails — all must pass before domain scoring runs.
     1. Direction must match (CR-CR, DR-DR).
-    2. Amount difference must be within MINOR_VARIANCE_TOLERANCE.
+    2. Amount difference must be within ai_candidate_variance_pct of the larger amount.
     3. Date difference must be within IN_TRANSIT_DAYS.
     """
     psr_dir = (psr.get("direction") or "").upper()
@@ -106,7 +106,8 @@ def _passes_prefilter(psr: Dict, camt: Dict) -> bool:
     try:
         psr_amt = float(psr.get("amount") or 0)
         camt_amt = float(camt.get("amount") or 0)
-        if abs(psr_amt - camt_amt) > settings.minor_variance_tolerance:
+        max_amt = max(abs(psr_amt), abs(camt_amt), 1)
+        if abs(psr_amt - camt_amt) / max_amt > settings.ai_candidate_variance_pct:
             return False
     except (TypeError, ValueError):
         return False

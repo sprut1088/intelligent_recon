@@ -1,0 +1,132 @@
+10MAINBKGRP20260610IE12BOFI90000098765432EUR
+20TX-2027-000120260610PMT-REF-001                   000000101000CRINV-2027-0001         Standard Corp 1               
+20TX-2027-000220260610PMT-REF-002                   000000102000CRINV-2027-0002         Standard Corp 2               
+20TX-2027-000320260610PMT-REF-003                   000000103000CRINV-2027-0003         Standard Corp 3               
+20TX-2027-000420260610PMT-REF-004                   000000104000CRINV-2027-0004         Standard Corp 4               
+20TX-2027-000520260610PMT-REF-005                   000000105000CRINV-2027-0005         Standard Corp 5               
+20TX-2027-000620260610PMT-REF-006                   000000106000CRINV-2027-0006         Standard Corp 6               
+20TX-2027-000720260610PMT-REF-007                   000000107000CRINV-2027-0007         Standard Corp 7               
+20TX-2027-000820260610PMT-REF-008                   000000108000CRINV-2027-0008         Standard Corp 8               
+20TX-2027-000920260610PMT-REF-009                   000000109000CRINV-2027-0009         Standard Corp 9               
+20TX-2027-001020260610PMT-REF-010                   000000110000CRINV-2027-0010         Standard Corp 10              
+20TX-2027-001120260610PMT-REF-011                   000000111000CRINV-2027-0011         Standard Corp 11              
+20TX-2027-001220260610PMT-REF-012                   000000112000CRINV-2027-0012         Standard Corp 12              
+20TX-2027-001320260610PMT-REF-013                   000000113000CRINV-2027-0013         Standard Corp 13              
+20TX-2027-001420260610PMT-REF-014                   000000114000CRINV-2027-0014         Standard Corp 14              
+20TX-2027-001520260610PMT-REF-015                   000000115000CRINV-2027-0015         Standard Corp 15              
+20TX-2027-001620260610PMT-REF-016                   000000116000CRINV-2027-0016         Standard Corp 16              
+20TX-2027-001720260610PMT-REF-017                   000000117000CRINV-2027-0017         Standard Corp 17              
+20TX-2027-001820260610PMT-REF-018                   000000118000CRINV-2027-0018         Standard Corp 18              
+20TX-2027-001920260610PMT-REF-019                   000000119000CRINV-2027-0019         Standard Corp 19              
+20TX-2027-002020260610PMT-REF-020                   000000120000CRINV-2027-0020         Standard Corp 20              
+20TX-2027-002120260610PMT-REF-021                   000000121000CRINV-2027-0021         Standard Corp 21              
+20TX-2027-002220260610PMT-REF-022                   000000122000CRINV-2027-0022         Standard Corp 22              
+20TX-2027-002320260610PMT-REF-023                   000000123000CRINV-2027-0023         Standard Corp 23              
+20TX-2027-002420260610PMT-REF-024                   000000124000CRINV-2027-0024         Standard Corp 24              
+20TX-2027-002520260610PMT-REF-025                   000000125000CRINV-2027-0025         Standard Corp 25              
+20TX-2027-002620260610PMT-REF-026                   000000126000CRINV-2027-0026         Standard Corp 26              
+20TX-2027-002720260610PMT-REF-027                   000000127000CRINV-2027-0027         Standard Corp 27              
+20TX-2027-002820260610PMT-REF-028                   000000128000CRINV-2027-0028         Standard Corp 28              
+20TX-2027-002920260610PMT-REF-029                   000000129000CRINV-2027-0029         Standard Corp 29              
+20TX-2027-003020260610PMT-REF-030                   000000130000CRINV-2027-0030         Standard Corp 30              
+20TX-2027-003120260610PMT-REF-031                   000000131000CRINV-2027-0031         Standard Corp 31              
+20TX-2027-003220260610PMT-REF-032                   000000132000CRINV-2027-0032         Standard Corp 32              
+20TX-2027-003320260610PMT-REF-033                   000000133000CRINV-2027-0033         Standard Corp 33              
+20TX-2027-003420260610PMT-REF-034                   000000134000CRINV-2027-0034         Standard Corp 34              
+20TX-2027-003520260610PMT-REF-035                   000000135000CRINV-2027-0035         Standard Corp 35              
+20TX-2027-003620260610PMT-REF-036                   000000136000CRINV-2027-0036         Standard Corp 36              
+20TX-2027-003720260610PMT-REF-037                   000000137000CRINV-2027-0037         Standard Corp 37              
+20TX-2027-003820260610PMT-REF-038                   000000138000CRINV-2027-0038         Standard Corp 38              
+20TX-2027-003920260610PMT-REF-039                   000000139000CRINV-2027-0039         Standard Corp 39              
+20TX-2027-004020260610PMT-REF-040                   000000140000CRINV-2027-0040         Standard Corp 40              
+20TX-2027-004120260610PMT-FZ-041                    000000311500CRINV-FZ-0041           Tech Solutions 41             
+20TX-2027-004220260610PMT-FZ-042                    000000313000CRINV-FZ-0042           Acme Supply 42                
+20TX-2027-004320260610PMT-FZ-043                    000000314500CRINV-FZ-0043           Acme Supply 43                
+20TX-2027-004420260610PMT-FZ-044                    000000316000CRINV-FZ-0044           Tech Solutions 44             
+20TX-2027-004520260610PMT-FZ-045                    000000317500CRINV-FZ-0045           Acme Supply 45                
+20TX-2027-004620260610PMT-FZ-046                    000000319000CRINV-FZ-0046           Acme Supply 46                
+20TX-2027-004720260610PMT-FZ-047                    000000320500CRINV-FZ-0047           Tech Solutions 47             
+20TX-2027-004820260610PMT-FZ-048                    000000322000CRINV-FZ-0048           Acme Supply 48                
+20TX-2027-004920260610PMT-FZ-049                    000000323500CRINV-FZ-0049           Acme Supply 49                
+20TX-2027-005020260610PMT-FZ-050                    000000325000CRINV-FZ-0050           Tech Solutions 50             
+20TX-2027-005120260610PMT-FZ-051                    000000326500CRINV-FZ-0051           Acme Supply 51                
+20TX-2027-005220260610PMT-FZ-052                    000000328000CRINV-FZ-0052           Acme Supply 52                
+20TX-2027-005320260610PMT-FZ-053                    000000329500CRINV-FZ-0053           Tech Solutions 53             
+20TX-2027-005420260610PMT-FZ-054                    000000331000CRINV-FZ-0054           Acme Supply 54                
+20TX-2027-005520260610PMT-FZ-055                    000000332500CRINV-FZ-0055           Acme Supply 55                
+20TX-2027-005620260610PMT-FZ-056                    000000334000CRINV-FZ-0056           Tech Solutions 56             
+20TX-2027-005720260610PMT-FZ-057                    000000335500CRINV-FZ-0057           Acme Supply 57                
+20TX-2027-005820260610PMT-FZ-058                    000000337000CRINV-FZ-0058           Acme Supply 58                
+20TX-2027-005920260610PMT-FZ-059                    000000338500CRINV-FZ-0059           Tech Solutions 59             
+20TX-2027-006020260610PMT-FZ-060                    000000340000CRINV-FZ-0060           Acme Supply 60                
+20TX-2027-006120260610PMT-FZ-061                    000000341500CRINV-FZ-0061           Acme Supply 61                
+20TX-2027-006220260610PMT-FZ-062                    000000343000CRINV-FZ-0062           Tech Solutions 62             
+20TX-2027-006320260610PMT-FZ-063                    000000344500CRINV-FZ-0063           Acme Supply 63                
+20TX-2027-006420260610PMT-FZ-064                    000000346000CRINV-FZ-0064           Acme Supply 64                
+20TX-2027-006520260610PMT-FZ-065                    000000347500CRINV-FZ-0065           Tech Solutions 65             
+20TX-2027-006620260610PMT-FZ-066                    000000349000CRINV-FZ-0066           Acme Supply 66                
+20TX-2027-006720260610PMT-FZ-067                    000000350500CRINV-FZ-0067           Acme Supply 67                
+20TX-2027-006820260610PMT-FZ-068                    000000352000CRINV-FZ-0068           Tech Solutions 68             
+20TX-2027-006920260610PMT-FZ-069                    000000353500CRINV-FZ-0069           Acme Supply 69                
+20TX-2027-007020260610PMT-FZ-070                    000000355000CRINV-FZ-0070           Acme Supply 70                
+20TX-2027-007120260610PMT-EM-071                    000000385500CRINV-EM-0071           Global Logistics 71           
+20TX-2027-007220260610PMT-EM-072                    000000386000CRINV-EM-0072           Tech Cloud Systems 72         
+20TX-2027-007320260610PMT-EM-073                    000000386500CRINV-EM-0073           National Health Services 73   
+20TX-2027-007420260610PMT-EM-074                    000000387000CRINV-EM-0074           Agri Farms 74                 
+20TX-2027-007520260610PMT-EM-075                    000000387500CRINV-EM-0075           Global Logistics 75           
+20TX-2027-007620260610PMT-EM-076                    000000388000CRINV-EM-0076           Tech Cloud Systems 76         
+20TX-2027-007720260610PMT-EM-077                    000000388500CRINV-EM-0077           National Health Services 77   
+20TX-2027-007820260610PMT-EM-078                    000000389000CRINV-EM-0078           Agri Farms 78                 
+20TX-2027-007920260610PMT-EM-079                    000000389500CRINV-EM-0079           Global Logistics 79           
+20TX-2027-008020260610PMT-EM-080                    000000390000CRINV-EM-0080           Tech Cloud Systems 80         
+20TX-2027-008120260610PMT-EM-081                    000000390500CRINV-EM-0081           National Health Services 81   
+20TX-2027-008220260610PMT-EM-082                    000000391000CRINV-EM-0082           Agri Farms 82                 
+20TX-2027-008320260610PMT-EM-083                    000000391500CRINV-EM-0083           Global Logistics 83           
+20TX-2027-008420260610PMT-EM-084                    000000392000CRINV-EM-0084           Tech Cloud Systems 84         
+20TX-2027-008520260610PMT-EM-085                    000000392500CRINV-EM-0085           National Health Services 85   
+20TX-2027-008620260610PMT-EM-086                    000000393000CRINV-EM-0086           Agri Farms 86                 
+20TX-2027-008720260610PMT-EM-087                    000000393500CRINV-EM-0087           Global Logistics 87           
+20TX-2027-008820260610PMT-EM-088                    000000394000CRINV-EM-0088           Tech Cloud Systems 88         
+20TX-2027-008920260610PMT-EM-089                    000000394500CRINV-EM-0089           National Health Services 89   
+20TX-2027-009020260610PMT-EM-090                    000000395000CRINV-EM-0090           Agri Farms 90                 
+20TX-2027-009120260610PMT-EM-091                    000000395500CRINV-EM-0091           Global Logistics 91           
+20TX-2027-009220260610PMT-EM-092                    000000396000CRINV-EM-0092           Tech Cloud Systems 92         
+20TX-2027-009320260610PMT-EM-093                    000000396500CRINV-EM-0093           National Health Services 93   
+20TX-2027-009420260610PMT-EM-094                    000000397000CRINV-EM-0094           Agri Farms 94                 
+20TX-2027-009520260610PMT-EM-095                    000000397500CRINV-EM-0095           Global Logistics 95           
+20TX-2027-009620260610PMT-EM-096                    000000398000CRINV-EM-0096           Tech Cloud Systems 96         
+20TX-2027-009720260610PMT-EM-097                    000000398500CRINV-EM-0097           National Health Services 97   
+20TX-2027-009820260610PMT-EM-098                    000000399000CRINV-EM-0098           Agri Farms 98                 
+20TX-2027-009920260610PMT-EM-099                    000000399500CRINV-EM-0099           Global Logistics 99           
+20TX-2027-010020260610PMT-EM-100                    000000400000CRINV-EM-0100           Tech Cloud Systems 100        
+20TX-2027-010120260610PMT-LLM-101                   000000800000CRINV-LLM-0101          Complex Services 101          
+20TX-2027-010220260610PMT-LLM-102                   000000810000CRINV-LLM-0102          Complex Services 102          
+20TX-2027-010320260610PMT-LLM-103                   000000820000CRINV-LLM-0103          Complex Services 103          
+20TX-2027-010420260610PMT-LLM-104                   000000830000CRINV-LLM-0104          Complex Services 104          
+20TX-2027-010520260610PMT-LLM-105                   000000840000CRINV-LLM-0105          Complex Services 105          
+20TX-2027-010620260610PMT-LLM-106                   000000850000CRINV-LLM-0106          Complex Services 106          
+20TX-2027-010720260610PMT-LLM-107                   000000860000CRINV-LLM-0107          Complex Services 107          
+20TX-2027-010820260610PMT-LLM-108                   000000870000CRINV-LLM-0108          Complex Services 108          
+20TX-2027-010920260610PMT-LLM-109                   000000880000CRINV-LLM-0109          Complex Services 109          
+20TX-2027-011020260610PMT-LLM-110                   000000890000CRINV-LLM-0110          Complex Services 110          
+20TX-2027-011120260610PMT-ORP-111                   000001011000CRINV-ORP-0111          Orphan PSR 111                
+20TX-2027-011220260610PMT-ORP-112                   000001012000CRINV-ORP-0112          Orphan PSR 112                
+20TX-2027-011320260610PMT-ORP-113                   000001013000CRINV-ORP-0113          Orphan PSR 113                
+20TX-2027-011420260610PMT-ORP-114                   000001014000CRINV-ORP-0114          Orphan PSR 114                
+20TX-2027-011520260610PMT-ORP-115                   000001015000CRINV-ORP-0115          Orphan PSR 115                
+20TX-2027-011620260610PMT-ORP-116                   000001016000CRINV-ORP-0116          Orphan PSR 116                
+20TX-2027-011720260610PMT-ORP-117                   000001017000CRINV-ORP-0117          Orphan PSR 117                
+20TX-2027-011820260610PMT-ORP-118                   000001018000CRINV-ORP-0118          Orphan PSR 118                
+20TX-2027-011920260610PMT-ORP-119                   000001019000CRINV-ORP-0119          Orphan PSR 119                
+20TX-2027-012020260610PMT-ORP-120                   000001020000CRINV-ORP-0120          Orphan PSR 120                
+20TX-2027-012120260610PMT-ORP-121                   000001021000CRINV-ORP-0121          Orphan PSR 121                
+20TX-2027-012220260610PMT-ORP-122                   000001022000CRINV-ORP-0122          Orphan PSR 122                
+20TX-2027-012320260610PMT-ORP-123                   000001023000CRINV-ORP-0123          Orphan PSR 123                
+20TX-2027-012420260610PMT-ORP-124                   000001024000CRINV-ORP-0124          Orphan PSR 124                
+20TX-2027-012520260610PMT-ORP-125                   000001025000CRINV-ORP-0125          Orphan PSR 125                
+20TX-2027-012620260610PMT-ORP-126                   000001026000CRINV-ORP-0126          Orphan PSR 126                
+20TX-2027-012720260610PMT-ORP-127                   000001027000CRINV-ORP-0127          Orphan PSR 127                
+20TX-2027-012820260610PMT-ORP-128                   000001028000CRINV-ORP-0128          Orphan PSR 128                
+20TX-2027-012920260610PMT-ORP-129                   000001029000CRINV-ORP-0129          Orphan PSR 129                
+20TX-2027-013020260610PMT-ORP-130                   000001030000CRINV-ORP-0130          Orphan PSR 130                
+99000130

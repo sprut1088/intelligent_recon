@@ -458,6 +458,8 @@ def export_cases(
     if group_id: clauses.append("group_id = ?"); params.append(group_id)
     if status == 'ai_processed':
         clauses.append("reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
+    elif status == 'exceptions':
+        clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI Confirmed \u2014 No Match')")
     elif status == 'in_transit':
         clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
     elif status == 'matched':
@@ -500,6 +502,8 @@ def list_cases(status: Optional[str]=None, exception_only: bool=False, search: O
     if group_id: clauses.append("group_id = ?"); params.append(group_id)
     if status == 'ai_processed':
         clauses.append("(reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match') OR (json_extract(feature_snapshot_json, '$.ai_verification') IS NOT NULL AND rule_applied NOT LIKE 'TIER2C%'))")
+    elif status == 'exceptions':
+        clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI Confirmed \u2014 No Match')")
     elif status == 'in_transit':
         clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
     elif status == 'matched':

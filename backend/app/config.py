@@ -24,6 +24,7 @@ class Settings:
     psr_amount_divisor: float = float(os.getenv("PSR_AMOUNT_DIVISOR", "1"))
     exact_amount_tolerance: float = float(os.getenv("EXACT_AMOUNT_TOLERANCE", "0.0001"))
     minor_variance_tolerance: float = float(os.getenv("MINOR_VARIANCE_TOLERANCE", "50"))
+    ai_candidate_variance_pct: float = float(os.getenv("AI_CANDIDATE_VARIANCE_PCT", "0.25"))
     auto_close_confidence: int = int(os.getenv("AUTO_CLOSE_CONFIDENCE", "95"))
     assisted_confidence: int = int(os.getenv("ASSISTED_CONFIDENCE", "80"))
     learning_min_support: int = int(os.getenv("LEARNING_MIN_SUPPORT", "3"))

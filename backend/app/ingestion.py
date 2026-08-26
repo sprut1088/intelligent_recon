@@ -264,6 +264,7 @@ def run_uploaded_batch(batch_id: str, amount_divisor: Optional[float] = None, re
         conn.executemany(CASE_INSERT_SQL, [case_to_db_tuple(case) for case in cases])
         sync_exception_workflow(conn)
         set_meta(conn, "active_batch_id", batch_id)
+        set_meta(conn, "recon_type", "PAYMENT")
         set_meta(conn, "last_load_header", json.dumps(asdict(header) if header else {}))
         set_meta(conn, "last_amount_divisor", amount_divisor or settings.psr_amount_divisor)
         set_meta(conn, "last_pattern_group", pattern_group or '')

@@ -49,6 +49,8 @@ function mapSummary(payload) {
     recon_type: payload.recon_type || 'PAYMENT',
     fix_count: payload.fix_count || 0,
     ccf_count: payload.ccf_count || 0,
+    psr_records: payload.psr_count || 0,
+    camt_entries: payload.camt_count || 0,
     raw: payload,
   };
 }

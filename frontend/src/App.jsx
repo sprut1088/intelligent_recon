@@ -3575,11 +3575,7 @@ export default function App() {
         <nav className="nav-list">
           {tabs.map(([key, label]) => <button key={key} className={active === key ? 'active' : ''} onClick={() => setActive(key)}>{label}</button>)}
         </nav>
-        <div className="sidebar-card">
-          <span>Client demo mode</span>
-          <strong>PSR ↔ CAMT.053</strong>
-          <p>Intelligent reconciliation with explainability and learning.</p>
-        </div>
+
       </aside>
       <main>
         <header className="topbar">
