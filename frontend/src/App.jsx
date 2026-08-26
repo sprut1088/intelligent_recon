@@ -129,7 +129,7 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
       <div className="hero-card">
         <div className="hero-copy">
           <div className="eyebrow">Intelligent Recon Engine · Prototype</div>
-          <h1>{process.name || 'Cash Account Real-Time Reconciliation'}</h1>
+          <h1>{process.name || 'Account Real-Time Reconciliation'}</h1>
           <p>
             A distinct operations cockpit covering intake, data prep, no-code matching, exception workflow, dashboards,
             audit and human-in-the-loop learning for multi-domain reconciliation.
@@ -3587,7 +3587,7 @@ export default function App() {
       <main>
         <header className="topbar">
           <div>
-            <strong>Cash Account Reconciliation</strong>
+            <strong>Account Reconciliation</strong>
             <span>Real-time reconciliation · exception automation · learning</span>
           </div>
           <div className="topbar-actions">

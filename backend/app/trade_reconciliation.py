@@ -61,10 +61,14 @@ def _build_trade_case(
     idx: int, fix: Optional[FixTransaction], ccf: Optional[CcfTransaction],
     status: str, reason: str, match_type: str, confidence: int, rule: str,
     exception_flag: str, explanation: str, suggestions: Optional[List[Dict]] = None,
+    amount_override: Optional[tuple] = None,
 ) -> ReconCase:
-    internal_amt = fix.quantity if fix else None
-    external_amt = ccf.quantity if ccf else None
-    variance = round(internal_amt - external_amt, 2) if internal_amt is not None and external_amt is not None else None
+    if amount_override:
+        internal_amt, external_amt, variance = amount_override
+    else:
+        internal_amt = fix.quantity if fix else None
+        external_amt = ccf.quantity if ccf else None
+        variance = round(internal_amt - external_amt, 2) if internal_amt is not None and external_amt is not None else None
     value_dt = fix.transact_time[:10].replace("-", "") if fix else ""
     if fix and len(value_dt) >= 8 and value_dt.isdigit():
         value_dt = f"{value_dt[0:4]}-{value_dt[4:6]}-{value_dt[6:8]}"
@@ -75,7 +79,7 @@ def _build_trade_case(
     return ReconCase(
         case_id=f"TCASE-{idx:06d}",
         match_key=ccf.clearing_ref if ccf else (fix.trade_id if fix else f"TCASE-{idx:06d}"),
-        psr_id=fix.trade_id if fix else "",
+        psr_id=fix.exec_id if fix else "",
         camt_id=ccf.clearing_ref if ccf else "",
         reference=fix.exec_id if fix else "",
         invoice="",
@@ -139,7 +143,7 @@ def reconcile_trades(
                     explanation=f"Order {fix.exec_id} matched by reference. ISIN {fix.isin}, quantity {fix.quantity:,.0f}, price ${fix.price:,.2f} confirmed by custodian.",
                 ))
             elif qty_match and not price_match:
-                # T2: Order ref + qty match but price break
+                # T2: Order ref + qty match but price break — show prices as amounts
                 pvar = round(fix.price - matched_ccf.price, 2)
                 cases.append(_build_trade_case(
                     idx, fix, matched_ccf,
@@ -151,6 +155,7 @@ def reconcile_trades(
                     exception_flag="Y",
                     explanation=f"Order {fix.exec_id} matched by reference. Quantity confirmed but price differs: Front office ${fix.price:,.2f} vs Custodian ${matched_ccf.price:,.2f} (variance: {pvar:+,.2f}). Probable data entry error.",
                     suggestions=[{"action": "ROUTE_TO_REVIEW", "desk": "Mid-Office", "price_variance": pvar}],
+                    amount_override=(fix.price, matched_ccf.price, pvar),
                 ))
             else:
                 # T3: Order ref match but quantity break
