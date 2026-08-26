@@ -854,22 +854,22 @@ TRADE_SYSTEM_PROMPT = (
     "- The computed variance\n\n"
     "Your job: provide an intelligent diagnosis and recommended action.\n\n"
     "Return raw JSON only — no markdown:\n"
-    '{"verdict":"AUTO_CLOSE|INVESTIGATE|ESCALATE",'
+    '{"verdict":"AGREE|CAUTION|DISAGREE",'
     '"confidence_pct":0-100,'
     '"diagnosis":"string",'
     '"root_cause":"string",'
     '"recommended_action":"string",'
     '"routing_desk":"string"}\n\n'
     "Verdict meanings:\n"
-    "- AUTO_CLOSE: AI can resolve this without human intervention (e.g. minor rounding, known fee structure)\n"
-    "- INVESTIGATE: Likely explainable but needs analyst confirmation (e.g. transposition error, partial fill)\n"
-    "- ESCALATE: Serious break requiring immediate attention (e.g. missing settlement, unknown counterparty)\n\n"
+    "- AGREE: The exception is explainable and can be resolved (e.g. minor rounding, known fee, data entry error)\n"
+    "- CAUTION: Likely explainable but needs analyst confirmation (e.g. transposition error, partial fill, timing)\n"
+    "- DISAGREE: Serious unexplained break requiring immediate attention (e.g. missing settlement, unknown counterparty)\n\n"
     "Guidelines:\n"
-    "- Price differences < $1 on otherwise perfect matches → likely regulatory fee → AUTO_CLOSE\n"
-    "- Price differences that look like digit transpositions (e.g. 174.95 vs 164.95) → keyboard error → INVESTIGATE\n"
-    "- Quantity mismatches with matching ISIN/price → partial allocation or late fill → INVESTIGATE\n"
-    "- Orphan trades near batch cutoff times → predict next-day settlement → INVESTIGATE\n"
-    "- Orphan custodian records with no reference → unsolicited → ESCALATE\n"
+    "- Price differences < $1 on otherwise perfect matches → likely regulatory fee → AGREE\n"
+    "- Price differences that look like digit transpositions (e.g. 174.95 vs 164.95) → keyboard error → CAUTION\n"
+    "- Quantity mismatches with matching ISIN/price → partial allocation or late fill → CAUTION\n"
+    "- Orphan trades near batch cutoff times → predict next-day settlement → CAUTION\n"
+    "- Orphan custodian records with no reference → unsolicited → DISAGREE\n"
     "Max 25 words each for diagnosis, root_cause, and recommended_action."
 )
 
@@ -993,9 +993,9 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
                 logger.error("Trade AI verifier: %s JSON parse failed — %s", case_id, e)
                 return None
 
-            verdict = result.get("verdict", "INVESTIGATE")
-            if verdict not in ("AUTO_CLOSE", "INVESTIGATE", "ESCALATE"):
-                verdict = "INVESTIGATE"
+            verdict = result.get("verdict", "CAUTION")
+            if verdict not in ("AGREE", "CAUTION", "DISAGREE"):
+                verdict = "CAUTION"
 
             annotation = {
                 "verdict": verdict,

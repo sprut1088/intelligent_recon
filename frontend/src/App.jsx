@@ -1500,10 +1500,8 @@ function ResultTable({ rows, onSelect }) {
                   <Tag tone={classForStatus(r.reconciliation_status)}>{r.reconciliation_status}</Tag>
                   {r.feature_snapshot?.ai_verification && (() => {
                     const v = r.feature_snapshot.ai_verification.verdict;
-                    const toneMap = { AGREE: 'success', DISAGREE: 'danger', AUTO_CLOSE: 'success', ESCALATE: 'danger' };
-                    const labelMap = { AGREE: 'AI: Agree', DISAGREE: 'AI: Disagree', CAUTION: 'AI: Caution', AUTO_CLOSE: 'AI: Auto-Close', INVESTIGATE: 'AI: Investigate', ESCALATE: 'AI: Escalate' };
-                    const tone = toneMap[v] || 'warning';
-                    const label = labelMap[v] || `AI: ${v}`;
+                    const tone = v === 'AGREE' ? 'success' : v === 'DISAGREE' ? 'danger' : 'warning';
+                    const label = v === 'AGREE' ? 'AI: Agree' : v === 'DISAGREE' ? 'AI: Disagree' : 'AI: Caution';
                     return <Tag tone={tone} className="tag-verdict" title={r.feature_snapshot.ai_verification.note || ''}>{label}</Tag>;
                   })()}
                 </td>
@@ -1941,10 +1939,8 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           })()}
           {item.feature_snapshot?.ai_verification && (() => {
             const av = item.feature_snapshot.ai_verification;
-            const toneMap = { AGREE: 'success', DISAGREE: 'danger', AUTO_CLOSE: 'success', ESCALATE: 'danger' };
-            const labelMap = { AGREE: 'AI: Agree', DISAGREE: 'AI: Disagree', CAUTION: 'AI: Caution', AUTO_CLOSE: 'AI: Auto-Close', INVESTIGATE: 'AI: Investigate', ESCALATE: 'AI: Escalate' };
-            const tone = toneMap[av.verdict] || 'warning';
-            const label = labelMap[av.verdict] || `AI: ${av.verdict}`;
+            const tone = av.verdict === 'AGREE' ? 'success' : av.verdict === 'DISAGREE' ? 'danger' : 'warning';
+            const label = av.verdict === 'AGREE' ? 'AI: Agree' : av.verdict === 'DISAGREE' ? 'AI: Disagree' : 'AI: Caution';
             const isTrade = (item.case_id || '').startsWith('TCASE-');
             return (
               <Panel title="AI Verification" className="nested-panel">
