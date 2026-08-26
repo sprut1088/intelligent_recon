@@ -1880,7 +1880,8 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
   const score = item.feature_snapshot?.score_breakdown || {};
   const components = score.components || [];
   const suggestions = item.suggestions || [];
-  const hasMatch = item.bank_amount != null || item.camt_id;
+  const isTrade = (item.case_id || '').startsWith('TCASE-');
+  const hasMatch = item.bank_amount != null || item.camt_id || isTrade;
   const total = rows.length;
   return (
     <>
