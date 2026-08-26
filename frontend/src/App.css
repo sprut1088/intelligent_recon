@@ -128,7 +128,7 @@ p { margin: 0; color: var(--muted); line-height: 1.55; }
 .insight span { min-width: 34px; height: 34px; border-radius: 12px; display: grid; place-items: center; background: var(--primary-soft); color: var(--primary); font-weight: 950; }
 .insight p { font-size: 13px; }
 .screen-title { display: flex; justify-content: space-between; gap: 18px; padding: 24px; margin-bottom: 20px; }
-.screen-title.split { align-items: center; }
+.screen-title.split { align-items: flex-start; flex-wrap: wrap; }
 .form-grid { display: grid; gap: 10px; }
 .form-grid label, .label { color: #334155; font-weight: 850; font-size: 13px; margin-top: 4px; display: block; }
 input, select, textarea { border: 1px solid #cfd9e5; background: #fff; color: var(--ink); border-radius: 12px; padding: 10px 12px; min-width: 0; }

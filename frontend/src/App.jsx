@@ -2759,9 +2759,9 @@ function ResultsWorkbench({ results, summary, patterns = [], selected, setSelect
           <h1>Matched, proposed and unresolved records</h1>
           <p>Drill into match evidence, failed fields, confidence and next-best action.</p>
         </div>
-        <div className="toolbar" style={{ flexWrap: 'nowrap', gap: '0.5rem', alignItems: 'flex-start' }}>
-          {/* Filter group — allowed to shrink/wrap internally */}
-          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', flex: 1, minWidth: 0 }}>
+        <div className="toolbar" style={{ flexWrap: 'wrap', gap: '0.5rem', alignItems: 'flex-start' }}>
+          {/* Filter group */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem', alignItems: 'center', flex: '1 1 320px', minWidth: 0 }}>
             <input
               value={search}
               onChange={(e) => setSearch(e.target.value)}
