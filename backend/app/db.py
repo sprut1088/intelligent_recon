@@ -11,7 +11,7 @@ CREATE TABLE IF NOT EXISTS recon_user_action_event (event_id TEXT PRIMARY KEY, c
 CREATE TABLE IF NOT EXISTS recon_manual_resolution (resolution_id TEXT PRIMARY KEY, case_id TEXT, original_exception_type TEXT, final_resolution_type TEXT, reason_code TEXT, psr_transaction_ids_json TEXT, bank_transaction_ids_json TEXT, amount_variance REAL, date_variance_days INTEGER, fields_used_json TEXT, fields_ignored_json TEXT, user_comment TEXT, resolved_by TEXT, resolved_at TEXT DEFAULT CURRENT_TIMESTAMP, approved_by TEXT, reversed_flag INTEGER DEFAULT 0, learning_eligible INTEGER DEFAULT 1);
 CREATE TABLE IF NOT EXISTS exception_workflow (case_id TEXT PRIMARY KEY, workflow_status TEXT DEFAULT 'NEW', owner TEXT DEFAULT 'Unassigned', priority TEXT DEFAULT 'Medium', sla_due_at TEXT, assigned_at TEXT, assigned_by TEXT, comments_json TEXT DEFAULT '[]', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS recon_pattern_candidate (candidate_pattern_id TEXT PRIMARY KEY, pattern_name TEXT, discovered_from_reason_code TEXT, observed_case_count INTEGER, backtest_precision REAL, estimated_false_positive_rate REAL, proposed_rule_json TEXT, status TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP);
-CREATE TABLE IF NOT EXISTS recon_pattern_registry (pattern_id TEXT PRIMARY KEY, pattern_name TEXT, pattern_type TEXT, pattern_rule_json TEXT, status TEXT, execution_mode TEXT, confidence_threshold REAL, approved_by TEXT, approved_at TEXT DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS recon_pattern_registry (pattern_id TEXT PRIMARY KEY, pattern_name TEXT, pattern_type TEXT, pattern_group TEXT DEFAULT 'default', pattern_version TEXT DEFAULT '1.0', pattern_rule_json TEXT, status TEXT, execution_mode TEXT, confidence_threshold REAL, approved_by TEXT, approved_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS file_ingestion_batch (batch_id TEXT PRIMARY KEY, batch_name TEXT, status TEXT DEFAULT 'CREATED', created_by TEXT DEFAULT 'prototype_user', created_at TEXT DEFAULT CURRENT_TIMESTAMP, updated_at TEXT DEFAULT CURRENT_TIMESTAMP, psr_file_id TEXT, camt_file_id TEXT, notes TEXT);
 CREATE TABLE IF NOT EXISTS uploaded_file (file_id TEXT PRIMARY KEY, batch_id TEXT, file_type TEXT, original_filename TEXT, stored_path TEXT, file_size INTEGER, content_sha256 TEXT, status TEXT DEFAULT 'UPLOADED', profile_json TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
 CREATE TABLE IF NOT EXISTS data_quality_issue (issue_id TEXT PRIMARY KEY, batch_id TEXT, file_id TEXT, severity TEXT, issue_code TEXT, field_name TEXT, record_id TEXT, message TEXT, created_at TEXT DEFAULT CURRENT_TIMESTAMP);
@@ -50,11 +50,25 @@ def get_conn() -> sqlite3.Connection:
 
 def seed_default_patterns(conn: sqlite3.Connection) -> None:
     for pattern_id, name, pattern_type, rule, status, mode, threshold in DEFAULT_PATTERNS:
-        conn.execute("""INSERT OR IGNORE INTO recon_pattern_registry (pattern_id, pattern_name, pattern_type, pattern_rule_json, status, execution_mode, confidence_threshold, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""", (pattern_id, name, pattern_type, json.dumps(rule), status, mode, threshold, "system_seed"))
+        conn.execute("""INSERT OR IGNORE INTO recon_pattern_registry (pattern_id, pattern_name, pattern_type, pattern_group, pattern_version, pattern_rule_json, status, execution_mode, confidence_threshold, approved_by) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)""", (pattern_id, name, pattern_type, "default", "1.0", json.dumps(rule), status, mode, threshold, "system_seed"))
+
+def _ensure_pattern_group_column(conn: sqlite3.Connection) -> None:
+    existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(recon_pattern_registry)").fetchall()]
+    if "pattern_group" not in existing_columns:
+        conn.execute("ALTER TABLE recon_pattern_registry ADD COLUMN pattern_group TEXT DEFAULT 'default'")
+
+
+def _ensure_pattern_version_column(conn: sqlite3.Connection) -> None:
+    existing_columns = [row[1] for row in conn.execute("PRAGMA table_info(recon_pattern_registry)").fetchall()]
+    if "pattern_version" not in existing_columns:
+        conn.execute("ALTER TABLE recon_pattern_registry ADD COLUMN pattern_version TEXT DEFAULT '1.0'")
+
 
 def init_db() -> None:
     with get_conn() as conn:
         conn.executescript(SCHEMA)
+        _ensure_pattern_group_column(conn)
+        _ensure_pattern_version_column(conn)
         seed_default_patterns(conn)
         # Idempotent column migrations — safe to run on existing DBs
         for col, col_def in [
@@ -99,5 +113,5 @@ def set_meta(conn: sqlite3.Connection, key: str, value: Any) -> None:
     conn.execute("INSERT OR REPLACE INTO run_metadata (key, value) VALUES (?, ?)", (key, str(value)))
 
 def get_meta(conn: sqlite3.Connection, key: str, default: Any = None) -> Any:
-    row = conn.execute("SELECT value FROM run_metadata WHERE key=?", (key,)).fetchone()
+    row = conn.execute("SELECT value FROM run_metadata WHERE key = ?", (key,)).fetchone()
     return row["value"] if row else default

@@ -1,11 +1,15 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api } from './api/client';
 
+const fmtGroupName = (name) => name === 'default' ? 'Default Group' : name;
+
 const tabs = [
   ['workspace', 'Control Room'],
   ['intake', 'Data Intake'],
   ['dataprep', 'Data Prep Studio'],
   ['matching', 'Matching Studio'],
+  ['pattern-builder', 'Pattern Builder'],
+  ['patterns', 'Pattern Manager'],
   ['results', 'Results Workbench'],
   ['exceptions', 'Exceptions'],
   ['dashboards', 'Dashboards'],
@@ -20,6 +24,19 @@ const money = (value) =>
     : new Intl.NumberFormat('en-IE', { style: 'currency', currency: 'EUR', maximumFractionDigits: 2 }).format(Number(value));
 
 const pct = (value) => `${Number(value || 0).toFixed(Number(value || 0) % 1 === 0 ? 0 : 1)}%`;
+
+function compareVersions(left = '1.0', right = '1.0') {
+  const parse = (value) => String(value || '1.0').split('.').map((part) => Number(part) || 0);
+  const leftParts = parse(left);
+  const rightParts = parse(right);
+  const length = Math.max(leftParts.length, rightParts.length);
+  for (let index = 0; index < length; index += 1) {
+    const leftValue = leftParts[index] ?? 0;
+    const rightValue = rightParts[index] ?? 0;
+    if (leftValue !== rightValue) return leftValue - rightValue;
+  }
+  return 0;
+}
 
 function classForStatus(value = '') {
   const v = String(value).toLowerCase();
@@ -166,15 +183,23 @@ function Workspace({ workspace, summary, onLoad, onRun, onSnapshot, onExport, lo
   );
 }
 
-function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, validatedBatchId, onUpload, onUploadBatch, onUploadTradeBatch, onValidate, onRunBatch, onRunTradeBatch, onNavigate, loading }) {
+function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId, quality, batchRunResult, batchRunStale, validatedBatchId, onUpload, onUploadBatch, onUploadTradeBatch, onValidate, onRunBatch, onRunTradeBatch, onNavigate, loading, patternGroups }) {
   const [psrFile, setPsrFile] = useState(null);
   const [camtFile, setCamtFile] = useState(null);
   const [fixFile, setFixFile] = useState(null);
   const [ccfFile, setCcfFile] = useState(null);
   const [batchName, setBatchName] = useState('');
   const [amountDivisor, setAmountDivisor] = useState('auto');
+  const [selectedPatternGroup, setSelectedPatternGroup] = useState('');
   const qualityTableRef = useRef(null);
   const [uploadMode, setUploadMode] = useState('payment');
+
+  // Initialise selection once groups are available; keep it if the group still exists after a change
+  useEffect(() => {
+    if (patternGroups && patternGroups.length > 0 && !patternGroups.includes(selectedPatternGroup)) {
+      setSelectedPatternGroup(patternGroups[0]);
+    }
+  }, [patternGroups.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
   const selectedBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
   const batchId = selectedBatch?.batch_id || selectedBatchId || '';
   const issues = quality?.issues || [];
@@ -271,6 +296,12 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
                     <option value="1">1 — amounts already match CAMT scale</option>
                     <option value="100">100 — amounts in minor units (cents)</option>
                   </select>
+                  <label title="Only patterns in this group will be used during reconciliation.">Pattern group</label>
+                  <select value={selectedPatternGroup || (patternGroups || [])[0] || ''} onChange={(e) => setSelectedPatternGroup(e.target.value)}>
+                    {(patternGroups || []).map((g) => (
+                      <option key={g} value={g}>{fmtGroupName(g)}</option>
+                    ))}
+                  </select>
                 </div>
               )}
               <div className="button-row">
@@ -278,7 +309,11 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
                 {isTradeBatch ? (
                   <button className="btn primary" disabled={!batchId || loading} onClick={() => onRunTradeBatch(batchId)}>Run trade recon</button>
                 ) : (
-                  <button className="btn primary" disabled={!batchId || loading || validatedBatchId !== batchId} onClick={() => onRunBatch(batchId, amountDivisor === 'auto' ? null : Number(amountDivisor))}>Run uploaded batch</button>
+                  <button className="btn primary" disabled={!batchId || loading || validatedBatchId !== batchId} onClick={() => {
+                    const grp = selectedPatternGroup || (patternGroups || [])[0] || null;
+                    if (grp) setSelectedPatternGroup(grp);
+                    onRunBatch(batchId, amountDivisor === 'auto' ? null : Number(amountDivisor), grp);
+                  }}>Run uploaded batch</button>
                 )}
               </div>
 
@@ -300,6 +335,16 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
               {batchRunResult && (
                 <div style={{ marginTop: '1.25rem', borderTop: '1px solid var(--border)', paddingTop: '1rem' }}>
                   <div style={{ fontSize: '0.72rem', fontWeight: 700, letterSpacing: '0.06em', textTransform: 'uppercase', color: 'var(--muted)', marginBottom: '0.6rem' }}>Batch run results</div>
+                  {batchRunResult.pattern_group && (
+                    <p style={{ fontSize: '0.8rem', color: 'var(--muted)', margin: '0 0 0.5rem' }}>
+                      Pattern group used: <strong>{batchRunResult.pattern_group}</strong>
+                    </p>
+                  )}
+                  {batchRunStale && (
+                    <p style={{ color: 'var(--warning,#d97706)', fontSize: '0.82rem', margin: '0 0 0.6rem', fontWeight: 600 }}>
+                      ⚠️ Pattern registry changed since this run — re-run the batch to apply the latest patterns.
+                    </p>
+                  )}
                   <div className="metric-grid three" style={{ marginBottom: '0.75rem' }}>
                     <div style={{ cursor: 'pointer' }} onClick={() => onNavigate('results')} title="Open Results Workbench">
                       <Metric label={batchRunResult.recon_type === 'TRADE' ? 'FIX trades' : 'PSR transactions'} value={batchRunResult.recon_type === 'TRADE' ? (batchRunResult.fix_count || 0) : (batchRunResult.psr_count || 0)} hint="→ Results Workbench" tone="info" />
@@ -539,6 +584,818 @@ function MatchingStudio({ patterns, rules, onTunePattern, onTogglePattern, onCre
           </table>
         </div>
       </Panel>
+    </section>
+  );
+}
+
+function PatternManagement({ patterns, highlightGroup, onCreate, onUpdate, onDelete, onDeleteGroup, onToggle }) {
+  const BLANK_PATTERN = {
+    pattern_name: '',
+    pattern_type: 'CUSTOM',
+    pattern_rule: '{\n  "fields": [],\n  "mode": "SUGGESTION"\n}',
+    status: 'DRAFT',
+    execution_mode: 'SUGGESTION',
+    confidence_threshold: 0.80,
+    approved_by: 'prototype_user',
+  };
+
+  const fmtLabel = (s) => (s || '').replace(/_/g, ' ').toLowerCase().replace(/\b\w/g, c => c.toUpperCase());
+  const statusTone = (s) => s === 'ACTIVE' ? 'success' : s === 'DRAFT' ? 'warning' : 'neutral';
+  const modeTone  = (m) => m === 'AUTO_CLOSE' ? 'success' : m === 'SUGGESTION' ? 'warning' : 'neutral';
+  const confTooltip = (p) => {
+    const rule = p.pattern_rule || {};
+    const fields = new Set(rule.fields || []);
+    const pct = Math.round((p.confidence_threshold ?? 0.8) * 100);
+    if (rule.route_to === 'manual_review')
+      return `${pct}% — exception catch-all; unmatched items routed to manual review`;
+    if (fields.has('end_to_end_id'))
+      return `${pct}% — exact end-to-end ID; unique identifier, collision risk near zero`;
+    if (fields.has('pmt_ref') && fields.has('amount_sum') && rule.max_split_size)
+      return `${pct}% — split settlement (1:N, max ${rule.max_split_size}); subset-sum across bank entries, shared reference confidence ${rule.shared_reference_confidence ?? '—'}%`;
+    if (fields.has('pmt_ref') && fields.has('amount_sum'))
+      return `${pct}% — group settlement; fuzzy counterparty + multi-field subset-sum`;
+    if (fields.has('pmt_ref') && fields.has('amount') && fields.size === 2)
+      return `${pct}% — PMT-REF + amount exact match; structured fields, very low false-positive rate`;
+    if (fields.has('pmt_ref') && fields.size === 1)
+      return `${pct}% — PMT-REF exact match; structured reference, very low false-positive rate`;
+    if (fields.has('invoice') && fields.has('amount') && fields.size === 2)
+      return `${pct}% — invoice + amount exact match; reliable but invoice numbers can be reused`;
+    if (fields.has('invoice') && fields.size === 1)
+      return `${pct}% — invoice exact match; reliable reference, occasionally reused`;
+    if (fields.has('counterparty'))
+      return `${pct}% — fuzzy counterparty (≥${Math.round((rule.threshold ?? 0.85) * 100)}% similarity) + amount; similarity-weighted, higher ambiguity`;
+    if (fields.has('amount_variance'))
+      return `${pct}% — amount variance ≤${rule.minor_tolerance ?? 50} minor units; amounts can coincide across parties`;
+    if (fields.has('amount') && fields.has('direction'))
+      return `${pct}% — amount + direction exact match; amounts can coincide, higher ambiguity`;
+    if ((p.pattern_type || '').toUpperCase() === 'LLM_SUGGESTED')
+      return `${pct}% — AI-proposed pattern; lower certainty baseline, requires human review`;
+    return `${pct}% — user-defined confidence threshold`;
+  };
+
+  const [selectedGroup, setSelectedGroup] = useState('');
+  const [showAddModal, setShowAddModal] = useState(false);
+  const [addDraft, setAddDraft] = useState({ ...BLANK_PATTERN });
+  const [addToGroup, setAddToGroup] = useState('');
+  const [errors, setErrors] = useState({});
+  const [dupeName, setDupeName] = useState('');
+  const [dupeActive, setDupeActive] = useState(false);
+  const [deleteConfirmActive, setDeleteConfirmActive] = useState(false);
+  const [expandedRow, setExpandedRow] = useState(null);
+
+  // Stable ref so the useEffect below can read selectedGroup without it being a dep
+  const selectedGroupRef = useRef('');
+  selectedGroupRef.current = selectedGroup;
+
+  const groupedPatterns = useMemo(() => {
+    const groups = {};
+    (patterns || []).forEach((p) => {
+      const key = (p.pattern_group || 'default').trim() || 'default';
+      if (!groups[key]) groups[key] = [];
+      groups[key].push(p);
+    });
+    return Object.entries(groups)
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, items]) => ({
+        groupName: name,
+        items: [...items].sort((a, b) => (a.pattern_name || '').localeCompare(b.pattern_name || '')),
+      }));
+  }, [patterns]);
+
+  useEffect(() => {
+    // After a bulk-save, jump to the newly populated group
+    if (highlightGroup && groupedPatterns.some((g) => g.groupName === highlightGroup)) {
+      setSelectedGroup(highlightGroup);
+      return;
+    }
+    // Keep the current group as long as it still exists (e.g. after a pattern delete)
+    if (groupedPatterns.some((g) => g.groupName === selectedGroupRef.current)) return;
+    // Initial load or the group itself was removed — fall back to first
+    const first = groupedPatterns[0]?.groupName;
+    if (first) setSelectedGroup(first);
+  }, [groupedPatterns, highlightGroup]);
+
+  const activeGroup = groupedPatterns.find((g) => g.groupName === selectedGroup) || groupedPatterns[0];
+
+  const openAdd = (targetGroup) => {
+    setAddToGroup(targetGroup || selectedGroup || 'default');
+    setAddDraft({ ...BLANK_PATTERN });
+    setErrors({});
+    setShowAddModal(true);
+  };
+
+  const commitAdd = () => {
+    let rule;
+    try { rule = JSON.parse(addDraft.pattern_rule); }
+    catch { setErrors({ add: 'Invalid rule JSON' }); return; }
+    const name = addDraft.pattern_name.trim() || 'New pattern';
+    const group = addToGroup.trim() || 'default';
+    onCreate({ ...addDraft, pattern_name: name, pattern_group: group, pattern_rule: rule });
+    setShowAddModal(false);
+    setSelectedGroup(group);
+  };
+
+  const MODES = [
+    { value: 'SUGGESTION', label: 'Suggestion' },
+    { value: 'AUTO_CLOSE', label: 'Auto close' },
+    { value: 'MANUAL', label: 'Manual' },
+    { value: 'LEDGER_OR_IN_TRANSIT', label: 'Ledger / in transit' },
+  ];
+
+  return (
+    <section className="screen">
+      <div className="screen-title">
+        <div>
+          <div className="eyebrow">Pattern manager</div>
+          <h1>Pattern Groups</h1>
+          <p>Named sets of reconciliation patterns applied during a batch run.</p>
+        </div>
+        <button className="btn ghost" style={{ fontSize: '0.82rem' }} onClick={() => openAdd('new-group')}>+ New group</button>
+      </div>
+
+      {groupedPatterns.length === 0 ? (
+        <Panel>
+          <p className="empty">No pattern groups yet. Use the Pattern Builder to generate and save patterns.</p>
+        </Panel>
+      ) : (
+        <Panel>
+          {/* ── Group selector + action row ── */}
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.75rem' }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap' }}>
+              <select
+                value={selectedGroup}
+                onChange={(e) => { setSelectedGroup(e.target.value); setDupeActive(false); setDupeName(''); setDeleteConfirmActive(false); }}
+                style={{ fontSize: '0.85rem', padding: '0.3rem 0.5rem' }}
+              >
+                {groupedPatterns.map((g) => (
+                  <option key={g.groupName} value={g.groupName}>{fmtGroupName(g.groupName)} ({g.items.length})</option>
+                ))}
+              </select>
+              <span style={{ fontSize: '0.78rem', color: 'var(--muted, #64748b)' }}>
+                {activeGroup?.items.length ?? 0} pattern{activeGroup?.items.length !== 1 ? 's' : ''}
+              </span>
+              {!dupeActive ? (
+                <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => { setDupeName(`${selectedGroup}-copy`); setDupeActive(true); setDeleteConfirmActive(false); }}>Duplicate group</button>
+              ) : (
+                <>
+                  <input
+                    autoFocus
+                    value={dupeName}
+                    onChange={(e) => setDupeName(e.target.value)}
+                    placeholder="New group name"
+                    style={{ fontSize: '0.82rem', padding: '0.28rem 0.5rem', borderRadius: '4px', border: '1px solid var(--border,#ccc)', minWidth: '160px' }}
+                  />
+                  <button
+                    className="btn primary"
+                    style={{ fontSize: '0.78rem' }}
+                    disabled={!dupeName.trim()}
+                    onClick={async () => {
+                      const name = dupeName.trim();
+                      for (const p of activeGroup?.items ?? []) {
+                        await onCreate({ pattern_name: p.pattern_name, pattern_type: p.pattern_type, pattern_group: name, pattern_rule: p.pattern_rule, status: p.status, execution_mode: p.execution_mode, confidence_threshold: p.confidence_threshold, approved_by: p.approved_by ?? 'prototype_user' });
+                      }
+                      setDupeActive(false); setDupeName('');
+                      setSelectedGroup(name);
+                    }}
+                  >Save copy</button>
+                  <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => setDupeActive(false)}>Cancel</button>
+                </>
+              )}
+              {!dupeActive && (
+                !deleteConfirmActive ? (
+                  <button className="btn ghost" style={{ fontSize: '0.78rem', color: 'var(--danger,#dc2626)' }} onClick={() => setDeleteConfirmActive(true)}>Delete group</button>
+                ) : (
+                  <>
+                    <span style={{ fontSize: '0.8rem', color: 'var(--danger,#dc2626)', fontWeight: 600 }}>Delete all {activeGroup?.items.length} pattern{activeGroup?.items.length !== 1 ? 's' : ''} in &quot;{fmtGroupName(selectedGroup)}&quot;?</span>
+                    <button
+                      className="btn primary"
+                      style={{ fontSize: '0.78rem', background: 'var(--danger,#dc2626)', boxShadow: 'none' }}
+                      onClick={() => { setDeleteConfirmActive(false); onDeleteGroup(selectedGroup); }}
+                    >Yes, delete</button>
+                    <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => setDeleteConfirmActive(false)}>Cancel</button>
+                  </>
+                )
+              )}
+            </div>
+            <button className="btn ghost" style={{ fontSize: '0.82rem' }} onClick={() => openAdd(activeGroup?.groupName)}>+ Add pattern</button>
+          </div>
+
+          {activeGroup?.items.length === 0 ? (
+            <p className="empty">No patterns in this group.</p>
+          ) : (
+            <table className="data-table">
+              <thead>
+                <tr>
+                  <th>Name</th>
+                  <th>Status</th>
+                  <th>Mode</th>
+                  <th title="Hover a value to see the rationale behind each pattern's confidence score" style={{ cursor: 'help' }}>Confidence ↑</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {activeGroup?.items.map((p) => {
+                  const expanded = expandedRow === p.pattern_id;
+                  return (
+                    <>
+                      <tr key={p.pattern_id}>
+                        <td style={{ fontWeight: 500 }}>
+                          <button
+                            onClick={() => setExpandedRow(expanded ? null : p.pattern_id)}
+                            style={{ background: 'none', border: 'none', cursor: 'pointer', padding: 0, fontWeight: 600, fontSize: '0.88rem', color: 'var(--primary,#2563eb)', marginRight: '0.4rem' }}
+                            title={expanded ? 'Hide details' : 'Show details'}
+                          >{expanded ? '▾' : '▸'}</button>
+                          {p.pattern_name}
+                        </td>
+                        <td><Tag tone={statusTone(p.status)}>{fmtLabel(p.status)}</Tag></td>
+                        <td><Tag tone={modeTone(p.execution_mode)}>{fmtLabel(p.execution_mode)}</Tag></td>
+                        <td style={{ color: 'var(--muted, #64748b)', fontSize: '0.85rem' }} title={confTooltip(p)}>{Math.round((p.confidence_threshold ?? 0.8) * 100)}%</td>
+                        <td>
+                          <button
+                            className="btn ghost"
+                            style={{ fontSize: '0.78rem', color: p.status === 'ACTIVE' ? 'var(--warning,#d97706)' : 'var(--success,#16a34a)' }}
+                            onClick={() => onToggle(p)}
+                            title={p.status === 'ACTIVE' ? 'Deactivate this pattern' : 'Activate this pattern'}
+                          >{p.status === 'ACTIVE' ? 'Deactivate' : 'Activate'}</button>
+                          <button className="btn ghost" onClick={() => onDelete(p.pattern_id)}>Remove</button>
+                        </td>
+                      </tr>
+                      {expanded && (
+                        <tr key={`${p.pattern_id}-detail`}>
+                          <td colSpan={5} style={{ background: 'var(--surface,#f8fafc)', padding: '0.75rem 1.25rem 0.85rem', borderTop: 'none' }}>
+                            <div style={{ display: 'flex', gap: '2rem', flexWrap: 'wrap', marginBottom: '0.5rem' }}>
+                              <div><span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--muted,#64748b)', letterSpacing: '0.05em' }}>Type</span><div style={{ fontSize: '0.84rem', marginTop: '0.15rem' }}>{p.pattern_type || '—'}</div></div>
+                              <div><span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--muted,#64748b)', letterSpacing: '0.05em' }}>Approved by</span><div style={{ fontSize: '0.84rem', marginTop: '0.15rem' }}>{p.approved_by || '—'}</div></div>
+                              <div><span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--muted,#64748b)', letterSpacing: '0.05em' }}>Version</span><div style={{ fontSize: '0.84rem', marginTop: '0.15rem' }}>{p.pattern_version || '—'}</div></div>
+                            </div>
+                            <div>
+                              <span style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: 'var(--muted,#64748b)', letterSpacing: '0.05em' }}>Rule</span>
+                              <pre style={{ margin: '0.25rem 0 0', fontSize: '0.78rem', background: 'var(--panel,#fff)', border: '1px solid var(--border,#e2e8f0)', borderRadius: '6px', padding: '0.6rem 0.85rem', overflowX: 'auto', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{JSON.stringify(p.pattern_rule || {}, null, 2)}</pre>
+                            </div>
+                          </td>
+                        </tr>
+                      )}
+                    </>
+                  );
+                })}
+              </tbody>
+            </table>
+          )}
+        </Panel>
+      )}
+
+      {/* ── Add / create pattern modal ── */}
+      {showAddModal && (
+        <div style={{ position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.45)', display: 'flex', alignItems: 'center', justifyContent: 'center', zIndex: 50 }}>
+          <div style={{ background: 'white', padding: '1.5rem', borderRadius: '12px', width: 'min(520px, 92vw)', boxShadow: '0 12px 28px rgba(0,0,0,0.2)' }}>
+            <h3 style={{ margin: '0 0 1rem' }}>Add pattern</h3>
+            <div className="form-grid">
+              <label>Group</label>
+              <input value={addToGroup} onChange={(e) => setAddToGroup(e.target.value)} placeholder="Group name" />
+              <label>Pattern name</label>
+              <input autoFocus value={addDraft.pattern_name} placeholder="e.g. Exact end-to-end match" onChange={(e) => setAddDraft((d) => ({ ...d, pattern_name: e.target.value }))} />
+              <label>Status</label>
+              <select value={addDraft.status} onChange={(e) => setAddDraft((d) => ({ ...d, status: e.target.value }))}>
+                <option value="DRAFT">Draft</option>
+                <option value="ACTIVE">Active</option>
+                <option value="INACTIVE">Inactive</option>
+              </select>
+              <label>Execution mode</label>
+              <select value={addDraft.execution_mode} onChange={(e) => setAddDraft((d) => ({ ...d, execution_mode: e.target.value }))}>
+                {MODES.map((m) => <option key={m.value} value={m.value}>{m.label}</option>)}
+              </select>
+              <label>Confidence</label>
+              <input type="number" min="0" max="1" step="0.01" value={addDraft.confidence_threshold} onChange={(e) => setAddDraft((d) => ({ ...d, confidence_threshold: Number(e.target.value) }))} />
+              <label>Rule JSON</label>
+              <textarea rows={4} value={addDraft.pattern_rule} onChange={(e) => setAddDraft((d) => ({ ...d, pattern_rule: e.target.value }))} style={{ fontFamily: 'monospace', fontSize: '0.82rem' }} />
+            </div>
+            {errors.add && <p className="error-text" style={{ marginTop: '0.5rem' }}>{errors.add}</p>}
+            <div className="button-row" style={{ marginTop: '1rem' }}>
+              <button className="btn secondary" onClick={() => setShowAddModal(false)}>Cancel</button>
+              <button className="btn primary" onClick={commitAdd}>Add pattern</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </section>
+  );
+}
+
+function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveBulk, proposedPatterns, setProposedPatterns, patterns }) {
+  const [camtFile, setCamtFile] = useState(null);
+  const [otherFile, setOtherFile] = useState(null);
+  const [mappingResult, setMappingResult] = useState(null);
+  const [patternResult, setPatternResult] = useState(null);
+  const [error, setError] = useState('');
+  const [loadingPattern, setLoadingPattern] = useState(false);
+  const [loadingMapping, setLoadingMapping] = useState(false);
+  const [addToGroup, setAddToGroup] = useState('');
+  const [addToGroupStatus, setAddToGroupStatus] = useState(null);
+  const [resultTab, setResultTab] = useState('format');
+
+  // Save-as-group state
+  const today = new Date().toISOString().slice(0, 10);
+  const [groupName, setGroupName] = useState(`auto-${today}`);
+  const [selectedGroupPatterns, setSelectedGroupPatterns] = useState(new Set());
+  const [bulkSaveStatus, setBulkSaveStatus] = useState(null);
+  const [compareGroup, setCompareGroup] = useState('');
+  const [compareResult, setCompareResult] = useState(null);
+  const [compareLoading, setCompareLoading] = useState(false);
+  const [compareError, setCompareError] = useState('');
+  const [compareStale, setCompareStale] = useState(false);
+
+  // Auto-select all patterns when a new analysis result arrives
+  useEffect(() => {
+    if (!patternResult) return;
+    const allKeys = new Set([
+      ...(patternResult.deterministic_patterns || []).map(p => `det-${p.rule}`),
+      ...(patternResult.llm_patterns || []).map((p, i) => `llm-${p.rule_id || i}`),
+    ]);
+    setSelectedGroupPatterns(allKeys);
+    setBulkSaveStatus(null);
+  }, [patternResult]);
+
+  // Mark any existing comparison stale whenever the registry changes (add/delete/update)
+  useEffect(() => {
+    if (compareResult) setCompareStale(true);
+  }, [patterns]);
+
+  const resetFiles = () => { setMappingResult(null); setPatternResult(null); setProposedPatterns([]); setError(''); };
+
+  const identifyFormat = async () => {
+    if (!camtFile || !otherFile) return;
+    setError('');
+    setMappingResult(null);
+    setPatternResult(null);
+    setProposedPatterns([]);
+    setLoadingMapping(true);
+    try {
+      setMappingResult(await onGenerateMapping(camtFile, otherFile));
+      setResultTab('format');
+    } catch (err) {
+      setError(err.message || 'Unable to identify file format');
+    } finally {
+      setLoadingMapping(false);
+    }
+  };
+
+  const identifyPatterns = async () => {
+    if (!camtFile || !otherFile) return;
+    setError('');
+    setLoadingPattern(true);
+    try {
+      const regexMap = mappingResult?.llm_output?.field_extractors
+        || mappingResult?.format_info?.suggested_regex_map
+        || null;
+      const result = await onGeneratePatterns(camtFile, otherFile, regexMap);
+      setPatternResult(result);
+      const allPats = [
+        ...(result.deterministic_patterns || []).map(p => ({
+          pattern_name: p.pattern_name,
+          mapping_key: p.rule,
+          pattern_rule: { fields: p.fields_used || [], mode: 'DETERMINISTIC' },
+        })),
+        ...(result.llm_patterns || []).map(p => ({
+          pattern_name: p.pattern_name,
+          mapping_key: p.rule_id,
+          pattern_rule: { fields: p.fields_used || [], mode: 'LLM_SUGGESTED', tolerance_spec: p.tolerance_spec },
+        })),
+      ];
+      setProposedPatterns(allPats.length > 0 ? allPats : []);
+      setResultTab('patterns');
+    } catch (err) {
+      setError(err.message || 'Unable to identify patterns');
+    } finally {
+      setLoadingPattern(false);
+    }
+  };
+
+  const DET_EXEC = { EXACT_E2E: 'AUTO_CLOSE', EXACT_PMT_REF: 'AUTO_CLOSE', EXACT_INVOICE: 'SUGGESTION', AMOUNT_DIRECTION: 'SUGGESTION' };
+  const DET_CONF = { EXACT_E2E: 0.95, EXACT_PMT_REF: 0.92, EXACT_INVOICE: 0.90, AMOUNT_DIRECTION: 0.80 };
+  const DET_REASON = {
+    EXACT_E2E:        (n) => `Exact end-to-end ID match across ${n} transaction${n !== 1 ? 's' : ''} — unique identifier, collision risk near zero → 95%`,
+    EXACT_PMT_REF:    (n) => `Exact payment reference match across ${n} transaction${n !== 1 ? 's' : ''} — structured reference, very low false-positive rate → 92%`,
+    EXACT_INVOICE:    (n) => `Exact invoice number match across ${n} transaction${n !== 1 ? 's' : ''} — reliable but occasionally reused → 90%`,
+    AMOUNT_DIRECTION: (n) => `Amount + debit/credit direction match across ${n} transaction${n !== 1 ? 's' : ''} — amounts can coincide across parties, higher ambiguity → 80%`,
+  };
+
+  const allSaveable = patternResult ? [
+    ...(patternResult.deterministic_patterns || []).map(p => ({
+      key: `det-${p.rule}`, label: p.pattern_name, origin: 'Deterministic', originTone: 'success',
+      fields: p.fields_used || [], mode: DET_EXEC[p.rule] || 'SUGGESTION', status: 'ACTIVE',
+      reason: DET_REASON[p.rule] ? DET_REASON[p.rule](p.matched_count) : `Matched ${p.matched_count} transaction(s)`,
+      toPayload: () => ({
+        pattern_name: p.pattern_name, pattern_type: 'FILE_DETECTED', pattern_version: '1.0',
+        pattern_rule: { fields: p.fields_used || [], mode: 'AUTO' },
+        status: 'ACTIVE', execution_mode: DET_EXEC[p.rule] || 'SUGGESTION',
+        confidence_threshold: DET_CONF[p.rule] ?? 0.80, approved_by: 'prototype_user',
+      }),
+    })),
+    ...(patternResult.llm_patterns || []).map((p, i) => ({
+      key: `llm-${p.rule_id || i}`, label: p.pattern_name, origin: 'LLM suggested', originTone: 'warning',
+      fields: p.fields_used || [], mode: 'SUGGESTION', status: 'DRAFT',
+      reason: p.description || `AI-proposed fuzzy pattern — lower certainty, requires human review → 75%`,
+      toPayload: () => ({
+        pattern_name: p.pattern_name, pattern_type: 'LLM_SUGGESTED', pattern_version: '1.0',
+        pattern_rule: { fields: p.fields_used || [], mode: 'SUGGESTION', ...(p.tolerance_spec || {}) },
+        status: 'DRAFT', execution_mode: 'SUGGESTION',
+        confidence_threshold: 0.75, approved_by: 'prototype_user',
+      }),
+    })),
+  ] : [];
+
+  const allSelected = allSaveable.length > 0 && allSaveable.every(i => selectedGroupPatterns.has(i.key));
+  const someSelected = allSaveable.some(i => selectedGroupPatterns.has(i.key));
+
+  const toggleAll = () => {
+    if (allSelected) setSelectedGroupPatterns(new Set());
+    else setSelectedGroupPatterns(new Set(allSaveable.map(i => i.key)));
+  };
+  const toggleOne = (key) => {
+    setSelectedGroupPatterns(prev => {
+      const next = new Set(prev);
+      next.has(key) ? next.delete(key) : next.add(key);
+      return next;
+    });
+  };
+
+  const saveBulk = async () => {
+    if (!groupName.trim()) { setBulkSaveStatus({ error: 'Group name cannot be blank.' }); return; }
+    const toSave = allSaveable.filter(i => selectedGroupPatterns.has(i.key)).map(i => i.toPayload());
+    if (!toSave.length) { setBulkSaveStatus({ error: 'Select at least one pattern.' }); return; }
+    setBulkSaveStatus({ loading: true });
+    try {
+      const res = await onSaveBulk(groupName.trim(), toSave);
+      setBulkSaveStatus({ success: `Saved ${res.created} pattern(s) to group "${res.group_name}".${res.skipped > 0 ? ` (${res.skipped} skipped — already existed)` : ''}` });
+    } catch (err) {
+      setBulkSaveStatus({ error: err.message || 'Failed to save patterns.' });
+    }
+  };
+
+  return (
+    <section className="screen">
+      <div className="screen-title">
+        <div>
+          <div className="eyebrow">Pattern builder</div>
+          <h1>Identify file format, extract patterns and save as a group</h1>
+          <p>Upload a CAMT and PSR file — the engine detects the format, extracts regex, then identifies reconciliation patterns ready to save.</p>
+        </div>
+      </div>
+
+      {/* ── Step 1: Upload files ──────────────────────────────── */}
+      <Panel title="Step 1 — Upload files" subtitle="Choose the CAMT bank statement and the PSR / settlement file.">
+        <div className="form-grid">
+          <label>CAMT file (.xml)</label>
+          <input type="file" accept=".xml,application/xml,text/xml" onChange={(e) => { setCamtFile(e.target.files?.[0] || null); resetFiles(); }} />
+          <label>PSR / settlement file</label>
+          <input type="file" accept=".txt,.dat,.psr,text/plain,.xml" onChange={(e) => { setOtherFile(e.target.files?.[0] || null); resetFiles(); }} />
+        </div>
+        {error && <p className="error-text" style={{ marginTop: '0.75rem' }}>{error}</p>}
+        <div className="button-row" style={{ marginTop: '1rem' }}>
+          <button className="btn primary" onClick={identifyFormat} disabled={!camtFile || !otherFile || loadingMapping}>
+            {loadingMapping ? 'Identifying…' : 'Identify File Format (regex)'}
+          </button>
+          <button className="btn secondary" onClick={identifyPatterns} disabled={!camtFile || !otherFile || loadingPattern}>
+            {loadingPattern ? 'Identifying…' : 'Identify Patterns'}
+          </button>
+        </div>
+      </Panel>
+
+      {/* ── Results tabs (File Format + Patterns) ────────────── */}
+      {(mappingResult || patternResult) && (() => {
+        const tabs = [
+          ...(mappingResult ? [{ key: 'format', label: 'File Format' }] : []),
+          ...(patternResult ? [{ key: 'patterns', label: `Patterns${allSaveable.length ? ` (${allSaveable.length})` : ''}` }] : []),
+        ];
+        return (
+          <div style={{ border: '1px solid var(--border, #e2e8f0)', borderRadius: '10px', overflow: 'hidden' }}>
+            {/* tab strip */}
+            <div style={{ display: 'flex', borderBottom: '1px solid var(--border, #e2e8f0)', background: 'var(--bg, #f8fafc)' }}>
+              {tabs.map(t => (
+                <button
+                  key={t.key}
+                  onClick={() => setResultTab(t.key)}
+                  style={{
+                    padding: '0.6rem 1.25rem', border: 'none', cursor: 'pointer', fontSize: '0.85rem', fontWeight: 600,
+                    background: resultTab === t.key ? 'var(--panel, #fff)' : 'transparent',
+                    color: resultTab === t.key ? 'var(--primary, #2563eb)' : 'var(--muted, #64748b)',
+                    borderBottom: resultTab === t.key ? '2px solid var(--primary, #2563eb)' : '2px solid transparent',
+                    marginBottom: '-1px',
+                  }}
+                >{t.label}</button>
+              ))}
+            </div>
+
+            <div style={{ padding: '1.25rem' }}>
+              {/* ── File Format tab ──────────────────────────── */}
+              {resultTab === 'format' && mappingResult && (
+                <>
+                  {/* summary metrics — single compact row */}
+                  <div style={{ display: 'flex', flexWrap: 'nowrap', gap: '0', marginBottom: '1rem', border: '1px solid var(--border, #e2e8f0)', borderRadius: '8px', overflow: 'hidden' }}>
+                    {[
+                      { label: 'Format', value: mappingResult.format_info?.detected_type ?? '—' },
+                      { label: 'Record prefix', value: mappingResult.format_info?.record_prefix ?? '—' },
+                      { label: 'Delimiter', value: mappingResult.format_info?.delimiter ?? 'none' },
+                      { label: 'Matched lines', value: `${mappingResult.match_count ?? '—'} / ${mappingResult.camt_ref_index_size ?? '?'}`, hint: 'CAMT IDs' },
+                      ...(mappingResult.pattern_confidence != null ? [{ label: 'Confidence', value: `${mappingResult.pattern_confidence}%`, hint: 'match ratio × clarity' }] : []),
+                    ].map((item, i, arr) => (
+                      <div key={item.label} style={{ flex: 1, padding: '0.55rem 0.85rem', borderRight: i < arr.length - 1 ? '1px solid var(--border, #e2e8f0)' : 'none', minWidth: 0 }}>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--muted, #64748b)', marginBottom: '0.2rem', whiteSpace: 'nowrap' }}>{item.label}</div>
+                        <div style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--ink, #1e293b)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{item.value}</div>
+                        {item.hint && <div style={{ fontSize: '0.68rem', color: 'var(--muted, #94a3b8)', marginTop: '0.1rem' }}>{item.hint}</div>}
+                      </div>
+                    ))}
+                  </div>
+
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '0.5rem' }}>
+                    <strong style={{ fontSize: '0.85rem' }}>Field extractors</strong>
+                    <Tag tone={mappingResult.llm_available ? 'success' : 'neutral'}>{mappingResult.llm_available ? 'LLM' : 'structural'}</Tag>
+                  </div>
+                  <div className="table-wrap compact tight">
+                    <table>
+                      <thead><tr><th>Field</th><th>Regex</th><th>Maps to CAMT</th><th>Confidence</th></tr></thead>
+                      <tbody>
+                        {(() => {
+                          const llmEx = mappingResult.llm_output?.field_extractors;
+                          const structural = mappingResult.format_info?.suggested_regex_map;
+                          if (llmEx && Object.keys(llmEx).length > 0) {
+                            return Object.entries(llmEx).map(([field, info]) => (
+                              <tr key={field}>
+                                <td><code>{field}</code></td>
+                                <td><pre style={{ margin: 0, fontSize: '0.73rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{info.regex}</pre></td>
+                                <td><code style={{ fontSize: '0.78rem' }}>{info.maps_to_camt}</code></td>
+                                <td><Tag tone={info.confidence === 'high' ? 'success' : info.confidence === 'medium' ? 'warning' : 'danger'}>{info.confidence}</Tag></td>
+                              </tr>
+                            ));
+                          }
+                          if (structural && Object.keys(structural).length > 0) {
+                            return Object.entries(structural).map(([field, pattern]) => (
+                              <tr key={field}>
+                                <td><code>{field}</code></td>
+                                <td><pre style={{ margin: 0, fontSize: '0.73rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{pattern}</pre></td>
+                                <td>—</td>
+                                <td><Tag tone="neutral">structural</Tag></td>
+                              </tr>
+                            ));
+                          }
+                          return <tr><td colSpan={4} className="empty">{mappingResult.llm_error ? `LLM unavailable — ${mappingResult.llm_error}` : 'No field extractors available.'}</td></tr>;
+                        })()}
+                      </tbody>
+                    </table>
+                  </div>
+                  {mappingResult.llm_output?.explanation && (
+                    <p style={{ marginTop: '0.75rem', fontSize: '0.83rem', color: 'var(--text-muted, #888)' }}>
+                      <strong>Layout: </strong>{mappingResult.llm_output.explanation}
+                    </p>
+                  )}
+                </>
+              )}
+
+              {/* ── Patterns tab ─────────────────────────────── */}
+              {resultTab === 'patterns' && patternResult && (
+                <>
+                  {patternResult.stats && (() => {
+                    const s = patternResult.stats;
+                    const rate = Math.round((s.match_rate || 0) * 100);
+                    return (
+                      <div style={{ display: 'flex', flexWrap: 'nowrap', gap: '0', marginBottom: '1.25rem', border: '1px solid var(--border, #e2e8f0)', borderRadius: '8px', overflow: 'hidden' }}>
+                        {[
+                          { label: 'CAMT entries', value: s.camt_total ?? '—' },
+                          { label: 'Matched', value: s.camt_matched ?? '—' },
+                          { label: 'Unmatched', value: s.camt_unmatched ?? '—' },
+                          { label: 'Match rate', value: `${rate}%` },
+                        ].map((item, i, arr) => (
+                          <div key={item.label} style={{ flex: 1, padding: '0.55rem 0.85rem', borderRight: i < arr.length - 1 ? '1px solid var(--border, #e2e8f0)' : 'none' }}>
+                            <div style={{ fontSize: '0.68rem', fontWeight: 700, letterSpacing: '0.05em', textTransform: 'uppercase', color: 'var(--muted, #64748b)', marginBottom: '0.2rem' }}>{item.label}</div>
+                            <div style={{ fontSize: '0.92rem', fontWeight: 600, color: 'var(--ink, #1e293b)' }}>{item.value}</div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })()}
+
+                  {allSaveable.length > 0 ? (
+                    <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', marginBottom: '1.25rem' }}>
+                      {allSaveable.map(item => (
+                        <label key={item.key} style={{ display: 'flex', alignItems: 'center', gap: '0.85rem', padding: '0.75rem 1rem', border: `1px solid ${selectedGroupPatterns.has(item.key) ? 'var(--primary, #2563eb)' : 'var(--border, #e2e8f0)'}`, borderRadius: '8px', cursor: 'pointer', background: selectedGroupPatterns.has(item.key) ? 'var(--primary-bg, #eff6ff)' : 'var(--panel, #fff)', transition: 'all .12s' }}>
+                          <input type="checkbox" checked={selectedGroupPatterns.has(item.key)} onChange={() => toggleOne(item.key)} style={{ width: '1rem', height: '1rem', flexShrink: 0 }} />
+                          <div style={{ flex: 1, minWidth: 0 }}>
+                            <div style={{ fontWeight: 600, fontSize: '0.88rem', color: 'var(--ink, #1e293b)' }}>{item.label}</div>
+                            <div style={{ fontSize: '0.74rem', color: 'var(--muted, #64748b)', marginTop: '0.2rem' }}>{item.reason}</div>
+                            {item.fields.length > 0 && <div style={{ fontSize: '0.7rem', color: 'var(--muted, #94a3b8)', marginTop: '0.1rem' }}>Fields: {item.fields.join(' · ')}</div>}
+                          </div>
+                          <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0 }}>
+                            <Tag tone={item.originTone}>{item.origin}</Tag>
+                            <Tag tone={item.mode === 'AUTO_CLOSE' ? 'success' : 'warning'}>{item.mode}</Tag>
+                            <Tag tone="neutral" title={item.reason || `${Math.round((item.toPayload().confidence_threshold ?? 0.8) * 100)}% — minimum match confidence threshold`}>{Math.round((item.toPayload().confidence_threshold ?? 0.8) * 100)}% confidence</Tag>
+                          </div>
+                        </label>
+                      ))}
+                    </div>
+                  ) : (
+                    <p className="empty" style={{ marginBottom: '1rem' }}>No patterns identified.</p>
+                  )}
+
+                  {/* ── Compare with group ─────────────────────────────── */}
+                  {allSaveable.length > 0 && (() => {
+                    const existingGroups = [...new Set((patterns || []).map(p => (p.pattern_group || 'default').trim()).filter(Boolean))].sort();
+                    const relTone = { exact_match: 'success', looser_subset: 'warning', stricter_superset: 'warning', partial_overlap: 'neutral', novel: 'success' };
+                    const recTone = { skip: 'neutral', add: 'success', review: 'warning' };
+                    const relLabel  = { exact_match: 'Already exists', looser_subset: 'Broader version', stricter_superset: 'More specific version', partial_overlap: 'Partially similar', novel: 'Brand new' };
+                    const relTitle  = {
+                      exact_match:        'Identical matching fields — this rule is already in the group.',
+                      looser_subset:      'Uses fewer fields than an existing rule — higher false-positive risk. Check if the existing stricter rule is sufficient.',
+                      stricter_superset:  'Uses more fields than an existing rule — higher precision, fewer false positives. Generally worth adding.',
+                      partial_overlap:    'Shares some matching fields with an existing rule but also differs — assess whether both are needed.',
+                      novel:              'No similar rule exists in this group — covers a genuinely new matching scenario.',
+                    };
+                    const recLabel  = { skip: 'Already covered', add: 'Worth adding', review: 'Needs review' };
+                    const recTitle  = {
+                      skip:   'An existing rule already handles this — adding it would create a duplicate.',
+                      add:    'This rule covers something new and should be added to the group.',
+                      review: 'Similar to an existing rule — confirm whether the extra coverage is intentional before adding.',
+                    };
+                    const runComparison = async () => {
+                      if (!compareGroup) return;
+                      setCompareLoading(true);
+                      setCompareError('');
+                      setCompareResult(null);
+                      setCompareStale(false);
+                      try {
+                        const payload = allSaveable.map(i => i.toPayload());
+                        const result = await api.comparePatterns(payload, compareGroup);
+                        setCompareResult(result);
+                      } catch (err) {
+                        setCompareError(err.message || 'Comparison failed.');
+                      } finally {
+                        setCompareLoading(false);
+                      }
+                    };
+                    return (
+                      <div style={{ margin: '0.5rem 0 1rem', padding: '0.85rem 1rem', border: '1px solid var(--border,#e2e8f0)', borderRadius: '8px', background: 'var(--surface,#f8fafc)' }}>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flexWrap: 'wrap', marginBottom: compareResult || compareError ? '0.85rem' : 0 }}>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 700, color: 'var(--ink,#1e293b)', whiteSpace: 'nowrap' }}>Compare with group</span>
+                          <select
+                            value={compareGroup}
+                            onChange={e => { setCompareGroup(e.target.value); setCompareResult(null); setCompareError(''); }}
+                            style={{ fontSize: '0.82rem', padding: '0.3rem 0.5rem', flex: 1, maxWidth: '220px', borderRadius: '4px', border: '1px solid var(--border,#ccc)' }}
+                          >
+                            <option value="">— pick a group —</option>
+                            {existingGroups.map(g => <option key={g} value={g}>{fmtGroupName(g)}</option>)}
+                          </select>
+                          <button
+                            className="btn secondary"
+                            disabled={!compareGroup || compareLoading}
+                            onClick={runComparison}
+                            style={{ fontSize: '0.82rem' }}
+                          >
+                            {compareLoading ? 'Analysing…' : 'Run AI Comparison'}
+                          </button>
+                          {compareResult && (
+                            <button className="btn ghost" style={{ fontSize: '0.78rem' }} onClick={() => { setCompareResult(null); setCompareError(''); setCompareStale(false); }}>Clear ✕</button>
+                          )}
+                          {compareResult && !compareResult.llm_available && (
+                            <Tag tone="warning" title="LLM unavailable — field-level diff used instead">Field diff only</Tag>
+                          )}
+                        </div>
+
+                        {compareError && <p style={{ color: 'var(--danger,#dc2626)', fontSize: '0.82rem', margin: 0 }}>{compareError}</p>}
+
+                        {compareStale && compareResult && (
+                          <p style={{ color: 'var(--warning,#d97706)', fontSize: '0.82rem', margin: '0 0 0.5rem', fontWeight: 600 }}>
+                            ⚠️ The group has changed since this analysis was run — re-run to see up-to-date results.
+                          </p>
+                        )}
+
+                        {compareResult && (
+                          <>
+                            <table className="data-table" style={{ fontSize: '0.82rem', marginBottom: '0.5rem' }}>
+                              <thead>
+                                <tr>
+                                  <th>Identified pattern</th>
+                                  <th>Fields</th>
+                                  <th>Closest in {compareResult.group_name}</th>
+                                  <th>Relationship</th>
+                                  <th>LLM explanation</th>
+                                  <th>Action</th>
+                                </tr>
+                              </thead>
+                              <tbody>
+                                {(compareResult.comparisons || []).map((row, i) => {
+                                  const matchedItem = allSaveable.find(it => it.label === row.identified_name);
+                                  return (
+                                    <tr key={i}>
+                                      <td style={{ fontWeight: 600 }}>{row.identified_name}</td>
+                                      <td>
+                                        {matchedItem && matchedItem.fields.length > 0
+                                          ? <code style={{ fontSize: '0.76rem' }}>[{matchedItem.fields.join(', ')}]</code>
+                                          : <em style={{ color: 'var(--muted,#94a3b8)' }}>—</em>
+                                        }
+                                      </td>
+                                      <td>
+                                        {row.closest_existing_name
+                                          ? (() => {
+                                              const cp = (patterns || []).find(p => p.pattern_id === row.closest_existing_id);
+                                              const cpFields = cp?.pattern_rule?.fields || cp?.pattern_rule?.route_to && ['→ manual review'] || [];
+                                              const tip = cpFields.length ? `Fields: [${cpFields.join(', ')}]` : '';
+                                              return (
+                                                <>
+                                                  <span style={{ fontWeight: 500 }} title={tip}>{row.closest_existing_name}</span>
+                                                  {row.closest_existing_id && <><br /><code style={{ fontSize: '0.72rem', color: 'var(--muted,#94a3b8)' }}>{row.closest_existing_id}</code></>}
+                                                  {cpFields.length > 0 && <><br /><code style={{ fontSize: '0.72rem', color: 'var(--muted,#64748b)' }} title={tip}>[{cpFields.join(', ')}]</code></>}
+                                                </>
+                                              );
+                                            })()
+                                          : <em style={{ color: 'var(--muted,#94a3b8)' }}>none</em>
+                                        }
+                                      </td>
+                                      <td><Tag tone={relTone[row.relationship] || 'neutral'} title={relTitle[row.relationship] || ''}>{relLabel[row.relationship] || row.relationship}</Tag></td>
+                                      <td style={{ color: 'var(--muted,#64748b)', maxWidth: '280px', lineHeight: 1.4 }}>{row.explanation}</td>
+                                      <td>
+                                        <Tag tone={recTone[row.recommendation] || 'neutral'}
+                                          title={recTitle[row.recommendation] || ''}
+                                        >
+                                          {recLabel[row.recommendation] || row.recommendation}
+                                        </Tag>
+                                      </td>
+                                    </tr>
+                                  );
+                                })}
+                              </tbody>
+                            </table>
+                            {compareResult.summary && (
+                              <p style={{ fontSize: '0.8rem', color: 'var(--muted,#64748b)', margin: 0, fontStyle: 'italic' }}>{compareResult.summary}</p>
+                            )}
+                          </>
+                        )}
+                      </div>
+                    );
+                  })()}
+
+                  {allSaveable.length > 0 && (() => {
+                    const existingGroups = [...new Set((patterns || []).map(p => (p.pattern_group || 'default').trim()).filter(Boolean))].sort();
+                    return (
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem', paddingTop: '0.75rem', borderTop: '1px solid var(--border, #e2e8f0)' }}>
+                        {/* Save selected as new group */}
+                        <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                          <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--muted,#64748b)', whiteSpace: 'nowrap' }}>New group</span>
+                          <input
+                            type="text"
+                            value={groupName}
+                            onChange={e => { setGroupName(e.target.value); setBulkSaveStatus(null); }}
+                            placeholder="e.g. psr-camt-2026-q3"
+                            style={{ flex: 1, minWidth: '160px', padding: '0.32rem 0.55rem', borderRadius: '4px', border: '1px solid var(--border, #ccc)', fontFamily: 'monospace', fontSize: '0.82rem' }}
+                          />
+                          <button className="btn primary" onClick={saveBulk} disabled={!someSelected || !!bulkSaveStatus?.loading}>
+                            {bulkSaveStatus?.loading ? 'Saving…' : `Save ${[...selectedGroupPatterns].length} selected`}
+                          </button>
+                        </div>
+                        {bulkSaveStatus?.success && <p style={{ color: 'var(--success, #16a34a)', fontSize: '0.82rem', margin: 0 }}>{bulkSaveStatus.success}</p>}
+                        {bulkSaveStatus?.error && <p style={{ color: 'var(--danger, #dc2626)', fontSize: '0.82rem', margin: 0 }}>{bulkSaveStatus.error}</p>}
+
+                        {/* Add selected to existing group */}
+                        {existingGroups.length > 0 && (
+                          <div style={{ display: 'flex', gap: '0.6rem', alignItems: 'center', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '0.8rem', fontWeight: 600, color: 'var(--muted,#64748b)', whiteSpace: 'nowrap' }}>Add to existing</span>
+                            <select
+                              value={addToGroup}
+                              onChange={e => { setAddToGroup(e.target.value); setAddToGroupStatus(null); }}
+                              style={{ fontSize: '0.82rem', padding: '0.3rem 0.5rem', flex: 1, minWidth: '160px' }}
+                            >
+                              <option value="">— pick a group —</option>
+                              {existingGroups.map(g => <option key={g} value={g}>{fmtGroupName(g)}</option>)}
+                            </select>
+                            <button
+                              className="btn secondary"
+                              disabled={!someSelected || !addToGroup || !!addToGroupStatus?.loading}
+                              onClick={async () => {
+                                const toSave = allSaveable.filter(i => selectedGroupPatterns.has(i.key)).map(i => ({ ...i.toPayload(), pattern_group: addToGroup }));
+                                setAddToGroupStatus({ loading: true });
+                                try {
+                                  const res = await onSaveBulk(addToGroup, toSave);
+                                  setAddToGroupStatus({ success: `Added ${res.created} pattern(s) to "${res.group_name}".${res.skipped > 0 ? ` (${res.skipped} skipped)` : ''}` });
+                                } catch (err) {
+                                  setAddToGroupStatus({ error: err.message || 'Failed.' });
+                                }
+                              }}
+                            >
+                              {addToGroupStatus?.loading ? 'Adding…' : `Add ${[...selectedGroupPatterns].length} selected`}
+                            </button>
+                          </div>
+                        )}
+                        {addToGroupStatus?.success && <p style={{ color: 'var(--success, #16a34a)', fontSize: '0.82rem', margin: 0 }}>{addToGroupStatus.success}</p>}
+                        {addToGroupStatus?.error && <p style={{ color: 'var(--danger, #dc2626)', fontSize: '0.82rem', margin: 0 }}>{addToGroupStatus.error}</p>}
+                      </div>
+                    );
+                  })()}
+                </>
+              )}
+
+              {error && <p className="error-text" style={{ marginTop: '0.5rem' }}>{error}</p>}
+            </div>
+          </div>
+        );
+      })()}
     </section>
   );
 }
@@ -1571,7 +2428,12 @@ const RULE_LABELS = {
   TIER2C_ROUTE_ANALYST: 'AI reviewed — analyst review required',
   TIER2C_CONFIRM:       'AI reviewed — match confirmed',
 };
-const ruleLabel = (code) => RULE_LABELS[code] ?? code;
+const ruleLabel = (code) => {
+  if (!code) return code;
+  if (RULE_LABELS[code]) return RULE_LABELS[code];
+  if (code.startsWith('GENERIC_')) return 'File-detected pattern';
+  return code;
+};
 
 const PAGE_SIZE = 100;
 const MINOR_VARIANCE_TOLERANCE = 50;
@@ -1744,11 +2606,96 @@ function AiTriageLoader() {
   );
 }
 
-function ResultsWorkbench({ results, summary, selected, setSelected, refreshResults, onAiPass, onResolve, loading, triageRunning, batchName }) {
+function PatternBreakdownPanel({ byRule = [], total = 0, patterns = [] }) {
+  if (!byRule.length) return <p className="empty small">No pattern data yet — run a batch first.</p>;
+  // Build pattern_id → pattern_name lookup to resolve GENERIC_ and other dynamic rule codes
+  const patternNameMap = Object.fromEntries(patterns.map(p => [p.pattern_id, p.pattern_name]));
+  const resolveRuleName = (code) => {
+    if (!code) return null;
+    if (RULE_LABELS[code]) return RULE_LABELS[code];
+    if (code.startsWith('GENERIC_')) {
+      const pid = code.slice('GENERIC_'.length);
+      return patternNameMap[pid] || 'File-detected pattern';
+    }
+    return null;
+  };
+  const sorted = [...byRule].sort((a, b) => (b.count || 0) - (a.count || 0));
+  const max = Math.max(...sorted.map(r => r.count || 0), 1);
+  const cell = { padding: '0.4rem 0.6rem', textAlign: 'right', fontSize: '0.82rem' };
+  const badge = (n, tone) => n > 0
+    ? <span style={{ display: 'inline-block', minWidth: '1.8rem', padding: '0.1rem 0.4rem', borderRadius: '999px', fontSize: '0.75rem', fontWeight: 600, textAlign: 'center', background: tone === 'good' ? '#dcfce7' : tone === 'warn' ? '#fef9c3' : tone === 'bad' ? '#fee2e2' : '#e2e8f0', color: tone === 'good' ? '#16a34a' : tone === 'warn' ? '#ca8a04' : tone === 'bad' ? '#dc2626' : '#64748b' }}>{n}</span>
+    : <span style={{ color: 'var(--muted,#aaa)', fontSize: '0.75rem' }}>—</span>;
+  return (
+    <div style={{ overflowX: 'auto' }}>
+      <table style={{ width: '100%', borderCollapse: 'collapse', fontSize: '0.82rem' }}>
+        <thead>
+          <tr style={{ borderBottom: '2px solid var(--border,#e2e8f0)', textAlign: 'left' }}>
+            <th style={{ padding: '0.4rem 0.6rem', fontWeight: 600 }}>Rule applied</th>
+            <th style={{ padding: '0.4rem 0.6rem', fontWeight: 600, width: '28%' }}>Distribution</th>
+            <th style={{ ...cell, color: '#16a34a' }}>Matched</th>
+            <th style={{ ...cell, color: '#dc2626' }}>Exceptions</th>
+            <th style={{ ...cell, color: '#ca8a04' }}>In-Transit</th>
+            <th style={{ ...cell, color: '#64748b' }}>Bank Only</th>
+            <th style={{ ...cell }}>Total</th>
+            <th style={{ ...cell }}>%</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sorted.map((r, i) => {
+            const pct = total > 0 ? ((r.count || 0) / total * 100).toFixed(1) : '0.0';
+            return (
+              <tr key={i} style={{ borderBottom: '1px solid var(--border,#e2e8f0)' }}>
+                <td style={{ padding: '0.4rem 0.6rem', fontSize: '0.76rem' }}>
+                  {r.rule_applied
+                    ? (() => {
+                        const resolved = resolveRuleName(r.rule_applied);
+                        const label = resolved || r.rule_applied;
+                        const hasLabel = !!resolved;
+                        return <>
+                          <span style={{ fontWeight: hasLabel ? 500 : 400 }}>{label}</span>
+                          {hasLabel && <><br /><span style={{ fontFamily: 'monospace', color: 'var(--muted,#888)', fontSize: '0.72rem' }}>[{r.rule_applied}]</span></>}
+                        </>;
+                      })()
+                    : '—'}
+                </td>
+                <td style={{ padding: '0.4rem 0.6rem' }}>
+                  <div style={{ background: 'var(--surface2,#f1f5f9)', borderRadius: '3px', height: '7px' }}>
+                    <div style={{ width: `${Math.max(2, ((r.count || 0) / max) * 100)}%`, height: '100%', background: 'var(--primary,#3b82f6)', borderRadius: '3px' }} />
+                  </div>
+                </td>
+                <td style={cell}>{badge(r.matched_count || 0, 'good')}</td>
+                <td style={cell}>{badge(r.exception_count || 0, 'bad')}</td>
+                <td style={cell}>{badge(r.in_transit_count || 0, 'warn')}</td>
+                <td style={cell}>{badge(r.bank_only_count || 0, 'neutral')}</td>
+                <td style={{ ...cell, fontWeight: 600 }}>{r.count || 0}</td>
+                <td style={{ ...cell, color: 'var(--muted,#888)' }}>{pct}%</td>
+              </tr>
+            );
+          })}
+        </tbody>
+        <tfoot>
+          <tr style={{ borderTop: '2px solid var(--border,#e2e8f0)', fontWeight: 600 }}>
+            <td style={{ padding: '0.4rem 0.6rem' }}>Total</td>
+            <td />
+            <td style={cell}>{sorted.reduce((s, r) => s + (r.matched_count || 0), 0)}</td>
+            <td style={cell}>{sorted.reduce((s, r) => s + (r.exception_count || 0), 0)}</td>
+            <td style={cell}>{sorted.reduce((s, r) => s + (r.in_transit_count || 0), 0)}</td>
+            <td style={cell}>{sorted.reduce((s, r) => s + (r.bank_only_count || 0), 0)}</td>
+            <td style={cell}>{total}</td>
+            <td style={cell}>100%</td>
+          </tr>
+        </tfoot>
+      </table>
+    </div>
+  );
+}
+
+function ResultsWorkbench({ results, summary, patterns = [], selected, setSelected, refreshResults, onAiTriage, onResolve, loading, triageRunning, batchName, batches = [], selectedBatchId = '', setSelectedBatchId, onSwitchBatch }) {
   const [search, setSearch] = useState('');
   const [exceptionOnly, setExceptionOnly] = useState(false);
   const [selectedStatus, setSelectedStatus] = useState('');
   const [page, setPage] = useState(0);
+  const [activeTab, setActiveTab] = useState('records');
 
   const total = results.total || 0;
   const totalPages = Math.ceil(total / PAGE_SIZE);
@@ -1791,7 +2738,24 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
       {triageRunning && <AiTriageLoader />}
       <div className="screen-title split">
         <div>
-          <div className="eyebrow">Results workbench</div>
+          <div className="eyebrow" style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+            Results workbench
+            {batches.length > 0 && (
+              <select
+                value={selectedBatchId}
+                onChange={(e) => {
+                  const bid = e.target.value;
+                  setSelectedBatchId(bid);
+                  if (onSwitchBatch) onSwitchBatch(bid);
+                }}
+                style={{ fontSize: '0.78rem', fontWeight: 400, color: 'var(--muted,#555)', border: '1px solid var(--border,#e2e8f0)', borderRadius: '5px', padding: '0.15rem 0.4rem', background: 'var(--surface,#fff)', cursor: 'pointer' }}
+              >
+                {batches.map((b) => (
+                  <option key={b.batch_id} value={b.batch_id}>{b.batch_name || b.batch_id}</option>
+                ))}
+              </select>
+            )}
+          </div>
           <h1>Matched, proposed and unresolved records</h1>
           <p>Drill into match evidence, failed fields, confidence and next-best action.</p>
         </div>
@@ -1816,6 +2780,9 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
               style={{ minWidth: '160px' }}
             >
               <option value="">All statuses</option>
+              <option value="ai_agree">AI: Agree</option>
+              <option value="ai_caution">AI: Caution</option>
+              <option value="ai_disagree">AI: Disagree</option>
               {STATUS_OPTIONS.filter(Boolean).map((s) => (
                 <option key={s} value={s}>{s}</option>
               ))}
@@ -1851,11 +2818,20 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
                 a.click();
               }}
             >↓ Download Report</button>
-            <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiPass}>Run AI Pass</button>
+            <button className="btn primary" style={{ flexShrink: 0, whiteSpace: 'nowrap' }} disabled={loading} onClick={onAiTriage}>Run AI Pass</button>
           </div>
         </div>
       </div>
       <SummaryBar summary={summary} total={total} activeFilter={activeFilter} onFilter={onFilter} />
+      <div style={{ display: 'flex', gap: '0.25rem', borderBottom: '2px solid var(--border,#e2e8f0)', marginBottom: '0.75rem' }}>
+        {[['records', 'Records'], ['patterns', 'Pattern breakdown']].map(([id, label]) => (
+          <button key={id} onClick={() => setActiveTab(id)} style={{ padding: '0.4rem 0.9rem', fontSize: '0.82rem', fontWeight: activeTab === id ? 600 : 400, border: 'none', borderBottom: activeTab === id ? '2px solid var(--primary,#3b82f6)' : '2px solid transparent', background: 'none', color: activeTab === id ? 'var(--primary,#3b82f6)' : 'var(--muted,#888)', cursor: 'pointer', marginBottom: '-2px' }}>{label}</button>
+        ))}
+      </div>
+      {activeTab === 'patterns' && (
+        <PatternBreakdownPanel byRule={summary.by_rule || []} total={total} patterns={patterns} />
+      )}
+      {activeTab === 'records' && <>
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', padding: '0.25rem 0' }}>
         <div style={{ display: 'flex', alignItems: 'center', gap: '0.75rem' }}>
           <button
@@ -1889,6 +2865,7 @@ function ResultsWorkbench({ results, summary, selected, setSelected, refreshResu
         </div>
         <span style={{ fontSize: '0.8rem', color: 'var(--muted, #888)' }}>{countLabel}</span>
       </div>
+      </>}{/* end activeTab === 'records' */}
       <EvidenceDrawer
         selected={selected}
         onClose={() => setSelected(null)}
@@ -2319,9 +3296,11 @@ export default function App() {
   const [selectedBatchId, setSelectedBatchId] = useState('');
   const [quality, setQuality] = useState(null);
   const [batchRunResult, setBatchRunResult] = useState(null);
+  const [batchRunStale, setBatchRunStale] = useState(false);
   const [validatedBatchId, setValidatedBatchId] = useState(null);
   const [exceptions, setExceptions] = useState({ items: [] });
   const [patterns, setPatterns] = useState([]);
+  const [proposedPatterns, setProposedPatterns] = useState([]);
   const [candidates, setCandidates] = useState([]);
   const [events, setEvents] = useState([]);
   const [workspace, setWorkspace] = useState(null);
@@ -2336,6 +3315,12 @@ export default function App() {
   const [loading, setLoading] = useState(false);
   const [triageRunning, setTriageRunning] = useState(false);
   const [toast, setToast] = useState('');
+  const [lastBulkGroup, setLastBulkGroup] = useState('');
+
+  // Mark batch run result stale whenever the pattern registry changes
+  useEffect(() => {
+    if (batchRunResult) setBatchRunStale(true);
+  }, [patterns]);
 
   const refresh = async () => {
     const [summaryData, resultsData, exceptionsData, patternsData, candidatesData, eventsData, batchesData, workspaceData, submissionsData, previewData, predictionData, ruleData, workflowRuleData, dashboardData] = await Promise.all([
@@ -2359,6 +3344,7 @@ export default function App() {
     setResults(resultsData);
     setExceptions(exceptionsData);
     setPatterns(patternsData);
+    setProposedPatterns([]);
     setCandidates(candidatesData);
     setEvents(eventsData);
     setBatches(batchesData);
@@ -2443,17 +3429,44 @@ export default function App() {
     }, 'Data quality validation completed');
   };
 
-  const runSelectedBatch = async (batchId, amountDivisor = null) => {
+  const runSelectedBatch = async (batchId, amountDivisor = null, patternGroup = null) => {
     let result;
     await safe(async () => {
-      result = await api.runBatch(batchId, amountDivisor);
+      result = await api.runBatch(batchId, amountDivisor, patternGroup);
       setBatchRunResult(result);
+      setBatchRunStale(false);
       setQuality(null);
       setValidatedBatchId(null);
     }, () => `Uploaded batch reconciled (divisor: ${result?.amount_divisor ?? 'default'})`);
   };
 
-  const runAiPass = async () => {
+  const generateRegexMapping = async (camtFile, otherFile) => {
+    return api.generateMapping(camtFile, otherFile);
+  };
+
+  const generatePatternsFromFiles = async (camtFile, otherFile, providedRegexMap = null) => {
+    return api.generateReconciliationPatterns(camtFile, otherFile, providedRegexMap);
+  };
+
+  const generatePatternSuggestions = async (camtFile, otherFile, maxExamples = 8) => {
+    return api.patternSuggestions(camtFile, otherFile, maxExamples);
+  };
+
+  const createBulkPatterns = async (groupName, patterns) => {
+    const result = await api.createBulkPatterns(groupName, patterns);
+    const fresh = await api.patterns();
+    setPatterns(fresh);
+    setLastBulkGroup(groupName);
+    setToast(`Patterns saved to group "${groupName}"`);
+    setTimeout(() => setToast(''), 3200);
+    return result;
+  };
+
+  const saveGeneratedPattern = async (patternPayload) => {
+    await safe(() => api.createPattern(patternPayload), 'Pattern saved to registry');
+  };
+
+  const runAiTriage = async () => {
     let result;
     setTriageRunning(true);
     await safe(
@@ -2464,7 +3477,7 @@ export default function App() {
       () => {
         const triaged = result?.triaged_count ?? 0;
         const verified = result?.verified_count ?? 0;
-        return `AI Pass complete — ${triaged} candidate${triaged !== 1 ? 's' : ''} triaged, ${verified} exception${verified !== 1 ? 's' : ''} verified`;
+        return `AI pass complete — ${triaged} candidate${triaged !== 1 ? 's' : ''} triaged, ${verified} exception${verified !== 1 ? 's' : ''} verified`;
       },
     );
     setTriageRunning(false);
@@ -2472,8 +3485,13 @@ export default function App() {
 
   const tunePattern = async (patternId, draft) => {
     await safe(() => api.updatePattern(patternId, {
+      pattern_name: draft.pattern_name,
+      pattern_type: draft.pattern_type,
+      pattern_version: draft.pattern_version,
+      status: draft.status,
       execution_mode: draft.execution_mode,
       confidence_threshold: draft.confidence_threshold,
+      approved_by: draft.approved_by,
       pattern_rule: draft.pattern_rule,
     }), 'Pattern configuration saved');
   };
@@ -2482,16 +3500,27 @@ export default function App() {
     await safe(() => pattern.status === 'ACTIVE' ? api.deactivatePattern(pattern.pattern_id) : api.activatePattern(pattern.pattern_id), 'Pattern status updated');
   };
 
-  const createPattern = async (name) => {
-    await safe(() => api.createPattern ? api.createPattern({
-      pattern_name: name,
+  const createPattern = async (payloadOrName) => {
+    const payload = typeof payloadOrName === 'string' ? {
+      pattern_name: payloadOrName,
       pattern_type: 'LEARNED_DRAFT',
+      pattern_version: '1.0',
       pattern_rule: { fields: ['invoice_suffix', 'amount', 'counterparty'], status: 'suggestion_only' },
       status: 'ACTIVE',
       execution_mode: 'SUGGESTION',
       confidence_threshold: 0.87,
       approved_by: 'prototype_user',
-    }) : Promise.resolve(), 'Suggestion pattern created');
+    } : payloadOrName;
+
+    await safe(() => api.createPattern(payload), 'Pattern created');
+  };
+
+  const removePattern = async (patternId) => {
+    await safe(() => api.deletePattern(patternId), 'Pattern deleted');
+  };
+
+  const removePatternGroup = async (groupName) => {
+    await safe(() => api.deletePatternGroup(groupName), `Group "${groupName}" deleted`);
   };
 
   const updateWorkflow = async (caseId, payload) => {
@@ -2520,19 +3549,21 @@ export default function App() {
 
   const screen = useMemo(() => {
     if (active === 'workspace') return <Workspace workspace={workspace} summary={summary} onLoad={() => safe(api.loadSampleData, 'Sample PSR/CAMT loaded')} onRun={() => safe(api.runRecon, 'Reconciliation completed')} onSnapshot={() => safe(api.createSnapshot, 'Snapshot created')} onExport={exportCsv} loading={loading} />;
-    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onUploadTradeBatch={uploadTradeBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onRunTradeBatch={runTradeBatch} onNavigate={setActive} loading={loading} />;
+    if (active === 'intake') return <DataIntake batches={batches} submissions={submissions} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} quality={quality} batchRunResult={batchRunResult} batchRunStale={batchRunStale} validatedBatchId={validatedBatchId} onUpload={uploadReconFile} onUploadBatch={uploadBatch} onUploadTradeBatch={uploadTradeBatch} onValidate={validateSelectedBatch} onRunBatch={runSelectedBatch} onRunTradeBatch={runTradeBatch} onNavigate={setActive} loading={loading} patternGroups={[...new Set((patterns || []).map((p) => p.pattern_group || 'default').filter(Boolean))].sort()} />;
     if (active === 'dataprep') return <DataPrep preview={preview} predictions={predictions} />;
     if (active === 'matching') return <MatchingStudio patterns={patterns} rules={noCodeRules} onTunePattern={tunePattern} onTogglePattern={togglePattern} onCreatePattern={createPattern} />;
+    if (active === 'pattern-builder') return <PatternBuilder onGenerateMapping={generateRegexMapping} onGeneratePatterns={generatePatternsFromFiles} onSuggestPatterns={generatePatternSuggestions} onSave={saveGeneratedPattern} onSaveBulk={createBulkPatterns} proposedPatterns={proposedPatterns} setProposedPatterns={setProposedPatterns} patterns={patterns} />;
+    if (active === 'patterns') return <PatternManagement patterns={patterns} highlightGroup={lastBulkGroup} onCreate={createPattern} onUpdate={tunePattern} onDelete={removePattern} onDeleteGroup={removePatternGroup} onToggle={togglePattern} />;
     const activeBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
     const activeBatchName = activeBatch?.batch_name || activeBatch?.batch_id || 'recon';
-    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiPass={runAiPass} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} />;
+    if (active === 'results') return <ResultsWorkbench results={results} summary={summary} patterns={patterns} selected={selected} setSelected={setSelected} refreshResults={refreshResults} onAiTriage={runAiTriage} onResolve={setModalItem} loading={loading} triageRunning={triageRunning} batchName={activeBatchName} batches={batches.items || []} selectedBatchId={selectedBatchId} setSelectedBatchId={setSelectedBatchId} onSwitchBatch={runSelectedBatch} />;
     if (active === 'exceptions') return <Exceptions exceptions={exceptions} workflowRules={workflowRules} onResolveClick={setModalItem} onWorkflowUpdate={updateWorkflow} />;
     if (active === 'dashboards') return <Dashboards dashboard={dashboard} onExport={exportCsv} />;
     if (active === 'learning') return <Learning candidates={candidates} events={events} onSeed={() => safe(api.seedLearning, 'Demo learning signals seeded')} onDiscover={() => safe(api.discover, 'Pattern discovery completed')} onApprove={(id) => safe(() => api.approveCandidate(id), 'Candidate approved as learnt suggestion')} />;
     if (active === 'assistant') return <Assistant onNavigate={(tab) => setActive(tab)} />;
     if (active === 'governance') return <Governance events={events} workspace={workspace} onSnapshot={() => safe(api.createSnapshot, 'Snapshot created')} />;
     return null;
-  }, [active, workspace, summary, results, exceptions, patterns, candidates, events, batches, submissions, selectedBatchId, quality, batchRunResult, preview, predictions, noCodeRules, workflowRules, dashboard, selected, loading]);
+  }, [active, workspace, summary, results, exceptions, patterns, candidates, events, batches, submissions, selectedBatchId, quality, batchRunResult, preview, predictions, noCodeRules, workflowRules, dashboard, selected, loading, proposedPatterns]);
 
   return (
     <div className="app-shell">

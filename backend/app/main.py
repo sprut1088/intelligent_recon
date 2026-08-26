@@ -1,18 +1,23 @@
 from __future__ import annotations
 import csv, io, json, logging, re, time, uuid
 from typing import List, Optional
+import tempfile
+import time
+import uuid
+from pathlib import Path
 from fastapi import FastAPI, File, Form, HTTPException, Query, Request, UploadFile
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse, StreamingResponse
 from .config import settings
 from .db import get_conn, get_meta, init_db, json_dumps, row_to_dict, rows_to_dicts
 from .learning import approve_candidate, run_learning, seed_demo_learning_signals
+from .filepatternrecognition import generate_mapping_regex, generate_reconciliation_patterns, recognize_files, _write_upload_to_temp, suggest_patterns_for_unmatched, compare_patterns_with_llm
 from .ingestion import get_batch, list_batches, run_uploaded_batch, run_trade_batch, store_uploaded_file
 from .loader import load_samples_and_reconcile, rerun_reconciliation_only
 from .quality import get_quality_report, validate_batch
 from .workflow import get_exception_workflow, list_exception_workflow, mark_workflow_resolved, update_exception_workflow
 from .workspace import create_snapshot, export_reconciliation_results, get_dashboard_model, get_data_preview, get_no_code_rules, get_workspace_overview, get_workflow_rules, list_submissions, predict_match_fields
-from .schemas import AiVerifyRequest, CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
+from .schemas import BulkPatternSaveRequest, PatternCompareRequest, AiVerifyRequest, CandidateApprovalRequest, CaseResolveRequest, PatternCreateRequest, PatternUpdateRequest, ReconcileRunRequest, UserEventRequest, WorkflowUpdateRequest
 from .ai_triage import build_ai_snapshot, find_candidates, run_tier2c, verify_exception_cases
 
 # Module-level logger — format applied in startup() after uvicorn finishes its own logging setup
@@ -77,6 +82,68 @@ def upload_file(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
+@app.post("/api/files/recognize-patterns")
+def recognize_file_patterns(
+    camt_file: UploadFile = File(...),
+    other_file: UploadFile = File(...),
+) -> dict:
+    try:
+        return recognize_files(camt_file, other_file)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.post("/api/files/generate-mapping")
+def generate_file_mapping(
+    camt_file: UploadFile = File(...),
+    other_file: UploadFile = File(...),
+    max_examples: int = Form(10),
+) -> dict:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        camt_path = _write_upload_to_temp(camt_file, temp_dir_path)
+        other_path = _write_upload_to_temp(other_file, temp_dir_path)
+        try:
+            return generate_mapping_regex(camt_path, other_path, max_examples=max_examples)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+@app.post("/api/files/reconcile-patterns")
+def generate_reconciliation_patterns_route(
+    camt_file: UploadFile = File(...),
+    other_file: UploadFile = File(...),
+    provided_regex_map: Optional[str] = Form(None),
+) -> dict:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        camt_path = _write_upload_to_temp(camt_file, temp_dir_path)
+        other_path = _write_upload_to_temp(other_file, temp_dir_path)
+        try:
+            regex_map = None
+            if provided_regex_map:
+                import json
+                regex_map = json.loads(provided_regex_map)
+            return generate_reconciliation_patterns(camt_path, other_path, provided_regex_map=regex_map)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        except json.JSONDecodeError as exc:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON for provided_regex_map: {exc}") from exc
+
+
+@app.post("/api/files/pattern-suggestions")
+def generate_pattern_suggestions(
+    camt_file: UploadFile = File(...),
+    other_file: UploadFile = File(...),
+    max_examples: int = Form(8),
+) -> dict:
+    with tempfile.TemporaryDirectory() as temp_dir:
+        temp_dir_path = Path(temp_dir)
+        camt_path = _write_upload_to_temp(camt_file, temp_dir_path)
+        other_path = _write_upload_to_temp(other_file, temp_dir_path)
+        try:
+            return suggest_patterns_for_unmatched(camt_path, other_path, max_examples=max_examples)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
 @app.get("/api/files/batches")
 def files_batches(limit:int=Query(50,ge=1,le=200), offset:int=Query(0,ge=0)) -> dict:
     return list_batches(limit=limit, offset=offset)
@@ -91,7 +158,12 @@ def files_batch_detail(batch_id: str) -> dict:
 @app.post("/api/files/batches/{batch_id}/run")
 def run_uploaded_file_batch(batch_id: str, request: ReconcileRunRequest = ReconcileRunRequest()) -> dict:
     try:
-        return run_uploaded_batch(batch_id, amount_divisor=request.amount_divisor, reset_transactions=request.reset)
+        return run_uploaded_batch(
+            batch_id,
+            amount_divisor=request.amount_divisor,
+            reset_transactions=request.reset,
+            pattern_group=request.pattern_group,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -321,7 +393,14 @@ def summary() -> dict:
         camt_count=conn.execute("SELECT COUNT(*) AS cnt FROM camt_transactions").fetchone()["cnt"]
         status_rows=rows_to_dicts(conn.execute("SELECT reconciliation_status, COUNT(*) AS count, COALESCE(SUM(ABS(COALESCE(variance,0))),0) AS variance_abs FROM recon_cases GROUP BY reconciliation_status ORDER BY count DESC").fetchall())
         reason_rows=rows_to_dicts(conn.execute("SELECT reason_code, COUNT(*) AS count FROM recon_cases GROUP BY reason_code ORDER BY count DESC LIMIT 10").fetchall())
-        pattern_rows=rows_to_dicts(conn.execute("SELECT rule_applied, COUNT(*) AS count FROM recon_cases GROUP BY rule_applied ORDER BY count DESC").fetchall())
+        pattern_rows=rows_to_dicts(conn.execute("""
+            SELECT rule_applied, COUNT(*) AS count,
+                SUM(CASE WHEN reconciliation_status IN ('Matched & Settled (Auto-Close)','Resolved Manually') THEN 1 ELSE 0 END) AS matched_count,
+                SUM(CASE WHEN exception_flag='Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment','Bank-only Item - Investigation','AI Confirmed \u2014 No Match') THEN 1 ELSE 0 END) AS exception_count,
+                SUM(CASE WHEN reconciliation_status IN ('Uncleared / In-Transit Payment','AI Confirmed \u2014 No Match') THEN 1 ELSE 0 END) AS in_transit_count,
+                SUM(CASE WHEN reconciliation_status='Bank-only Item - Investigation' THEN 1 ELSE 0 END) AS bank_only_count
+            FROM recon_cases GROUP BY rule_applied ORDER BY count DESC
+        """).fetchall())
         manual_resolution_count=conn.execute("SELECT COUNT(*) AS cnt FROM recon_manual_resolution").fetchone()["cnt"]
         learning_candidate_count=conn.execute("SELECT COUNT(*) AS cnt FROM recon_pattern_candidate").fetchone()["cnt"]
         kpi=row_to_dict(conn.execute("SELECT COALESCE(SUM(COALESCE(internal_amount,0)),0) AS internal_amount, COALESCE(SUM(COALESCE(bank_amount,0)),0) AS bank_amount, COALESCE(SUM(ABS(COALESCE(variance,0))),0) AS absolute_variance, COALESCE(AVG(match_confidence),0) AS average_confidence, SUM(CASE WHEN exception_flag='Y' THEN 1 ELSE 0 END) AS exception_count, SUM(CASE WHEN reconciliation_status LIKE 'Matched%' OR reconciliation_status = 'Resolved Manually' THEN 1 ELSE 0 END) AS auto_matched_count, SUM(CASE WHEN json_extract(feature_snapshot_json, '$.ai_verification') IS NOT NULL AND rule_applied NOT LIKE 'TIER2C%' THEN 1 ELSE 0 END) AS ai_verified_count FROM recon_cases").fetchone())
@@ -383,6 +462,9 @@ def export_cases(
         clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
     elif status == 'matched':
         clauses.append("reconciliation_status IN ('Matched & Settled (Auto-Close)', 'Resolved Manually')")
+    elif status in ('ai_agree', 'ai_caution', 'ai_disagree'):
+        clauses.append("json_extract(feature_snapshot_json, '$.ai_verification.verdict') = ?")
+        params.append(status.split('_', 1)[1].upper())
     elif status: clauses.append("reconciliation_status = ?"); params.append(status)
     if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI Confirmed \u2014 No Match')")
     if search:
@@ -422,6 +504,9 @@ def list_cases(status: Optional[str]=None, exception_only: bool=False, search: O
         clauses.append("reconciliation_status IN ('Uncleared / In-Transit Payment', 'AI Confirmed \u2014 No Match')")
     elif status == 'matched':
         clauses.append("reconciliation_status IN ('Matched & Settled (Auto-Close)', 'Resolved Manually')")
+    elif status in ('ai_agree', 'ai_caution', 'ai_disagree'):
+        clauses.append("json_extract(feature_snapshot_json, '$.ai_verification.verdict') = ?")
+        params.append(status.split('_', 1)[1].upper())
     elif status: clauses.append("reconciliation_status = ?"); params.append(status)
     if exception_only: clauses.append("exception_flag = 'Y' AND reconciliation_status NOT IN ('Uncleared / In-Transit Payment', 'Bank-only Item - Investigation', 'AI Confirmed \u2014 No Match')")
     if search:
@@ -431,6 +516,10 @@ def list_cases(status: Optional[str]=None, exception_only: bool=False, search: O
     with get_conn() as conn:
         total=conn.execute(f"SELECT COUNT(*) AS cnt FROM recon_cases {where}", params).fetchone()["cnt"]
         rows=rows_to_dicts(conn.execute(f"SELECT * FROM recon_cases {where} ORDER BY exception_flag DESC, match_confidence ASC, case_id ASC LIMIT ? OFFSET ?", [*params,limit,offset]).fetchall())
+    logger.info(
+        "list_cases: status=%r exception_only=%s search=%r group_id=%r -> total=%d returned=%d (offset=%d limit=%d)",
+        status, exception_only, search, group_id, total, len(rows), offset, limit,
+    )
     return {"total":total,"limit":limit,"offset":offset,"items":rows}
 
 @app.get("/api/reconcile/cases/{case_id}")
@@ -836,10 +925,25 @@ def assistant_query(question: str) -> dict:
         answer = f"Current run: {total} cases, {auto} auto-closed ({match_rate}% match rate), {ex} exceptions, EUR {variance:,.2f} total variance."
     return {"question": question, "answer": answer, "actions": actions, "source": "rules", "context": ctx}
 
+def _group_patterns(rows: list[dict]) -> list[dict]:
+    grouped: dict[str, list[dict]] = {}
+    for row in rows:
+        group_name = (row.get("pattern_group") or "default").strip() or "default"
+        grouped.setdefault(group_name, []).append(row)
+    return [
+        {
+            "group_name": group_name,
+            "items": sorted(items, key=lambda item: (item.get("pattern_name") or "").lower()),
+        }
+        for group_name, items in sorted(grouped.items(), key=lambda entry: entry[0].lower())
+    ]
+
+
 @app.get("/api/patterns")
 def list_patterns() -> dict:
-    with get_conn() as conn: rows=rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry ORDER BY pattern_id").fetchall())
-    return {"items":rows}
+    with get_conn() as conn:
+        rows = rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry ORDER BY pattern_id").fetchall())
+    return {"items": rows, "grouped_patterns": _group_patterns(rows)}
 
 
 @app.post("/api/patterns")
@@ -852,13 +956,15 @@ def create_pattern(request: PatternCreateRequest) -> dict:
         conn.execute(
             """
             INSERT INTO recon_pattern_registry
-            (pattern_id, pattern_name, pattern_type, pattern_rule_json, status, execution_mode, confidence_threshold, approved_by)
-            VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+            (pattern_id, pattern_name, pattern_type, pattern_group, pattern_version, pattern_rule_json, status, execution_mode, confidence_threshold, approved_by)
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
             """,
             (
                 pattern_id,
                 request.pattern_name,
                 request.pattern_type,
+                request.pattern_group,
+                request.pattern_version,
                 json_dumps(request.pattern_rule),
                 request.status,
                 request.execution_mode,
@@ -870,6 +976,72 @@ def create_pattern(request: PatternCreateRequest) -> dict:
         row = conn.execute("SELECT * FROM recon_pattern_registry WHERE pattern_id=?", (pattern_id,)).fetchone()
     return row_to_dict(row)
 
+@app.post("/api/patterns/bulk")
+def create_bulk_patterns(request: BulkPatternSaveRequest) -> dict:
+    """Save multiple patterns in one transaction, all assigned to *group_name*.
+
+    Patterns are mapped from the file-analysis output format to the registry
+    schema (fields_used → pattern_rule.fields, rule hints → execution_mode /
+    confidence_threshold).  Existing pattern IDs are skipped without error.
+    """
+    if not request.group_name.strip():
+        raise HTTPException(status_code=400, detail="group_name cannot be blank")
+    created, skipped = [], []
+    with get_conn() as conn:
+        for p in request.patterns:
+            pid = p.pattern_id or f"PX-{uuid.uuid4().hex[:8].upper()}"
+            if conn.execute(
+                "SELECT 1 FROM recon_pattern_registry WHERE pattern_id=?", (pid,)
+            ).fetchone():
+                skipped.append(pid)
+                continue
+            conn.execute(
+                """
+                INSERT INTO recon_pattern_registry
+                (pattern_id, pattern_name, pattern_type, pattern_group,
+                 pattern_version, pattern_rule_json, status, execution_mode,
+                 confidence_threshold, approved_by)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    pid, p.pattern_name, p.pattern_type,
+                    request.group_name,   # always override with the bulk group
+                    p.pattern_version,
+                    json_dumps(p.pattern_rule), p.status,
+                    p.execution_mode, p.confidence_threshold, p.approved_by,
+                ),
+            )
+            created.append(pid)
+        conn.commit()
+    return {
+        "created": len(created),
+        "skipped": len(skipped),
+        "pattern_ids": created,
+        "group_name": request.group_name,
+    }
+
+
+@app.post("/api/patterns/compare")
+def compare_patterns_route(request: PatternCompareRequest) -> dict:
+    """LLM-powered comparison of identified patterns against a saved group."""
+    with get_conn() as conn:
+        rows = rows_to_dicts(conn.execute(
+            "SELECT * FROM recon_pattern_registry WHERE pattern_group = ? AND status = 'ACTIVE'",
+            (request.compare_group,)
+        ).fetchall())
+    if not rows:
+        raise HTTPException(status_code=404, detail=f"Group '{request.compare_group}' has no active patterns")
+    group_patterns = []
+    for r in rows:
+        try:
+            r["pattern_rule"] = json.loads(r.get("pattern_rule_json") or "{}")
+        except Exception:
+            r["pattern_rule"] = {}
+        group_patterns.append(r)
+    identified = [p.model_dump() for p in request.identified_patterns]
+    return compare_patterns_with_llm(identified, group_patterns, request.compare_group)
+
+
 @app.patch("/api/patterns/{pattern_id}")
 def update_pattern(pattern_id: str, request: PatternUpdateRequest) -> dict:
     fields = []
@@ -877,7 +1049,7 @@ def update_pattern(pattern_id: str, request: PatternUpdateRequest) -> dict:
     data = request.model_dump(exclude_unset=True)
     if "pattern_rule" in data:
         data["pattern_rule_json"] = json_dumps(data.pop("pattern_rule"))
-    for field in ["pattern_name", "pattern_type", "pattern_rule_json", "status", "execution_mode", "confidence_threshold", "approved_by"]:
+    for field in ["pattern_name", "pattern_type", "pattern_group", "pattern_version", "pattern_rule_json", "status", "execution_mode", "confidence_threshold", "approved_by"]:
         if field in data and data[field] is not None:
             fields.append(f"{field}=?")
             params.append(data[field])
@@ -893,6 +1065,29 @@ def update_pattern(pattern_id: str, request: PatternUpdateRequest) -> dict:
         row = conn.execute("SELECT * FROM recon_pattern_registry WHERE pattern_id=?", (pattern_id,)).fetchone()
     rerun_reconciliation_only()
     return row_to_dict(row)
+
+@app.delete("/api/patterns/{pattern_id}")
+def delete_pattern(pattern_id: str) -> dict:
+    with get_conn() as conn:
+        existing = conn.execute("SELECT pattern_id FROM recon_pattern_registry WHERE pattern_id=?", (pattern_id,)).fetchone()
+        if not existing:
+            raise HTTPException(status_code=404, detail="Pattern not found")
+        conn.execute("DELETE FROM recon_pattern_registry WHERE pattern_id=?", (pattern_id,))
+        conn.commit()
+    rerun_reconciliation_only()
+    return {"pattern_id": pattern_id, "deleted": True}
+
+@app.delete("/api/patterns/groups/{group_name}")
+def delete_pattern_group(group_name: str) -> dict:
+    with get_conn() as conn:
+        result = conn.execute("SELECT COUNT(*) FROM recon_pattern_registry WHERE pattern_group=?", (group_name,)).fetchone()
+        count = result[0] if result else 0
+        if count == 0:
+            raise HTTPException(status_code=404, detail=f"Group '{group_name}' not found or is already empty")
+        conn.execute("DELETE FROM recon_pattern_registry WHERE pattern_group=?", (group_name,))
+        conn.commit()
+    rerun_reconciliation_only()
+    return {"group_name": group_name, "deleted_count": count}
 
 @app.post("/api/patterns/{pattern_id}/activate")
 def activate_pattern(pattern_id: str) -> dict:

@@ -27,6 +27,7 @@ class UserEventRequest(BaseModel):
 class ReconcileRunRequest(BaseModel):
     reset: bool = True
     amount_divisor: Optional[float] = None
+    pattern_group: Optional[str] = None
 
 class CandidateApprovalRequest(BaseModel):
     approved_by: str = "recon_lead"
@@ -38,15 +39,37 @@ class PatternCreateRequest(BaseModel):
     pattern_id: Optional[str] = None
     pattern_name: str
     pattern_type: str = "CUSTOM"
+    pattern_group: str = "default"
+    pattern_version: str = "1.0"
     pattern_rule: Dict[str, Any] = Field(default_factory=dict)
     status: str = "DRAFT"
     execution_mode: str = "SUGGESTION"
     confidence_threshold: float = 0.80
     approved_by: str = "prototype_user"
 
+class BulkPatternSaveRequest(BaseModel):
+    group_name: str
+    patterns: List["PatternCreateRequest"]
+
+
+class IdentifiedPatternItem(BaseModel):
+    pattern_name: str
+    pattern_type: str = "FILE_DETECTED"
+    pattern_rule: Dict[str, Any] = Field(default_factory=dict)
+    execution_mode: str = "SUGGESTION"
+    confidence_threshold: float = 0.80
+
+
+class PatternCompareRequest(BaseModel):
+    identified_patterns: List[IdentifiedPatternItem]
+    compare_group: str
+
+
 class PatternUpdateRequest(BaseModel):
     pattern_name: Optional[str] = None
     pattern_type: Optional[str] = None
+    pattern_group: Optional[str] = None
+    pattern_version: Optional[str] = None
     pattern_rule: Optional[Dict[str, Any]] = None
     status: Optional[str] = None
     execution_mode: Optional[str] = None

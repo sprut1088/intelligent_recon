@@ -4,7 +4,7 @@ import logging
 from dataclasses import asdict
 from typing import Dict, List, Optional
 from .config import settings
-from .db import get_conn, json_dumps, reset_runtime_tables, rows_to_dicts, set_meta
+from .db import get_conn, get_meta, json_dumps, reset_runtime_tables, rows_to_dicts, set_meta
 from .parsers import CamtTransaction, PsrTransaction, parse_camt_file, parse_psr_file
 from .reconciliation import case_to_db_tuple, reconcile_transactions
 from .workflow import sync_exception_workflow
@@ -36,6 +36,7 @@ def load_samples_and_reconcile(amount_divisor: Optional[float] = None, reset: bo
         sync_exception_workflow(conn)
         set_meta(conn, "last_load_header", json.dumps(asdict(header) if header else {}))
         set_meta(conn, "last_amount_divisor", amount_divisor or settings.psr_amount_divisor)
+        set_meta(conn, "last_pattern_group", '')  # sample load uses all patterns
         set_meta(conn, "psr_count", len(psr_transactions)); set_meta(conn, "camt_count", len(camt_transactions)); set_meta(conn, "case_count", len(cases))
         conn.commit()
     logger.info("load_samples_and_reconcile complete: psr=%d camt=%d cases=%d", len(psr_transactions), len(camt_transactions), len(cases))
@@ -44,7 +45,12 @@ def load_samples_and_reconcile(amount_divisor: Optional[float] = None, reset: bo
 def rerun_reconciliation_only() -> Dict:
     logger.info("Re-running reconciliation from existing DB transactions")
     with get_conn() as conn:
-        psr_rows = conn.execute("SELECT * FROM psr_transactions").fetchall(); camt_rows = conn.execute("SELECT * FROM camt_transactions").fetchall(); patterns = rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry").fetchall())
+        psr_rows = conn.execute("SELECT * FROM psr_transactions").fetchall(); camt_rows = conn.execute("SELECT * FROM camt_transactions").fetchall()
+        last_group = get_meta(conn, "last_pattern_group")
+        if last_group:
+            patterns = rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry WHERE pattern_group = ? ORDER BY pattern_id", (last_group,)).fetchall())
+        else:
+            patterns = rows_to_dicts(conn.execute("SELECT * FROM recon_pattern_registry ORDER BY pattern_id").fetchall())
         psr_transactions: List[PsrTransaction] = [PsrTransaction(row["id"], row["execution_date"], row["reference"], row["amount"], row["direction"], row["invoice"], row["counterparty"], row["currency"], row["source_line"], row["raw_line"]) for row in psr_rows]
         camt_transactions: List[CamtTransaction] = [CamtTransaction(row["ntry_id"], row["camt_id"], row["end_to_end_id"], row["amount"], row["direction"], row["booking_date"], row["value_date"], row["currency"], row["remittance"], row["counterparty"], row["pmt_ref"], row["invoice"], json.loads(row["raw_json"] or "{}")) for row in camt_rows]
         cases = reconcile_transactions(psr_transactions, camt_transactions, patterns)
