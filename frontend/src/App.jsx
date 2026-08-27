@@ -4,9 +4,9 @@ import { api } from './api/client';
 const fmtGroupName = (name) => name === 'default' ? 'Default Group' : name;
 
 const tabs = [
-  ['intake', 'Data Intake'],
   ['pattern-builder', 'Pattern Builder'],
   ['patterns', 'Pattern Manager'],
+  ['intake', 'Data Intake'],
   ['results', 'Results Workbench'],
   ['exceptions', 'Exceptions'],
   ['dashboards', 'Dashboards'],
@@ -37,6 +37,7 @@ function compareVersions(left = '1.0', right = '1.0') {
 function classForStatus(value = '') {
   const v = String(value).toLowerCase();
   if (v.startsWith('ai-assisted')) return 'ai';
+  if (v.startsWith('ai suggested')) return 'ai';
   if (v.startsWith('ai -') || v.startsWith('ai –')) return 'ai-maybe';
   if (v.includes('ai confirmed')) return 'ai-nomatch';
   if (v.includes('matched') && !v.includes('unmatched') || v.includes('active') || v.includes('processed') || v.includes('ok') || v.includes('complete')) return 'success';
@@ -1867,7 +1868,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
   const filteredRows = useMemo(() => {
     switch (drawerFilter) {
       case 'low': return rows.filter(r => r.match_confidence != null && r.match_confidence < 60);
-      case 'ai':  return rows.filter(r => r.rule_applied?.startsWith('TIER2'));
+      case 'ai':  return rows.filter(r => (r.reconciliation_status || '').startsWith('AI') || r.rule_applied?.startsWith('TIER2') || r.feature_snapshot?.ai_verification);
       default:    return rows;
     }
   }, [rows, drawerFilter]);
@@ -1904,7 +1905,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
 
   useEffect(() => {
     if (!selected) return;
-    const MATCH_STATUSES_KB = ['Suggested Match - Analyst Review', 'Suggested Match - Group Settlement', 'Suggested Match - Split Settlement', 'Suggested Match - Learned Pattern', 'Group Settlement - Post to Ledger', 'Group Settlement - Amount Variance Review', 'Split Settlement - Post to Ledger', 'Split Settlement - Amount Variance Review', 'Exception - Amount Variance Review', 'Post to Short or Over Ledger', 'AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required'];
+    const MATCH_STATUSES_KB = ['Suggested Match - Analyst Review', 'Suggested Match - Group Settlement', 'Suggested Match - Split Settlement', 'Suggested Match - Learned Pattern', 'Group Settlement - Post to Ledger', 'Group Settlement - Amount Variance Review', 'Split Settlement - Post to Ledger', 'Split Settlement - Amount Variance Review', 'Exception - Amount Variance Review', 'Post to Short or Over Ledger', 'AI-Assisted Suggested Match', 'AI Suggested Match', 'AI - Analyst Adjudication Required'];
     const handler = (e) => {
       const tag = document.activeElement?.tagName?.toLowerCase();
       if (tag === 'input' || tag === 'textarea' || tag === 'select') return;
@@ -1982,13 +1983,13 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
               <button key={f} className={`filter-pill${drawerFilter === f ? ' active' : ''}`} onClick={() => {
                 setDrawerFilter(f);
                 const newFiltered = f === 'low' ? rows.filter(r => r.match_confidence != null && r.match_confidence < 60)
-                  : f === 'ai' ? rows.filter(r => r.rule_applied?.startsWith('TIER2')) : rows;
+                      : f === 'ai' ? rows.filter(r => (r.reconciliation_status || '').startsWith('AI') || r.rule_applied?.startsWith('TIER2') || r.feature_snapshot?.ai_verification) : rows;
                 if (newFiltered.length > 0 && !newFiltered.find(r => r.result_id === selected?.result_id)) {
                   onSelect?.(newFiltered[0]);
                 }
               }}>
                 {f === 'all' ? 'All' : f === 'low' ? 'Low conf' : 'AI'}
-                <span className="pill-count">{(f === 'low' ? rows.filter(r => r.match_confidence != null && r.match_confidence < 60) : f === 'ai' ? rows.filter(r => r.rule_applied?.startsWith('TIER2')) : rows).length}</span>
+                    <span className="pill-count">{(f === 'low' ? rows.filter(r => r.match_confidence != null && r.match_confidence < 60) : f === 'ai' ? rows.filter(r => (r.reconciliation_status || '').startsWith('AI') || r.rule_applied?.startsWith('TIER2') || r.feature_snapshot?.ai_verification) : rows).length}</span>
               </button>
             ))}
           </div>
@@ -2011,7 +2012,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           {hasMatch && <FieldDiff item={item} />}
           {(() => {
             const aicands = item.feature_snapshot?.candidates_reviewed;
-            const isAiMatchCase = ['AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required'].includes(item.reconciliation_status);
+            const isAiMatchCase = ['AI-Assisted Suggested Match', 'AI Suggested Match', 'AI - Analyst Adjudication Required'].includes(item.reconciliation_status);
             if (!isAiMatchCase || !aicands?.length) return null;
             return (
               <AiCandidatesPanel
@@ -2087,8 +2088,18 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
                   </p>
                 );
               }
+              const aiMatch = item.feature_snapshot?.ai_match;
+              const isAiSuggestedStatus = ['AI-Assisted Suggested Match', 'AI Suggested Match'].includes(item.reconciliation_status);
               return (
               <>
+              {isAiSuggestedStatus && aiMatch && (
+                <div style={{ marginBottom: '0.75rem', padding: '0.6rem 0.75rem', borderRadius: '8px', background: '#eef4ff', border: '1px solid #c7dcff', color: '#1e3a8a', fontSize: '0.86rem' }}>
+                  <strong>AI typo assessment:</strong>{' '}
+                  AI determined this could be a data-entry typo between FIX execution {item.psr_id || 'N/A'} and CCF execution {item.camt_id || 'N/A'}.
+                  {aiMatch.confidence_pct != null ? ` Confidence ${aiMatch.confidence_pct}%.` : ''}
+                  {aiMatch.reason ? ` ${aiMatch.reason}` : ''}
+                </div>
+              )}
               <div className="score-labelled">
                 <p className="score-label">{ruleLabel(score.rule_applied || item.rule_applied) || 'Rule decision confidence'}</p>
                 <div className="score-bar-row">
@@ -2222,7 +2233,7 @@ function EvidenceDrawer({ selected, onClose, onResolve, onRefresh, rows = [], se
           const isNoMatch = NO_MATCH_STATUSES.includes(item.reconciliation_status);
           const isBankOnly = item.reconciliation_status === 'Bank-only Item - Investigation';
           const isLedgerPost = ['Post to Short or Over Ledger', 'Group Settlement - Post to Ledger', 'Split Settlement - Post to Ledger'].includes(item.reconciliation_status);
-          const isAiSuggested = item.reconciliation_status === 'AI-Assisted Suggested Match';
+          const isAiSuggested = ['AI-Assisted Suggested Match', 'AI Suggested Match'].includes(item.reconciliation_status);
           const isAiReview = item.reconciliation_status === 'AI - Analyst Adjudication Required';
           const isAiNoMatch = item.reconciliation_status === 'AI Confirmed — No Match';
 
@@ -2525,6 +2536,7 @@ const STATUS_OPTIONS = [
   'Uncleared / In-Transit Payment',
   'Bank-only Item - Investigation',
   'AI-Assisted Suggested Match',
+  'AI Suggested Match',
   'AI - Analyst Adjudication Required',
   'AI Confirmed — No Match',
   'Suggested Match - Analyst Review',
@@ -2545,7 +2557,7 @@ function SummaryBar({ summary = {}, total = 0, activeFilter, onFilter }) {
     .filter(s => match(s.reconciliation_status || ''))
     .reduce((acc, s) => acc + (s.count || 0), 0);
   const exceptionCount = summary.raw?.kpi?.exception_count ?? 0;
-  const aiSuggestedCount = statusCount(s => s === 'AI-Assisted Suggested Match');
+  const aiSuggestedCount = statusCount(s => s === 'AI-Assisted Suggested Match' || s === 'AI Suggested Match');
   const aiReviewCount    = statusCount(s => s === 'AI - Analyst Adjudication Required');
   const aiNoMatchCount   = statusCount(s => s === 'AI Confirmed — No Match');
   const aiProcessedCount = aiSuggestedCount + aiReviewCount + aiNoMatchCount + (summary.ai_verified_count || 0);
@@ -3557,6 +3569,12 @@ export default function App() {
       () => {
         const triaged = result?.triaged_count ?? 0;
         const verified = result?.verified_count ?? 0;
+        const tradeSuggested = result?.trade_ai_suggested_count ?? 0;
+        const tradePhaseB = result?.trade_phase_b_verified_count ?? 0;
+        const isTrade = (summary?.recon_type || summary?.raw?.recon_type) === 'TRADE';
+        if (isTrade) {
+          return `AI pass complete — ${tradeSuggested} trade fuzzy pair${tradeSuggested !== 1 ? 's' : ''} suggested, ${tradePhaseB} trade exception${tradePhaseB !== 1 ? 's' : ''} verified`;
+        }
         return `AI pass complete — ${triaged} candidate${triaged !== 1 ? 's' : ''} triaged, ${verified} exception${verified !== 1 ? 's' : ''} verified`;
       },
     );

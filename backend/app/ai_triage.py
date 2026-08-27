@@ -1768,13 +1768,23 @@ TRADE_FUZZY_SYSTEM_PROMPT = (
 
     "records. Consider:\n"
 
-    "- exec_id or order_id differing by punctuation, whitespace, case, truncation, or 1-2 character errors\n"
+    "- exec_id or order_id differing by punctuation, whitespace, case, truncation, missing/inserted digits, or 1-2 character substitutions\n"
 
     "- Quantities within \u00b11 share\n"
 
     "- Prices within \u00b1$0.01\n"
 
     "- Split fills: one FIX matched to multiple CCFs whose quantities sum to the FIX quantity\n\n"
+
+    "STRONG CORROBORATION RULE: When ISIN, Side, Quantity, and Price ALL match exactly between a "
+
+    "FIX and a CCF record, any 1-2 character difference in exec_id OR order_id must be treated as "
+
+    "a data-entry typo and matched with confidence \u226595. Examples of typos to accept: missing "
+
+    "digit ('EXE10000095' vs 'EXE1000095'), substituted char ('ORD20260095' vs 'ORD2026-095'), "
+
+    "case flip ('B' vs 'b'), inserted space, or transposition.\n\n"
 
     "Return raw JSON only \u2014 no markdown, no explanation outside the JSON. "
 
@@ -1873,6 +1883,17 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
     phase_a_results: List[Dict] = []
 
+    def _trace(msg: str) -> None:
+        """Append a line to backend/ai_pass_debug.log for on-stage tracing."""
+        try:
+            import os as _os_local
+            import time as _time_local
+            _p = _os_local.path.join(_os_local.path.dirname(__file__), "..", "ai_pass_debug.log")
+            with open(_p, "a", encoding="utf-8") as _f:
+                _f.write(f"[{_time_local.strftime('%H:%M:%S')}] TRADE-AI | {msg}\n")
+        except Exception:
+            pass
+
     with get_conn() as conn:
 
         _fz_batch_id   = get_meta(conn, "active_batch_id")
@@ -1949,11 +1970,11 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
             "Trade AI fuzzy | parsed files: fix_records=%d ccf_records=%d",
 
-            len(_fix_by_id), len(_ccf_by_ref),
+            len(_fix_by_id), len(_ccf_by_exec_id),
 
         )
 
-        print(f"[TRADE AI FUZZY] parsed files: fix_records={len(_fix_by_id)} ccf_records={len(_ccf_by_ref)}", flush=True, file=sys.stderr)
+        print(f"[TRADE AI FUZZY] parsed files: fix_records={len(_fix_by_id)} ccf_records={len(_ccf_by_exec_id)}", flush=True, file=sys.stderr)
 
 
 
@@ -2007,6 +2028,9 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
             print(f"[TRADE AI FUZZY] CCF payload: {json.dumps(ccf_payload)}", flush=True, file=sys.stderr)
 
+            _trace(f"orphan_fix_exec_ids={[p['exec_id'] for p in fix_payload]}")
+            _trace(f"orphan_ccf_exec_ids={[p['exec_id'] for p in ccf_payload]}")
+
             _fz_user_msg = (
 
                 f"UNMATCHED FIX EXECUTIONS:\n{json.dumps(fix_payload, indent=2)}\n\n"
@@ -2015,6 +2039,8 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
             )
 
+            # Fuzzy JSON can be long; ignore the payment-tuned LLM_MAX_TOKENS cap.
+            _fz_max_tok = max(2000, int(max_tok or 0))
             try:
 
                 if provider == "anthropic":
@@ -2025,11 +2051,16 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
                         messages=[{"role": "user", "content": _fz_user_msg}],
 
-                        max_tokens=max_tok,
+                        max_tokens=_fz_max_tok,
 
                     )
 
-                    _fz_raw = _fz_resp.content[0].text
+                    # Claude Sonnet 5 returns mixed blocks (ThinkingBlock, TextBlock, ...); pick the first text block.
+                    _fz_raw = next(
+                        (getattr(_b, "text", "") for _b in _fz_resp.content
+                         if getattr(_b, "type", "") == "text" or hasattr(_b, "text")),
+                        "",
+                    )
 
                 else:
 
@@ -2047,7 +2078,7 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
                         response_format={"type": "json_object"},
 
-                        temperature=0, max_tokens=max_tok,
+                        temperature=0, max_tokens=_fz_max_tok,
 
                     )
 
@@ -2063,11 +2094,21 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
                 print(f"[TRADE AI FUZZY] LLM raw response: {_fz_raw}", flush=True, file=sys.stderr)
 
+                _trace(f"llm_raw_len={len(_fz_raw)} raw={_fz_raw[:500]}")
+
                 _fz_matches = json.loads(_fz_raw).get("matches", [])
 
                 logger.info("Trade AI fuzzy | LLM returned %d match(es)", len(_fz_matches))
 
                 print(f"[TRADE AI FUZZY] LLM returned {len(_fz_matches)} match(es): {_fz_matches}", flush=True, file=sys.stderr)
+
+                _trace(
+                    "llm_matches=" + json.dumps([
+                        {"fix": _m.get("fix_exec_id"), "ccf": _m.get("ccf_refs"),
+                         "conf": _m.get("confidence_pct"), "reason": _m.get("reason")}
+                        for _m in _fz_matches
+                    ])
+                )
 
                 _now = datetime.utcnow().isoformat()
 
@@ -2107,73 +2148,73 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
 
 
-                        _ai_ann = {"matched_to": _ccf_refs, "match_type": _mtype,
+                        _ccf_refs_u: List[str] = []
+                        for _ref in _ccf_refs:
+                            if isinstance(_ref, str) and _ref and _ref not in _ccf_refs_u:
+                                _ccf_refs_u.append(_ref)
+
+                        _ai_ann = {"matched_to": _ccf_refs_u, "match_type": _mtype,
 
                                    "confidence_pct": _conf, "reason": _reason, "matched_at": _now}
 
-
+                        _fix_tx = _fix_by_id.get(_exec_id)
+                        _ccf_rows = [_ccf_by_exec_id[r] for r in _ccf_refs_u if r in _ccf_by_exec_id]
+                        _ccf_exec_link = ", ".join(_ccf_refs_u)
+                        _ccf_order_link = ", ".join(sorted({c.clearing_ref for c in _ccf_rows if c.clearing_ref}))
+                        _ccf_qty_total = sum(float(c.quantity or 0) for c in _ccf_rows) if _ccf_rows else None
+                        _ai_reason = (_reason or "AI found a likely execution-id typo with strong corroboration.").strip()
+                        _fix_side = (_fix_tx.side if _fix_tx else "") or ""
+                        _fix_isin = (_fix_tx.isin if _fix_tx else "") or ""
+                        _fix_trade_ref = (_fix_tx.trade_id if _fix_tx else "") or ""
+                        _fix_qty = float(_fix_tx.quantity or 0) if _fix_tx else None
+                        _ai_fix_expl = (
+                            f"AI suggests a likely typo match: FIX {_exec_id} <-> CCF {_ccf_exec_link}. "
+                            f"{_ai_reason} Corroboration: ISIN {_fix_isin}, side {_fix_side}, qty/price aligned."
+                        )
 
                         _fix_cid = _fix_case_map.get(_exec_id)
+                        _ccf_case_ids = [
+                            _ccf_case_map[r] for r in _ccf_refs_u
+                            if _ccf_case_map.get(r)
+                        ]
+                        _primary_cid = _fix_cid or (_ccf_case_ids[0] if _ccf_case_ids else None)
+                        if not _primary_cid:
+                            continue
 
-                        if _fix_cid:
+                        _snap_row = conn.execute(
 
-                            _snap_row = conn.execute(
+                            "SELECT feature_snapshot_json FROM recon_cases WHERE case_id=?",
 
-                                "SELECT feature_snapshot_json FROM recon_cases WHERE case_id=?",
+                            (_primary_cid,),
 
-                                (_fix_cid,),
+                        ).fetchone()
 
-                            ).fetchone()
+                        _snap = json.loads((_snap_row["feature_snapshot_json"] or "{}") if _snap_row else "{}")
+                        _snap["ai_match"] = _ai_ann
+                        _snap["merged_counterpart_case_ids"] = [cid for cid in _ccf_case_ids if cid != _primary_cid]
 
-                            _snap = json.loads((_snap_row["feature_snapshot_json"] or "{}") if _snap_row else "{}")
+                        conn.execute(
 
-                            _snap["ai_match"] = _ai_ann
+                            "UPDATE recon_cases SET reconciliation_status='AI Suggested Match', "
 
-                            conn.execute(
+                            "match_confidence=?, psr_id=?, camt_id=?, reference=?, counterparty=?, internal_amount=?, bank_amount=?, explanation=?, feature_snapshot_json=?, "
 
-                                "UPDATE recon_cases SET reconciliation_status='AI Suggested Match', "
-
-                                "match_confidence=?, feature_snapshot_json=?, "
-
-                                "updated_at=CURRENT_TIMESTAMP WHERE case_id=?",
-
-                                (_conf, json_dumps(_snap), _fix_cid),
-
-                            )
-
-                            phase_a_results.append({"case_id": _fix_cid, "ai_match": _ai_ann})
-
+                            "updated_at=CURRENT_TIMESTAMP WHERE case_id=?",
 
 
-                        for _ref in _ccf_refs:
+                            (_conf, _exec_id, _ccf_exec_link, _fix_trade_ref or None, _ccf_order_link or None, _fix_qty, _ccf_qty_total, _ai_fix_expl, json_dumps(_snap), _primary_cid),
 
-                            _ccf_cid = _ccf_case_map.get(_ref)
+                        )
 
-                            if _ccf_cid:
+                        _mirror_case_ids = [cid for cid in _ccf_case_ids if cid != _primary_cid]
+                        if _mirror_case_ids:
+                            _ph = ",".join("?" * len(_mirror_case_ids))
+                            conn.execute(f"DELETE FROM recon_cases WHERE case_id IN ({_ph})", _mirror_case_ids)
+                            conn.execute(f"DELETE FROM exception_workflow WHERE case_id IN ({_ph})", _mirror_case_ids)
+                            conn.execute(f"DELETE FROM recon_user_action_event WHERE case_id IN ({_ph})", _mirror_case_ids)
+                            conn.execute(f"DELETE FROM recon_manual_resolution WHERE case_id IN ({_ph})", _mirror_case_ids)
 
-                                _snap_row = conn.execute(
-
-                                    "SELECT feature_snapshot_json FROM recon_cases WHERE case_id=?",
-
-                                    (_ccf_cid,),
-
-                                ).fetchone()
-
-                                _snap = json.loads((_snap_row["feature_snapshot_json"] or "{}") if _snap_row else "{}")
-
-                                _snap["ai_match"] = {**_ai_ann, "matched_to": [_exec_id]}
-
-                                conn.execute(
-
-                                    "UPDATE recon_cases SET reconciliation_status='AI Suggested Match', "
-
-                                    "match_confidence=?, feature_snapshot_json=?, "
-
-                                    "updated_at=CURRENT_TIMESTAMP WHERE case_id=?",
-
-                                    (_conf, json_dumps(_snap), _ccf_cid),
-
-                                )
+                        phase_a_results.append({"case_id": _primary_cid, "ai_match": _ai_ann, "merged_count": len(_mirror_case_ids)})
 
                     conn.commit()
 
@@ -2188,6 +2229,8 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
                 logger.exception("Trade AI fuzzy phase failed: %s", _fz_exc)
 
                 print(f"[TRADE AI FUZZY] EXCEPTION: {_fz_exc}", flush=True, file=sys.stderr)
+
+                _trace(f"llm_exception={type(_fz_exc).__name__}: {_fz_exc}")
 
         else:
 
@@ -2347,7 +2390,12 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
                 )
 
-                raw = response.content[0].text
+                # Claude Sonnet 5 returns mixed blocks; take the first text block.
+                raw = next(
+                    (getattr(_b, "text", "") for _b in response.content
+                     if getattr(_b, "type", "") == "text" or hasattr(_b, "text")),
+                    "",
+                )
 
             else:
 

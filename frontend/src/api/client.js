@@ -15,10 +15,11 @@ async function request(path, options = {}) {
 
 function mapCase(row) {
   const suggestions = row.suggestions || [];
+  const isTrade = String(row.case_id || '').startsWith('TCASE-');
   return {
     ...row,
     result_id: row.case_id,
-    camt_id: row.camt_id || row.match_key,
+    camt_id: row.camt_id || (isTrade ? '' : row.match_key),
     suggested_action: suggestions[0]?.action || row.explanation || '-',
   };
 }

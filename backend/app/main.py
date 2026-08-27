@@ -514,6 +514,8 @@ def run_ai_pass() -> dict:
         _log("phase 3 trade verify starting")
         trade_results = verify_trade_exceptions()
         trade_verified = len(trade_results)
+        trade_ai_suggested = sum(1 for r in trade_results if isinstance(r, dict) and r.get("ai_match"))
+        trade_phase_b_verified = sum(1 for r in trade_results if isinstance(r, dict) and r.get("verdict"))
         _log(f"phase 3 done trade_verified={trade_verified}")
         logger.warning("AI full pass: trade_verified=%d", trade_verified)
         return {
@@ -521,6 +523,8 @@ def run_ai_pass() -> dict:
             "triaged_count": triaged,
             "verified_count": verified + trade_verified,
             "trade_verified_count": trade_verified,
+            "trade_ai_suggested_count": trade_ai_suggested,
+            "trade_phase_b_verified_count": trade_phase_b_verified,
         }
     except Exception as exc:
         _log(f"EXCEPTION: {exc}")
@@ -925,7 +929,7 @@ def export_cases(
 
     if status == 'ai_processed':
 
-        clauses.append("reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
+        clauses.append("reconciliation_status IN ('AI-Assisted Suggested Match', 'AI Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match')")
 
     elif status == 'exceptions':
 
@@ -1013,7 +1017,7 @@ def list_cases(status: Optional[str]=None, exception_only: bool=False, search: O
 
     if status == 'ai_processed':
 
-        clauses.append("(reconciliation_status IN ('AI-Assisted Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match') OR (json_extract(feature_snapshot_json, '$.ai_verification') IS NOT NULL AND rule_applied NOT LIKE 'TIER2C%'))")
+        clauses.append("(reconciliation_status IN ('AI-Assisted Suggested Match', 'AI Suggested Match', 'AI - Analyst Adjudication Required', 'AI Confirmed \u2014 No Match') OR (json_extract(feature_snapshot_json, '$.ai_verification') IS NOT NULL AND rule_applied NOT LIKE 'TIER2C%'))")
 
     elif status == 'exceptions':
 
@@ -1084,6 +1088,14 @@ def get_case(case_id: str) -> dict:
         psr_id = case_dict.get("psr_id")
 
         camt_id = case_dict.get("camt_id")
+
+        # Trade cases store ccf.clearing_ref in `counterparty`; remap so the CCF
+        # row shows it as its own Reference and no counterparty column is used.
+        if case_id.startswith("TCASE-"):
+            _ccf_order = case_dict.get("counterparty", "") or ""
+            case_dict["camt_pmt_ref"] = _ccf_order
+            case_dict["counterparty"] = ""
+            case_dict["camt_counterparty"] = ""
 
         if psr_id:
 
@@ -1168,6 +1180,8 @@ def get_similar_cases(case_id: str, limit: int = Query(5, ge=1, le=20)) -> dict:
         "Resolved Manually",
 
         "AI-Assisted Suggested Match",
+
+        "AI Suggested Match",
 
         "Post to Short or Over Ledger",
 
@@ -1517,7 +1531,7 @@ def _build_assistant_context() -> dict:
 
         ai_suggested = conn.execute(
 
-            "SELECT COUNT(*) AS cnt FROM recon_cases WHERE reconciliation_status='AI-Assisted Suggested Match'"
+            "SELECT COUNT(*) AS cnt FROM recon_cases WHERE reconciliation_status IN ('AI-Assisted Suggested Match', 'AI Suggested Match')"
 
         ).fetchone()["cnt"]
 

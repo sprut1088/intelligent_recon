@@ -1,56 +1,102 @@
-[17:57:44] endpoint hit
-[17:57:44] phase 1 triage starting
-[17:58:00] phase 1 done triaged=0
-[17:58:00] phase 2 payment verify starting
-[17:58:04] phase 2 done verified=0
-[17:58:04] phase 3 trade verify starting
-[17:58:04] EXCEPTION: name 'sys' is not defined
-[18:00:07] endpoint hit
-[18:00:07] phase 1 triage starting
-[18:00:13] phase 1 done triaged=0
-[18:00:13] phase 2 payment verify starting
-[18:00:17] phase 2 done verified=0
-[18:00:17] phase 3 trade verify starting
-[18:00:25] phase 3 done trade_verified=0
-[18:02:34] endpoint hit
-[18:02:34] phase 1 triage starting
-[18:02:43] phase 1 done triaged=0
-[18:02:43] phase 2 payment verify starting
-[18:02:46] phase 2 done verified=0
-[18:02:46] phase 3 trade verify starting
-[18:03:04] phase 3 done trade_verified=11
-[14:23:28] endpoint hit
-[14:23:28] phase 1 triage starting
-[14:23:28] phase 1 done triaged=0
-[14:23:28] phase 2 payment verify starting
-[14:23:28] phase 2 done verified=0
-[14:23:28] phase 3 trade verify starting
-[14:23:28] phase 3 done trade_verified=0
-[14:23:55] endpoint hit
-[14:23:55] phase 1 triage starting
-[14:23:55] phase 1 done triaged=0
-[14:23:55] phase 2 payment verify starting
-[14:23:55] phase 2 done verified=0
-[14:23:55] phase 3 trade verify starting
-[14:23:55] phase 3 done trade_verified=0
-[14:24:13] endpoint hit
-[14:24:13] phase 1 triage starting
-[14:24:22] phase 1 done triaged=0
-[14:24:22] phase 2 payment verify starting
-[14:24:22] phase 2 done verified=0
-[14:24:22] phase 3 trade verify starting
-[14:24:37] phase 3 done trade_verified=10
-[16:40:47] endpoint hit
-[16:40:47] phase 1 triage starting
-[16:40:47] phase 1 done triaged=0
-[16:40:47] phase 2 payment verify starting
-[16:40:47] phase 2 done verified=0
-[16:40:47] phase 3 trade verify starting
-[16:40:59] phase 3 done trade_verified=8
-[16:49:26] endpoint hit
-[16:49:26] phase 1 triage starting
-[16:49:26] phase 1 done triaged=0
-[16:49:26] phase 2 payment verify starting
-[16:49:26] phase 2 done verified=0
-[16:49:26] phase 3 trade verify starting
-[16:49:40] phase 3 done trade_verified=10
+[19:04:48] endpoint hit
+[19:04:48] phase 1 triage starting
+[19:04:50] phase 1 done triaged=0
+[19:04:50] phase 2 payment verify starting
+[19:04:50] phase 2 done verified=0
+[19:04:50] phase 3 trade verify starting
+[19:04:50] TRADE-AI | orphan_fix_exec_ids=['EXE10000065', 'EXE10000078', 'EXE10000088', 'EXE10000094', 'EXE10000095']
+[19:04:50] TRADE-AI | orphan_ccf_exec_ids=['EXE10', 'EXE1000008B', 'EXE10000092', 'EXE10000092', 'EXE1000095']
+[19:04:59] TRADE-AI | llm_raw_len=582 raw={"matches": [{"fix_exec_id": "EXE10000065", "ccf_refs": ["EXE10"], "confidence_pct": 95, "match_type": "1_TO_1", "reason": "Order_id, ISIN, side, qty, price match; exec_id truncated typo."}, {"fix_exec_id": "EXE10000088", "ccf_refs": ["EXE1000008B"], "confidence_pct": 95, "match_type": "1_TO_1", "reason": "Order_id, ISIN, side, qty, price match; exec_id char substitution typo."}, {"fix_exec_id": "EXE10000095", "ccf_refs": ["EXE1000095"], "confidence_pct": 97, "match_type": "1_TO_1", "reason": "I
+[19:04:59] TRADE-AI | llm_matches=[{"fix": "EXE10000065", "ccf": ["EXE10"], "conf": 95, "reason": "Order_id, ISIN, side, qty, price match; exec_id truncated typo."}, {"fix": "EXE10000088", "ccf": ["EXE1000008B"], "conf": 95, "reason": "Order_id, ISIN, side, qty, price match; exec_id char substitution typo."}, {"fix": "EXE10000095", "ccf": ["EXE1000095"], "conf": 97, "reason": "ISIN, side, qty, price match; exec_id missing digit, order_id punctuation typo."}]
+[19:05:05] phase 3 done trade_verified=12
+[19:07:59] endpoint hit
+[19:07:59] phase 1 triage starting
+[19:08:03] phase 1 done triaged=0
+[19:08:03] phase 2 payment verify starting
+[19:08:03] phase 2 done verified=0
+[19:08:03] phase 3 trade verify starting
+[19:08:03] TRADE-AI | orphan_fix_exec_ids=['EXE10000065', 'EXE10000078', 'EXE10000088', 'EXE10000094', 'EXE10000095']
+[19:08:03] TRADE-AI | orphan_ccf_exec_ids=['EXE10', 'EXE1000008B', 'EXE10000092', 'EXE10000092', 'EXE1000095']
+[19:08:09] TRADE-AI | llm_raw_len=582 raw={"matches": [{"fix_exec_id": "EXE10000065", "ccf_refs": ["EXE10"], "confidence_pct": 95, "match_type": "1_TO_1", "reason": "Order_id, ISIN, side, qty, price match exactly; exec_id truncated."}, {"fix_exec_id": "EXE10000088", "ccf_refs": ["EXE1000008B"], "confidence_pct": 95, "match_type": "1_TO_1", "reason": "Order_id, ISIN, side, qty, price match exactly; exec_id char substitution."}, {"fix_exec_id": "EXE10000095", "ccf_refs": ["EXE1000095"], "confidence_pct": 95, "match_type": "1_TO_1", "reaso
+[19:08:09] TRADE-AI | llm_matches=[{"fix": "EXE10000065", "ccf": ["EXE10"], "conf": 95, "reason": "Order_id, ISIN, side, qty, price match exactly; exec_id truncated."}, {"fix": "EXE10000088", "ccf": ["EXE1000008B"], "conf": 95, "reason": "Order_id, ISIN, side, qty, price match exactly; exec_id char substitution."}, {"fix": "EXE10000095", "ccf": ["EXE1000095"], "conf": 95, "reason": "ISIN, side, qty, price match; exec_id missing digit, order_id minor typo."}]
+[19:08:15] phase 3 done trade_verified=12
+[19:17:17] endpoint hit
+[19:17:17] phase 1 triage starting
+[19:17:19] phase 1 done triaged=0
+[19:17:19] phase 2 payment verify starting
+[19:17:19] phase 2 done verified=0
+[19:17:19] phase 3 trade verify starting
+[19:17:20] TRADE-AI | orphan_fix_exec_ids=['EXE10000065', 'EXE10000078', 'EXE10000088', 'EXE10000094', 'EXE10000095']
+[19:17:20] TRADE-AI | orphan_ccf_exec_ids=['EXE10', 'EXE1000008B', 'EXE10000092', 'EXE10000092', 'EXE1000095']
+[19:17:27] TRADE-AI | llm_raw_len=621 raw={"matches": [{"fix_exec_id": "EXE10000065", "ccf_refs": ["EXE10"], "confidence_pct": 96, "match_type": "1_TO_1", "reason": "Order_id exact match; ISIN, side, qty, price identical despite truncated exec_id."}, {"fix_exec_id": "EXE10000088", "ccf_refs": ["EXE1000008B"], "confidence_pct": 96, "match_type": "1_TO_1", "reason": "Order_id exact match; ISIN, side, qty, price identical; 1-char substitution in exec_id."}, {"fix_exec_id": "EXE10000095", "ccf_refs": ["EXE1000095"], "confidence_pct": 95, "m
+[19:17:27] TRADE-AI | llm_matches=[{"fix": "EXE10000065", "ccf": ["EXE10"], "conf": 96, "reason": "Order_id exact match; ISIN, side, qty, price identical despite truncated exec_id."}, {"fix": "EXE10000088", "ccf": ["EXE1000008B"], "conf": 96, "reason": "Order_id exact match; ISIN, side, qty, price identical; 1-char substitution in exec_id."}, {"fix": "EXE10000095", "ccf": ["EXE1000095"], "conf": 95, "reason": "ISIN, side, qty, price match; exec_id missing digit, order_id has char substitution."}]
+[19:17:27] phase 3 done trade_verified=3
+[19:21:24] endpoint hit
+[19:21:24] phase 1 triage starting
+[19:21:29] phase 1 done triaged=0
+[19:21:29] phase 2 payment verify starting
+[19:21:29] phase 2 done verified=0
+[19:21:29] phase 3 trade verify starting
+[19:21:29] TRADE-AI | orphan_fix_exec_ids=['EXE10000065', 'EXE10000078', 'EXE10000088', 'EXE10000094', 'EXE10000095']
+[19:21:29] TRADE-AI | orphan_ccf_exec_ids=['EXE10', 'EXE1000008B', 'EXE10000092', 'EXE10000092', 'EXE1000095']
+[19:21:35] TRADE-AI | llm_raw_len=616 raw={"matches": [{"fix_exec_id": "EXE10000065", "ccf_refs": ["EXE10"], "confidence_pct": 97, "match_type": "1_TO_1", "reason": "Order_id exact match; ISIN, side, qty, price identical; exec_id truncated."}, {"fix_exec_id": "EXE10000088", "ccf_refs": ["EXE1000008B"], "confidence_pct": 96, "match_type": "1_TO_1", "reason": "Order_id exact match; ISIN, side, qty, price identical; exec_id 1-char substitution."}, {"fix_exec_id": "EXE10000095", "ccf_refs": ["EXE1000095"], "confidence_pct": 96, "match_type"
+[19:21:35] TRADE-AI | llm_matches=[{"fix": "EXE10000065", "ccf": ["EXE10"], "conf": 97, "reason": "Order_id exact match; ISIN, side, qty, price identical; exec_id truncated."}, {"fix": "EXE10000088", "ccf": ["EXE1000008B"], "conf": 96, "reason": "Order_id exact match; ISIN, side, qty, price identical; exec_id 1-char substitution."}, {"fix": "EXE10000095", "ccf": ["EXE1000095"], "conf": 96, "reason": "ISIN, side, qty, price identical; exec_id missing digit, order_id minor punctuation diff."}]
+[19:21:42] phase 3 done trade_verified=12
+[19:33:20] endpoint hit
+[19:33:20] phase 1 triage starting
+[19:33:20] phase 1 done triaged=0
+[19:33:20] phase 2 payment verify starting
+[19:33:20] phase 2 done verified=0
+[19:33:20] phase 3 trade verify starting
+[19:33:20] TRADE-AI | orphan_fix_exec_ids=['EXE10000065', 'EXE10000078', 'EXE10000088', 'EXE10000094', 'EXE10000095']
+[19:33:20] TRADE-AI | orphan_ccf_exec_ids=['EXE10', 'EXE1000008B', 'EXE10000092', 'EXE10000092', 'EXE1000095']
+[19:33:48] TRADE-AI | llm_raw_len=576 raw={"matches": [{"fix_exec_id": "EXE10000065", "ccf_refs": ["EXE10"], "confidence_pct": 97, "match_type": "1_TO_1", "reason": "Order_id, ISIN, side, qty, price match; exec_id truncated typo."}, {"fix_exec_id": "EXE10000088", "ccf_refs": ["EXE1000008B"], "confidence_pct": 96, "match_type": "1_TO_1", "reason": "Order_id, ISIN, side, qty, price match; exec_id char substitution typo."}, {"fix_exec_id": "EXE10000095", "ccf_refs": ["EXE1000095"], "confidence_pct": 96, "match_type": "1_TO_1", "reason": "I
+[19:33:48] TRADE-AI | llm_matches=[{"fix": "EXE10000065", "ccf": ["EXE10"], "conf": 97, "reason": "Order_id, ISIN, side, qty, price match; exec_id truncated typo."}, {"fix": "EXE10000088", "ccf": ["EXE1000008B"], "conf": 96, "reason": "Order_id, ISIN, side, qty, price match; exec_id char substitution typo."}, {"fix": "EXE10000095", "ccf": ["EXE1000095"], "conf": 96, "reason": "ISIN, side, qty, price match; exec_id missing digit, order_id minor typo."}]
+[19:33:48] phase 3 done trade_verified=3
+[19:38:58] endpoint hit
+[19:38:58] phase 1 triage starting
+[19:39:01] phase 1 done triaged=0
+[19:39:01] phase 2 payment verify starting
+[19:39:01] phase 2 done verified=0
+[19:39:01] phase 3 trade verify starting
+[19:39:01] TRADE-AI | orphan_fix_exec_ids=['EXE10000065', 'EXE10000078', 'EXE10000088', 'EXE10000094', 'EXE10000095']
+[19:39:01] TRADE-AI | orphan_ccf_exec_ids=['EXE10', 'EXE1000008B', 'EXE10000092', 'EXE10000092', 'EXE1000095']
+[19:39:10] TRADE-AI | llm_raw_len=613 raw={"matches": [{"fix_exec_id": "EXE10000065", "ccf_refs": ["EXE10"], "confidence_pct": 96, "match_type": "1_TO_1", "reason": "Order_id, ISIN, side, qty, price match; exec_id truncated data-entry typo."}, {"fix_exec_id": "EXE10000088", "ccf_refs": ["EXE1000008B"], "confidence_pct": 97, "match_type": "1_TO_1", "reason": "ISIN, side, qty, price, order_id match exactly; exec_id has char substitution typo."}, {"fix_exec_id": "EXE10000095", "ccf_refs": ["EXE1000095"], "confidence_pct": 96, "match_type":
+[19:39:10] TRADE-AI | llm_matches=[{"fix": "EXE10000065", "ccf": ["EXE10"], "conf": 96, "reason": "Order_id, ISIN, side, qty, price match; exec_id truncated data-entry typo."}, {"fix": "EXE10000088", "ccf": ["EXE1000008B"], "conf": 97, "reason": "ISIN, side, qty, price, order_id match exactly; exec_id has char substitution typo."}, {"fix": "EXE10000095", "ccf": ["EXE1000095"], "conf": 96, "reason": "ISIN, side, qty, price match exactly; exec_id missing digit, order_id punctuation typo."}]
+[19:39:10] phase 3 done trade_verified=3
+[19:42:04] endpoint hit
+[19:42:04] phase 1 triage starting
+[19:42:09] phase 1 done triaged=0
+[19:42:09] phase 2 payment verify starting
+[19:42:09] phase 2 done verified=0
+[19:42:09] phase 3 trade verify starting
+[19:42:09] TRADE-AI | orphan_fix_exec_ids=['EXE10000065', 'EXE10000078', 'EXE10000088', 'EXE10000094', 'EXE10000095']
+[19:42:09] TRADE-AI | orphan_ccf_exec_ids=['EXE10', 'EXE1000008B', 'EXE10000092', 'EXE10000092', 'EXE1000095']
+[19:42:15] TRADE-AI | llm_raw_len=596 raw={"matches": [{"fix_exec_id": "EXE10000065", "ccf_refs": ["EXE10"], "confidence_pct": 96, "match_type": "1_TO_1", "reason": "Order_id, ISIN, side, qty, price match exactly; exec_id truncated typo."}, {"fix_exec_id": "EXE10000088", "ccf_refs": ["EXE1000008B"], "confidence_pct": 96, "match_type": "1_TO_1", "reason": "Order_id, ISIN, side, qty, price match; exec_id has char substitution typo."}, {"fix_exec_id": "EXE10000095", "ccf_refs": ["EXE1000095"], "confidence_pct": 96, "match_type": "1_TO_1", 
+[19:42:15] TRADE-AI | llm_matches=[{"fix": "EXE10000065", "ccf": ["EXE10"], "conf": 96, "reason": "Order_id, ISIN, side, qty, price match exactly; exec_id truncated typo."}, {"fix": "EXE10000088", "ccf": ["EXE1000008B"], "conf": 96, "reason": "Order_id, ISIN, side, qty, price match; exec_id has char substitution typo."}, {"fix": "EXE10000095", "ccf": ["EXE1000095"], "conf": 96, "reason": "ISIN, side, qty, price match exactly; exec_id missing digit, order_id minor typo."}]
+[19:42:21] phase 3 done trade_verified=12
+[19:44:37] endpoint hit
+[19:44:37] phase 1 triage starting
+[19:44:39] phase 1 done triaged=0
+[19:44:39] phase 2 payment verify starting
+[19:44:39] phase 2 done verified=0
+[19:44:39] phase 3 trade verify starting
+[19:44:39] TRADE-AI | orphan_fix_exec_ids=['EXE10000065', 'EXE10000078', 'EXE10000088', 'EXE10000094', 'EXE10000095']
+[19:44:39] TRADE-AI | orphan_ccf_exec_ids=['EXE10', 'EXE1000008B', 'EXE10000092', 'EXE10000092', 'EXE1000095']
+[19:44:46] TRADE-AI | llm_raw_len=605 raw={"matches": [{"fix_exec_id": "EXE10000065", "ccf_refs": ["EXE10"], "confidence_pct": 97, "match_type": "1_TO_1", "reason": "Order_id exact match; ISIN/side/qty/price identical; exec_id truncated."}, {"fix_exec_id": "EXE10000088", "ccf_refs": ["EXE1000008B"], "confidence_pct": 97, "match_type": "1_TO_1", "reason": "Order_id exact match; ISIN/side/qty/price identical; exec_id char substitution."}, {"fix_exec_id": "EXE10000095", "ccf_refs": ["EXE1000095"], "confidence_pct": 96, "match_type": "1_TO_
+[19:44:46] TRADE-AI | llm_matches=[{"fix": "EXE10000065", "ccf": ["EXE10"], "conf": 97, "reason": "Order_id exact match; ISIN/side/qty/price identical; exec_id truncated."}, {"fix": "EXE10000088", "ccf": ["EXE1000008B"], "conf": 97, "reason": "Order_id exact match; ISIN/side/qty/price identical; exec_id char substitution."}, {"fix": "EXE10000095", "ccf": ["EXE1000095"], "conf": 96, "reason": "ISIN/side/qty/price identical; exec_id missing digit, order_id minor punctuation diff."}]
+[19:44:46] phase 3 done trade_verified=3
+[20:23:17] endpoint hit
+[20:23:17] phase 1 triage starting
+[20:23:17] phase 1 done triaged=0
+[20:23:17] phase 2 payment verify starting
+[20:23:17] phase 2 done verified=0
+[20:23:17] phase 3 trade verify starting
+[20:23:17] TRADE-AI | orphan_fix_exec_ids=['EXE10000065', 'EXE10000078', 'EXE10000088', 'EXE10000094', 'EXE10000095']
+[20:23:17] TRADE-AI | orphan_ccf_exec_ids=['EXE10', 'EXE1000008B', 'EXE10000092', 'EXE10000092', 'EXE1000095']
+[20:23:25] TRADE-AI | llm_raw_len=595 raw={"matches": [
+  {"fix_exec_id": "EXE10000065", "ccf_refs": ["EXE10"], "confidence_pct": 95, "match_type": "1_TO_1", "reason": "Order_id, ISIN, side, qty, price match; exec_id truncated typo."},
+  {"fix_exec_id": "EXE10000088", "ccf_refs": ["EXE1000008B"], "confidence_pct": 95, "match_type": "1_TO_1", "reason": "Order_id, ISIN, side, qty, price match; single char substitution in exec_id."},
+  {"fix_exec_id": "EXE10000095", "ccf_refs": ["EXE1000095"], "confidence_pct": 95, "match_type": "1_TO_1", 
+[20:23:25] TRADE-AI | llm_matches=[{"fix": "EXE10000065", "ccf": ["EXE10"], "conf": 95, "reason": "Order_id, ISIN, side, qty, price match; exec_id truncated typo."}, {"fix": "EXE10000088", "ccf": ["EXE1000008B"], "conf": 95, "reason": "Order_id, ISIN, side, qty, price match; single char substitution in exec_id."}, {"fix": "EXE10000095", "ccf": ["EXE1000095"], "conf": 95, "reason": "ISIN, side, qty, price match; exec_id missing digit, order_id punctuation typo."}]
+[20:23:32] phase 3 done trade_verified=12
