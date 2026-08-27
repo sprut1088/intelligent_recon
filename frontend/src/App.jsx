@@ -4,16 +4,12 @@ import { api } from './api/client';
 const fmtGroupName = (name) => name === 'default' ? 'Default Group' : name;
 
 const tabs = [
-  ['workspace', 'Control Room'],
   ['intake', 'Data Intake'],
-  ['dataprep', 'Data Prep Studio'],
-  ['matching', 'Matching Studio'],
   ['pattern-builder', 'Pattern Builder'],
   ['patterns', 'Pattern Manager'],
   ['results', 'Results Workbench'],
   ['exceptions', 'Exceptions'],
   ['dashboards', 'Dashboards'],
-  ['learning', 'Learning Lab'],
   ['assistant', 'Recon Copilot'],
   ['governance', 'Governance'],
 ];
@@ -3373,7 +3369,7 @@ function Governance({ events, workspace, onSnapshot }) {
 }
 
 export default function App() {
-  const [active, setActive] = useState('workspace');
+  const [active, setActive] = useState('intake');
   const [summary, setSummary] = useState({ statuses: [], reasons: [] });
   const [results, setResults] = useState({ items: [] });
   const [batches, setBatches] = useState({ items: [] });
@@ -3672,8 +3668,6 @@ export default function App() {
           </div>
           <div className="topbar-actions">
             {loading && <span className="loading">Working…</span>}
-            <Tag tone="success">FastAPI 8090</Tag>
-            <Tag tone="info">React 8181</Tag>
           </div>
         </header>
         {screen}

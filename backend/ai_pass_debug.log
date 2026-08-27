@@ -19,3 +19,38 @@
 [18:02:46] phase 2 done verified=0
 [18:02:46] phase 3 trade verify starting
 [18:03:04] phase 3 done trade_verified=11
+[14:23:28] endpoint hit
+[14:23:28] phase 1 triage starting
+[14:23:28] phase 1 done triaged=0
+[14:23:28] phase 2 payment verify starting
+[14:23:28] phase 2 done verified=0
+[14:23:28] phase 3 trade verify starting
+[14:23:28] phase 3 done trade_verified=0
+[14:23:55] endpoint hit
+[14:23:55] phase 1 triage starting
+[14:23:55] phase 1 done triaged=0
+[14:23:55] phase 2 payment verify starting
+[14:23:55] phase 2 done verified=0
+[14:23:55] phase 3 trade verify starting
+[14:23:55] phase 3 done trade_verified=0
+[14:24:13] endpoint hit
+[14:24:13] phase 1 triage starting
+[14:24:22] phase 1 done triaged=0
+[14:24:22] phase 2 payment verify starting
+[14:24:22] phase 2 done verified=0
+[14:24:22] phase 3 trade verify starting
+[14:24:37] phase 3 done trade_verified=10
+[16:40:47] endpoint hit
+[16:40:47] phase 1 triage starting
+[16:40:47] phase 1 done triaged=0
+[16:40:47] phase 2 payment verify starting
+[16:40:47] phase 2 done verified=0
+[16:40:47] phase 3 trade verify starting
+[16:40:59] phase 3 done trade_verified=8
+[16:49:26] endpoint hit
+[16:49:26] phase 1 triage starting
+[16:49:26] phase 1 done triaged=0
+[16:49:26] phase 2 payment verify starting
+[16:49:26] phase 2 done verified=0
+[16:49:26] phase 3 trade verify starting
+[16:49:40] phase 3 done trade_verified=10

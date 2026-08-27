@@ -204,7 +204,17 @@ FIX_SIDE_MAP = {"1": "BUY", "2": "SELL", "3": "BUY_MINUS", "4": "SELL_PLUS", "5"
 
 
 def parse_fix_file(path: Path) -> List[FixTransaction]:
-    """Parse a pipe-delimited FIX 4.x execution report file."""
+    """Parse a pipe-delimited FIX 4.x execution report file.
+
+    FIX definition: real-time FIX protocol tags separated by pipe ('|').
+    Key tags per file definition:
+        Tag 17 = ExecutionID   (primary identifier)
+        Tag 37 = Order ID      (Front Office order reference)
+        Tag 48 = ISIN
+        Tag 54 = Side (1=Buy, 2=Sell)
+        Tag 38 = Order Qty
+        Tag 44 = Price
+    """
     logger.info("Parsing FIX file: %s", path)
     transactions: List[FixTransaction] = []
     with Path(path).open("r", encoding="utf-8") as handle:
@@ -220,8 +230,9 @@ def parse_fix_file(path: Path) -> List[FixTransaction]:
             # Only process execution reports (MsgType 35=8)
             if tags.get("35") != "8":
                 continue
-            trade_id = tags.get("11", "")
-            exec_id = tags.get("37", "")
+            # Tag 37 = FO Order ID; Tag 17 = ExecutionID (primary key for matching).
+            trade_id = tags.get("37", "")
+            exec_id = tags.get("17", "") or tags.get("37", "")
             isin = tags.get("48", tags.get("55", ""))
             side = FIX_SIDE_MAP.get(tags.get("54", ""), "UNKNOWN")
             try:
@@ -251,8 +262,19 @@ CCF_SIDE_MAP = {"B": "BUY", "S": "SELL"}
 def parse_ccf_file(path: Path) -> List[CcfTransaction]:
     """Parse a fixed-width custodian/clearing file (.ccf).
 
-    Format (72 chars): record_type(0:10) seq(10:18) order_ref(18:30)
-    exec_id(30:42) isin(42:54) side(54) qty(55:63) price(63:72)
+    CCF definition: structured fixed-width banking flat layout with a
+    transaction header prefix, an internal custodian reference, then
+    positional blocks for FO Order ID, Execution ID, ISIN, Side, Qty, Price.
+
+    Layout (72 chars):
+        [0:10]  transaction header prefix
+        [10:18] internal custodian reference
+        [18:30] Front Office Order ID          -> clearing_ref
+        [30:42] Execution ID                    -> exec_id (matches FIX Tag 17)
+        [42:54] 12-character ISIN
+        [54]    1-character Side token (B/S)
+        [55:63] 8-digit padded quantity
+        [63:72] 9-digit padded price
     """
     logger.info("Parsing CCF file: %s", path)
     transactions: List[CcfTransaction] = []

@@ -14,8 +14,9 @@ class TestFixParser:
     def test_parse_sample(self):
         txns = parse_fix_file(FIXTURE_DIR / "front_office_exec.fix")
         assert len(txns) == 99
-        assert txns[0].trade_id == ""  # tag 11 not present; tag 37 is exec_id
-        assert txns[0].exec_id == "ORD20260001"
+        # Tag 37 -> FO Order ID (trade_id); Tag 17 -> ExecutionID (exec_id, primary key)
+        assert txns[0].trade_id == "ORD20260001"
+        assert txns[0].exec_id == "EXE10000001"
         assert txns[0].isin == "US5949181045"
         assert txns[0].side == "BUY"
         assert txns[0].quantity == 2500.0
@@ -53,11 +54,11 @@ class TestTradeReconciliation:
         assert len(matched) > 0
         for case in matched:
             assert case.match_confidence == 100
-            assert case.rule_applied == "T1_ORDER_REF_EXACT"
+            assert case.rule_applied == "T1_EXEC_ID_EXACT"
 
     def test_quantity_mismatch_detected(self):
-        fix = [FixTransaction("", "ORD-001", "US1234561098", "BUY", 10_000, 100.0, "", "", "USD", "")]
-        ccf = [CcfTransaction("ORD-001", "EXEC-1", "US1234561098", "BUY", 9_500, 100.0, "", "")]
+        fix = [FixTransaction("ORD-001", "EXE-001", "US1234561098", "BUY", 10_000, 100.0, "", "", "USD", "")]
+        ccf = [CcfTransaction("ORD-001", "EXE-001", "US1234561098", "BUY", 9_500, 100.0, "", "")]
         cases = reconcile_trades(fix, ccf)
         assert len(cases) == 1
         assert cases[0].exception_flag == "Y"
@@ -65,8 +66,8 @@ class TestTradeReconciliation:
         assert cases[0].variance == 500.0
 
     def test_price_break_detected(self):
-        fix = [FixTransaction("", "ORD-001", "US1234561098", "BUY", 1000, 174.95, "", "", "USD", "")]
-        ccf = [CcfTransaction("ORD-001", "EXEC-1", "US1234561098", "BUY", 1000, 164.95, "", "")]
+        fix = [FixTransaction("ORD-001", "EXE-001", "US1234561098", "BUY", 1000, 174.95, "", "", "USD", "")]
+        ccf = [CcfTransaction("ORD-001", "EXE-001", "US1234561098", "BUY", 1000, 164.95, "", "")]
         cases = reconcile_trades(fix, ccf)
         assert len(cases) == 1
         assert cases[0].exception_flag == "Y"
@@ -74,16 +75,17 @@ class TestTradeReconciliation:
         assert cases[0].rule_applied == "T2_PRICE_BREAK"
 
     def test_small_price_diff_auto_closes(self):
-        fix = [FixTransaction("", "ORD-001", "US1234561098", "BUY", 1000, 150.14, "", "", "USD", "")]
-        ccf = [CcfTransaction("ORD-001", "EXEC-1", "US1234561098", "BUY", 1000, 150.19, "", "")]
+        fix = [FixTransaction("ORD-001", "EXE-001", "US1234561098", "BUY", 1000, 150.14, "", "", "USD", "")]
+        ccf = [CcfTransaction("ORD-001", "EXE-001", "US1234561098", "BUY", 1000, 150.19, "", "")]
         cases = reconcile_trades(fix, ccf)
         assert len(cases) == 1
         assert cases[0].exception_flag == "N"
         assert cases[0].match_confidence == 100
 
     def test_orphan_trade(self):
-        fix = [FixTransaction("", "ORD-001", "US9999999999", "BUY", 1_000, 1.0, "", "", "USD", "")]
-        ccf = [CcfTransaction("ORD-002", "EXEC-1", "US1234561098", "BUY", 10_000, 1.0, "", "")]
+        # Different exec_ids on each side -> no match, two orphans.
+        fix = [FixTransaction("ORD-001", "EXE-A", "US9999999999", "BUY", 1_000, 1.0, "", "", "USD", "")]
+        ccf = [CcfTransaction("ORD-002", "EXE-B", "US1234561098", "BUY", 10_000, 1.0, "", "")]
         cases = reconcile_trades(fix, ccf)
         assert len(cases) == 2
         orphan_fix = next(c for c in cases if c.reason_code == "ORPHAN_FIX")

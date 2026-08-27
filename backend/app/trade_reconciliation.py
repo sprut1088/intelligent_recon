@@ -76,14 +76,15 @@ def _build_trade_case(
     days = safe_date_diff(value_dt, booking_dt) if value_dt and booking_dt else 0
     feat = _trade_features(fix, ccf)
     feat["score_breakdown"] = _trade_score_breakdown(feat, rule, confidence)
+    # Trade recon matches on FIX Tag 17 ExecutionID <-> CCF Execution ID (positions 30:42).
     return ReconCase(
         case_id=f"TCASE-{idx:06d}",
-        match_key=ccf.clearing_ref if ccf else (fix.trade_id if fix else f"TCASE-{idx:06d}"),
+        match_key=ccf.exec_id if ccf else (fix.exec_id if fix else f"TCASE-{idx:06d}"),
         psr_id=fix.exec_id if fix else "",
-        camt_id=ccf.clearing_ref if ccf else "",
-        reference=fix.exec_id if fix else "",
+        camt_id=ccf.exec_id if ccf else "",
+        reference=fix.trade_id if fix else "",
         invoice="",
-        counterparty=ccf.exec_id if ccf else "",
+        counterparty=ccf.clearing_ref if ccf else "",
         internal_amount=internal_amt,
         bank_amount=external_amt,
         variance=variance,
@@ -119,74 +120,76 @@ def reconcile_trades(
     idx = 1
     used_ccf: set = set()
 
-    ccf_by_ref: Dict[str, CcfTransaction] = {}
+    # Match FIX Tag 17 ExecutionID against CCF Execution ID (positions 30:42).
+    ccf_by_exec_id: Dict[str, CcfTransaction] = {}
     for ccf in ccf_transactions:
-        ccf_by_ref[ccf.clearing_ref] = ccf
+        if ccf.exec_id:
+            ccf_by_exec_id[ccf.exec_id] = ccf
 
     for fix in fix_transactions:
-        matched_ccf = ccf_by_ref.get(fix.exec_id)
+        matched_ccf = ccf_by_exec_id.get(fix.exec_id) if fix.exec_id else None
 
         if matched_ccf:
-            used_ccf.add(matched_ccf.clearing_ref)
+            used_ccf.add(matched_ccf.exec_id)
             qty_var   = abs(fix.quantity - matched_ccf.quantity)
             price_diff = abs(fix.price - matched_ccf.price)
 
             if qty_var <= quantity_tolerance and price_diff <= price_tolerance:
-                # T1 — order ref + qty (≤1 share) + price (≤$0.01) → auto-close
+                # T1 — exec ID + qty (≤1 share) + price (≤$0.01) → auto-close
                 conf = 100 if qty_var < 0.01 and price_diff < 0.001 else 97
-                rule = "T1_ORDER_REF_EXACT" if conf == 100 else "T1_ORDER_REF_QTY_TOL"
+                rule = "T1_EXEC_ID_EXACT" if conf == 100 else "T1_EXEC_ID_QTY_TOL"
                 qty_note   = f" (qty variance {fix.quantity - matched_ccf.quantity:+.0f})" if qty_var >= 0.01 else ""
                 price_note = f" (price variance ${fix.price - matched_ccf.price:+.4f})" if price_diff >= 0.001 else ""
                 cases.append(_build_trade_case(
                     idx, fix, matched_ccf,
-                    status="Matched & Settled (Auto-Close)", reason="ORDER_REF_EXACT",
+                    status="Matched & Settled (Auto-Close)", reason="EXEC_ID_EXACT",
                     match_type="1_TO_1", confidence=conf, rule=rule, exception_flag="N",
-                    explanation=f"Order {fix.exec_id} matched by reference. ISIN {fix.isin}, qty {fix.quantity:,.0f}, price ${fix.price:,.2f} confirmed by custodian.{qty_note}{price_note}",
+                    explanation=f"Execution {fix.exec_id} (Order {fix.trade_id}) matched to custodian exec {matched_ccf.exec_id} (Order {matched_ccf.clearing_ref}). ISIN {fix.isin}, qty {fix.quantity:,.0f}, price ${fix.price:,.2f} confirmed.{qty_note}{price_note}",
                 ))
             elif qty_var <= quantity_tolerance:
-                # T2 — ref + qty match but price break
+                # T2 — exec ID + qty match but price break
                 pvar = round(fix.price - matched_ccf.price, 4)
                 cases.append(_build_trade_case(
                     idx, fix, matched_ccf,
                     status="Exception - Price Variance", reason="PRICE_BREAK",
                     match_type="1_TO_1", confidence=94, rule="T2_PRICE_BREAK", exception_flag="Y",
-                    explanation=f"Order {fix.exec_id} matched by reference. Qty confirmed but price differs: FO ${fix.price:,.2f} vs Custodian ${matched_ccf.price:,.2f} ({pvar:+,.4f}).",
+                    explanation=f"Execution {fix.exec_id} matched by ExecutionID. Qty confirmed but price differs: FO ${fix.price:,.2f} vs Custodian ${matched_ccf.price:,.2f} ({pvar:+,.4f}).",
                     suggestions=[{"action": "ROUTE_TO_REVIEW", "desk": "Mid-Office", "price_variance": pvar}],
                     amount_override=(fix.price, matched_ccf.price, pvar),
                 ))
             else:
-                # T3 — ref match but qty break
+                # T3 — exec ID match but qty break
                 var = round(fix.quantity - matched_ccf.quantity, 2)
                 cases.append(_build_trade_case(
                     idx, fix, matched_ccf,
                     status="Exception - Quantity Mismatch", reason="QUANTITY_MISMATCH",
                     match_type="1_TO_1", confidence=75, rule="T3_QUANTITY_BREAK", exception_flag="Y",
-                    explanation=f"Order {fix.exec_id} matched by reference. ISIN confirmed but qty differs: FO {fix.quantity:,.0f} vs Custodian {matched_ccf.quantity:,.0f} (variance {var:+,.0f}).",
+                    explanation=f"Execution {fix.exec_id} matched by ExecutionID. ISIN confirmed but qty differs: FO {fix.quantity:,.0f} vs Custodian {matched_ccf.quantity:,.0f} (variance {var:+,.0f}).",
                     suggestions=[{"action": "ROUTE_TO_REVIEW", "desk": "Broker Allocation", "variance": var}],
                 ))
             idx += 1
             continue
 
-        # T4 — orphan FIX: no custodian record matched this order reference
+        # T4 — orphan FIX: no custodian execution matched this ExecutionID
         cases.append(_build_trade_case(
             idx, fix, None,
             status="Exception - Unmatched Trade", reason="ORPHAN_FIX",
             match_type="UNMATCHED_TRADE", confidence=0, rule="T4_ORPHAN_TRADE", exception_flag="Y",
-            explanation=f"Trade {fix.exec_id} (ISIN {fix.isin}, {fix.side} {fix.quantity:,.0f}) has no matching custodian record. Fuzzy matching available via AI Pass.",
-            suggestions=[{"action": "INVESTIGATE", "desk": "Operations", "trade_id": fix.exec_id}],
+            explanation=f"Execution {fix.exec_id} (Order {fix.trade_id}, ISIN {fix.isin}, {fix.side} {fix.quantity:,.0f}) has no matching custodian record. Fuzzy matching available via AI Pass.",
+            suggestions=[{"action": "INVESTIGATE", "desk": "Operations", "exec_id": fix.exec_id, "trade_id": fix.trade_id}],
         ))
         idx += 1
 
-    # T5 — orphan CCF: no FIX claimed this custodian record
+    # T5 — orphan CCF: no FIX execution claimed this custodian record
     for ccf in ccf_transactions:
-        if ccf.clearing_ref in used_ccf:
+        if ccf.exec_id in used_ccf:
             continue
         cases.append(_build_trade_case(
             idx, None, ccf,
             status="Exception - Unmatched Custodian Record", reason="ORPHAN_CCF",
             match_type="UNMATCHED_CUSTODIAN", confidence=0, rule="T5_ORPHAN_CUSTODIAN", exception_flag="Y",
-            explanation=f"Custodian record {ccf.clearing_ref} (ISIN {ccf.isin}, {ccf.quantity:,.0f}) has no matching front-office trade. Fuzzy matching available via AI Pass.",
-            suggestions=[{"action": "INVESTIGATE", "desk": "Operations", "clearing_ref": ccf.clearing_ref}],
+            explanation=f"Custodian execution {ccf.exec_id} (Order {ccf.clearing_ref}, ISIN {ccf.isin}, {ccf.quantity:,.0f}) has no matching front-office trade. Fuzzy matching available via AI Pass.",
+            suggestions=[{"action": "INVESTIGATE", "desk": "Operations", "exec_id": ccf.exec_id, "clearing_ref": ccf.clearing_ref}],
         ))
         idx += 1
 

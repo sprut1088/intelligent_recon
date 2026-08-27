@@ -1758,13 +1758,17 @@ TRADE_FUZZY_SYSTEM_PROMPT = (
 
     "You are a trade operations specialist. The automated reconciliation engine has matched "
 
-    "exact references. These records remain unmatched and may have minor data discrepancies.\n\n"
+    "exact ExecutionIDs (FIX Tag 17 <-> CCF Execution ID). These records remain unmatched and "
+
+    "may have minor data discrepancies.\n\n"
+
+    "Each record includes both exec_id (primary identifier) and order_id (secondary evidence).\n"
 
     "Your task: identify which Unmatched FIX executions pair with which Unmatched CCF custodian "
 
     "records. Consider:\n"
 
-    "- References that differ by punctuation, whitespace, case, truncation, or 1-2 character errors\n"
+    "- exec_id or order_id differing by punctuation, whitespace, case, truncation, or 1-2 character errors\n"
 
     "- Quantities within \u00b11 share\n"
 
@@ -1772,7 +1776,9 @@ TRADE_FUZZY_SYSTEM_PROMPT = (
 
     "- Split fills: one FIX matched to multiple CCFs whose quantities sum to the FIX quantity\n\n"
 
-    "Return raw JSON only \u2014 no markdown, no explanation outside the JSON:\n"
+    "Return raw JSON only \u2014 no markdown, no explanation outside the JSON. "
+
+    "fix_exec_id and ccf_refs must use the exec_id values (not order_id):\n"
 
     '{"matches": [{"fix_exec_id": "...", "ccf_refs": ["..."], "confidence_pct": 0-100, '
 
@@ -1935,9 +1941,9 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
 
 
-        _fix_by_id  = {f.exec_id: f      for f in parse_fix_file(_fz_fix_path)}
+        _fix_by_id      = {f.exec_id: f for f in parse_fix_file(_fz_fix_path) if f.exec_id}
 
-        _ccf_by_ref = {c.clearing_ref: c for c in parse_ccf_file(_fz_ccf_path)}
+        _ccf_by_exec_id = {c.exec_id: c for c in parse_ccf_file(_fz_ccf_path) if c.exec_id}
 
         logger.info(
 
@@ -1951,14 +1957,15 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
 
 
+        # Payload identifiers: exec_id (FIX Tag 17 / CCF exec block) is the matching key;
+        # order_id (FIX Tag 37 / CCF clearing_ref) is exposed for LLM evidence only.
         fix_payload = [
 
-            {"exec_id": r["psr_id"], "isin": _fix_by_id[r["psr_id"]].isin,
-
+            {"exec_id": r["psr_id"],
+             "order_id": _fix_by_id[r["psr_id"]].trade_id,
+             "isin": _fix_by_id[r["psr_id"]].isin,
              "side": _fix_by_id[r["psr_id"]].side,
-
              "quantity": _fix_by_id[r["psr_id"]].quantity,
-
              "price": _fix_by_id[r["psr_id"]].price}
 
             for r in _fz_orphan_fix if r["psr_id"] in _fix_by_id
@@ -1967,15 +1974,14 @@ def verify_trade_exceptions(case_ids: Optional[List[str]] = None) -> List[Dict]:
 
         ccf_payload = [
 
-            {"clearing_ref": r["camt_id"], "isin": _ccf_by_ref[r["camt_id"]].isin,
+            {"exec_id": r["camt_id"],
+             "order_id": _ccf_by_exec_id[r["camt_id"]].clearing_ref,
+             "isin": _ccf_by_exec_id[r["camt_id"]].isin,
+             "side": _ccf_by_exec_id[r["camt_id"]].side,
+             "quantity": _ccf_by_exec_id[r["camt_id"]].quantity,
+             "price": _ccf_by_exec_id[r["camt_id"]].price}
 
-             "side": _ccf_by_ref[r["camt_id"]].side,
-
-             "quantity": _ccf_by_ref[r["camt_id"]].quantity,
-
-             "price": _ccf_by_ref[r["camt_id"]].price}
-
-            for r in _fz_orphan_ccf if r["camt_id"] in _ccf_by_ref
+            for r in _fz_orphan_ccf if r["camt_id"] in _ccf_by_exec_id
 
         ]
 
