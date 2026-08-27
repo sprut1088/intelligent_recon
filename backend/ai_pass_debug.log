@@ -1,0 +1,21 @@
+[17:57:44] endpoint hit
+[17:57:44] phase 1 triage starting
+[17:58:00] phase 1 done triaged=0
+[17:58:00] phase 2 payment verify starting
+[17:58:04] phase 2 done verified=0
+[17:58:04] phase 3 trade verify starting
+[17:58:04] EXCEPTION: name 'sys' is not defined
+[18:00:07] endpoint hit
+[18:00:07] phase 1 triage starting
+[18:00:13] phase 1 done triaged=0
+[18:00:13] phase 2 payment verify starting
+[18:00:17] phase 2 done verified=0
+[18:00:17] phase 3 trade verify starting
+[18:00:25] phase 3 done trade_verified=0
+[18:02:34] endpoint hit
+[18:02:34] phase 1 triage starting
+[18:02:43] phase 1 done triaged=0
+[18:02:43] phase 2 payment verify starting
+[18:02:46] phase 2 done verified=0
+[18:02:46] phase 3 trade verify starting
+[18:03:04] phase 3 done trade_verified=11

@@ -107,16 +107,18 @@ def _build_trade_case(
 def reconcile_trades(
     fix_transactions: Sequence[FixTransaction],
     ccf_transactions: Sequence[CcfTransaction],
-    quantity_tolerance: float = 0.01,
-    price_tolerance: float = 1.00,
+    quantity_tolerance: float = 1.0,
+    price_tolerance: float = 0.01,
 ) -> List[ReconCase]:
-    """Match front-office FIX executions against custodian CCF records by order reference."""
+    """Deterministic-only trade matching (T1–T5).
+
+    Fuzzy / tolerance-relaxed matching runs on demand via the AI pass.
+    """
     logger.info("trade_reconciliation: fix=%d ccf=%d", len(fix_transactions), len(ccf_transactions))
     cases: List[ReconCase] = []
     idx = 1
     used_ccf: set = set()
 
-    # Index CCF by order reference (clearing_ref) for direct join
     ccf_by_ref: Dict[str, CcfTransaction] = {}
     for ccf in ccf_transactions:
         ccf_by_ref[ccf.clearing_ref] = ccf
@@ -126,69 +128,282 @@ def reconcile_trades(
 
         if matched_ccf:
             used_ccf.add(matched_ccf.clearing_ref)
-            qty_match = abs(fix.quantity - matched_ccf.quantity) <= quantity_tolerance
+            qty_var   = abs(fix.quantity - matched_ccf.quantity)
             price_diff = abs(fix.price - matched_ccf.price)
-            price_match = price_diff <= price_tolerance
 
-            if qty_match and price_match:
-                # T1: Order ref + qty + price all match → auto-close
+            if qty_var <= quantity_tolerance and price_diff <= price_tolerance:
+                # T1 — order ref + qty (≤1 share) + price (≤$0.01) → auto-close
+                conf = 100 if qty_var < 0.01 and price_diff < 0.001 else 97
+                rule = "T1_ORDER_REF_EXACT" if conf == 100 else "T1_ORDER_REF_QTY_TOL"
+                qty_note   = f" (qty variance {fix.quantity - matched_ccf.quantity:+.0f})" if qty_var >= 0.01 else ""
+                price_note = f" (price variance ${fix.price - matched_ccf.price:+.4f})" if price_diff >= 0.001 else ""
                 cases.append(_build_trade_case(
                     idx, fix, matched_ccf,
-                    status="Matched & Settled (Auto-Close)",
-                    reason="ORDER_REF_EXACT",
-                    match_type="1_TO_1",
-                    confidence=100,
-                    rule="T1_ORDER_REF_EXACT",
-                    exception_flag="N",
-                    explanation=f"Order {fix.exec_id} matched by reference. ISIN {fix.isin}, quantity {fix.quantity:,.0f}, price ${fix.price:,.2f} confirmed by custodian.",
+                    status="Matched & Settled (Auto-Close)", reason="ORDER_REF_EXACT",
+                    match_type="1_TO_1", confidence=conf, rule=rule, exception_flag="N",
+                    explanation=f"Order {fix.exec_id} matched by reference. ISIN {fix.isin}, qty {fix.quantity:,.0f}, price ${fix.price:,.2f} confirmed by custodian.{qty_note}{price_note}",
                 ))
-            elif qty_match and not price_match:
-                # T2: Order ref + qty match but price break — show prices as amounts
-                pvar = round(fix.price - matched_ccf.price, 2)
+            elif qty_var <= quantity_tolerance:
+                # T2 — ref + qty match but price break
+                pvar = round(fix.price - matched_ccf.price, 4)
                 cases.append(_build_trade_case(
                     idx, fix, matched_ccf,
-                    status="Exception - Price Variance",
-                    reason="PRICE_BREAK",
-                    match_type="1_TO_1",
-                    confidence=94,
-                    rule="T2_PRICE_BREAK",
-                    exception_flag="Y",
-                    explanation=f"Order {fix.exec_id} matched by reference. Quantity confirmed but price differs: Front office ${fix.price:,.2f} vs Custodian ${matched_ccf.price:,.2f} (variance: {pvar:+,.2f}). Probable data entry error.",
+                    status="Exception - Price Variance", reason="PRICE_BREAK",
+                    match_type="1_TO_1", confidence=94, rule="T2_PRICE_BREAK", exception_flag="Y",
+                    explanation=f"Order {fix.exec_id} matched by reference. Qty confirmed but price differs: FO ${fix.price:,.2f} vs Custodian ${matched_ccf.price:,.2f} ({pvar:+,.4f}).",
                     suggestions=[{"action": "ROUTE_TO_REVIEW", "desk": "Mid-Office", "price_variance": pvar}],
                     amount_override=(fix.price, matched_ccf.price, pvar),
                 ))
             else:
-                # T3: Order ref match but quantity break
+                # T3 — ref match but qty break
                 var = round(fix.quantity - matched_ccf.quantity, 2)
                 cases.append(_build_trade_case(
                     idx, fix, matched_ccf,
-                    status="Exception - Quantity Mismatch",
-                    reason="QUANTITY_MISMATCH",
-                    match_type="1_TO_1",
-                    confidence=75,
-                    rule="T3_QUANTITY_BREAK",
-                    exception_flag="Y",
-                    explanation=f"Order {fix.exec_id} matched by reference. ISIN confirmed but quantity differs: Front office {fix.quantity:,.0f} vs Custodian {matched_ccf.quantity:,.0f} (variance: {var:+,.0f}). Partial allocation break.",
+                    status="Exception - Quantity Mismatch", reason="QUANTITY_MISMATCH",
+                    match_type="1_TO_1", confidence=75, rule="T3_QUANTITY_BREAK", exception_flag="Y",
+                    explanation=f"Order {fix.exec_id} matched by reference. ISIN confirmed but qty differs: FO {fix.quantity:,.0f} vs Custodian {matched_ccf.quantity:,.0f} (variance {var:+,.0f}).",
                     suggestions=[{"action": "ROUTE_TO_REVIEW", "desk": "Broker Allocation", "variance": var}],
                 ))
             idx += 1
             continue
 
-        # T4: Orphan FIX — no custodian record with this order reference
+        # T4 — orphan FIX: no custodian record matched this order reference
+        cases.append(_build_trade_case(
+            idx, fix, None,
+            status="Exception - Unmatched Trade", reason="ORPHAN_FIX",
+            match_type="UNMATCHED_TRADE", confidence=0, rule="T4_ORPHAN_TRADE", exception_flag="Y",
+            explanation=f"Trade {fix.exec_id} (ISIN {fix.isin}, {fix.side} {fix.quantity:,.0f}) has no matching custodian record. Fuzzy matching available via AI Pass.",
+            suggestions=[{"action": "INVESTIGATE", "desk": "Operations", "trade_id": fix.exec_id}],
+        ))
+        idx += 1
+
+    # T5 — orphan CCF: no FIX claimed this custodian record
+    for ccf in ccf_transactions:
+        if ccf.clearing_ref in used_ccf:
+            continue
+        cases.append(_build_trade_case(
+            idx, None, ccf,
+            status="Exception - Unmatched Custodian Record", reason="ORPHAN_CCF",
+            match_type="UNMATCHED_CUSTODIAN", confidence=0, rule="T5_ORPHAN_CUSTODIAN", exception_flag="Y",
+            explanation=f"Custodian record {ccf.clearing_ref} (ISIN {ccf.isin}, {ccf.quantity:,.0f}) has no matching front-office trade. Fuzzy matching available via AI Pass.",
+            suggestions=[{"action": "INVESTIGATE", "desk": "Operations", "clearing_ref": ccf.clearing_ref}],
+        ))
+        idx += 1
+
+    matched   = sum(1 for c in cases if c.exception_flag == "N")
+    exceptions = sum(1 for c in cases if c.exception_flag == "Y")
+    logger.info("trade_reconciliation complete: %d cases (%d matched, %d exceptions)", len(cases), matched, exceptions)
+    return cases
+    logger.info("trade_reconciliation: fix=%d ccf=%d", len(fix_transactions), len(ccf_transactions))
+    cases: List[ReconCase] = []
+    idx = 1
+    used_ccf: set = set()
+
+    # ── Exact-ref index ─────────────────────────────────────────────────────────
+    ccf_by_ref: Dict[str, CcfTransaction] = {}
+    for ccf in ccf_transactions:
+        ccf_by_ref[ccf.clearing_ref] = ccf
+
+    # ── Normalised-ref index (FZ-03/09/10/13) ───────────────────────────────────
+    ccf_by_norm: Dict[str, CcfTransaction] = {}
+    for ccf in ccf_transactions:
+        nk = _norm_ref(ccf.clearing_ref)
+        if nk and nk not in ccf_by_norm:
+            ccf_by_norm[nk] = ccf
+
+    for fix in fix_transactions:
+        matched_ccf = ccf_by_ref.get(fix.exec_id)
+
+        if matched_ccf:
+            used_ccf.add(matched_ccf.clearing_ref)
+            qty_var = abs(fix.quantity - matched_ccf.quantity)
+            price_diff = abs(fix.price - matched_ccf.price)
+
+            if qty_var <= quantity_tolerance and price_diff <= price_tolerance:
+                # T1 — exact/near-exact on all fields
+                conf = 100 if qty_var < 0.01 and price_diff < 0.001 else 97
+                rule = "T1_ORDER_REF_EXACT" if conf == 100 else "T1_ORDER_REF_QTY_TOL"
+                qty_note = f" (qty variance {fix.quantity - matched_ccf.quantity:+.0f} share)" if qty_var >= 0.01 else ""
+                price_note = f" (price variance ${fix.price - matched_ccf.price:+.4f})" if price_diff >= 0.001 else ""
+                cases.append(_build_trade_case(
+                    idx, fix, matched_ccf,
+                    status="Matched & Settled (Auto-Close)",
+                    reason="ORDER_REF_EXACT",
+                    match_type="1_TO_1", confidence=conf, rule=rule, exception_flag="N",
+                    explanation=f"Order {fix.exec_id} matched by reference. ISIN {fix.isin}, quantity {fix.quantity:,.0f}, price ${fix.price:,.2f} confirmed by custodian.{qty_note}{price_note}",
+                ))
+            elif qty_var <= quantity_tolerance and price_diff > price_tolerance:
+                # T2 — ref + qty match but price break
+                pvar = round(fix.price - matched_ccf.price, 4)
+                cases.append(_build_trade_case(
+                    idx, fix, matched_ccf,
+                    status="Exception - Price Variance",
+                    reason="PRICE_BREAK",
+                    match_type="1_TO_1", confidence=94, rule="T2_PRICE_BREAK", exception_flag="Y",
+                    explanation=f"Order {fix.exec_id} matched by reference. Quantity confirmed but price differs: FO ${fix.price:,.2f} vs Custodian ${matched_ccf.price:,.2f} (variance: {pvar:+,.4f}). Probable rounding or data entry error.",
+                    suggestions=[{"action": "ROUTE_TO_REVIEW", "desk": "Mid-Office", "price_variance": pvar}],
+                    amount_override=(fix.price, matched_ccf.price, pvar),
+                ))
+            else:
+                # T3 — ref match but quantity break exceeds tolerance
+                var = round(fix.quantity - matched_ccf.quantity, 2)
+                cases.append(_build_trade_case(
+                    idx, fix, matched_ccf,
+                    status="Exception - Quantity Mismatch",
+                    reason="QUANTITY_MISMATCH",
+                    match_type="1_TO_1", confidence=75, rule="T3_QUANTITY_BREAK", exception_flag="Y",
+                    explanation=f"Order {fix.exec_id} matched by reference. ISIN confirmed but quantity differs: FO {fix.quantity:,.0f} vs Custodian {matched_ccf.quantity:,.0f} (variance: {var:+,.0f}). Partial allocation break.",
+                    suggestions=[{"action": "ROUTE_TO_REVIEW", "desk": "Broker Allocation", "variance": var}],
+                ))
+            idx += 1
+            continue
+
+        # ── TF1: Normalised reference (FZ-03/09/10/13) ──────────────────────────
+        norm_fix = _norm_ref(fix.exec_id)
+        tf1_ccf = ccf_by_norm.get(norm_fix) if norm_fix else None
+        if tf1_ccf and tf1_ccf.clearing_ref not in used_ccf:
+            qty_var = abs(fix.quantity - tf1_ccf.quantity)
+            price_diff = abs(fix.price - tf1_ccf.price)
+            if qty_var <= quantity_tolerance and price_diff <= price_tolerance:
+                used_ccf.add(tf1_ccf.clearing_ref)
+                cases.append(_build_trade_case(
+                    idx, fix, tf1_ccf,
+                    status="Matched & Settled (Auto-Close)",
+                    reason="ORDER_REF_NORMALISED",
+                    match_type="1_TO_1", confidence=96, rule="TF1_NORMALISED_REF", exception_flag="N",
+                    explanation=f"Order reference matched after normalising punctuation/whitespace/case (FO: '{fix.exec_id}' → Custodian: '{tf1_ccf.clearing_ref}'). ISIN {fix.isin}, quantity {fix.quantity:,.0f}.",
+                ))
+                idx += 1
+                continue
+
+        # ── TF2: Fuzzy reference similarity (FZ-01/08) ──────────────────────────
+        tf2_ccf: Optional[CcfTransaction] = None
+        tf2_score = 0
+        if _rfuzz and _lev:
+            for ccf in ccf_transactions:
+                if ccf.clearing_ref in used_ccf:
+                    continue
+                if ccf.isin.upper() != fix.isin.upper() or ccf.side != fix.side:
+                    continue
+                if abs(fix.quantity - ccf.quantity) > quantity_tolerance:
+                    continue
+                # Accept either high similarity OR low edit distance (1-char typo)
+                sim = _rfuzz.partial_ratio(fix.exec_id, ccf.clearing_ref)
+                ed  = _lev.distance(fix.exec_id, ccf.clearing_ref)
+                if sim >= 85 or ed <= 1:
+                    if sim > tf2_score:
+                        tf2_score = sim
+                        tf2_ccf = ccf
+        if tf2_ccf:
+            used_ccf.add(tf2_ccf.clearing_ref)
+            price_diff = abs(fix.price - tf2_ccf.price)
+            pvar = round(fix.price - tf2_ccf.price, 4)
+            if price_diff <= price_tolerance:
+                status_tf2 = "Suggested Match - Analyst Review"
+                flag_tf2 = "Y"
+                reason_tf2 = "FUZZY_REF_MATCH"
+                conf_tf2 = min(90, tf2_score)
+            else:
+                status_tf2 = "Exception - Price Variance"
+                flag_tf2 = "Y"
+                reason_tf2 = "FUZZY_REF_PRICE_BREAK"
+                conf_tf2 = 72
+            cases.append(_build_trade_case(
+                idx, fix, tf2_ccf,
+                status=status_tf2, reason=reason_tf2,
+                match_type="1_TO_1", confidence=conf_tf2, rule="TF2_FUZZY_REF", exception_flag=flag_tf2,
+                explanation=f"Fuzzy reference match: FO '{fix.exec_id}' ≈ Custodian '{tf2_ccf.clearing_ref}' (similarity {tf2_score}%). ISIN + side + quantity confirmed. Analyst should verify reference discrepancy.",
+                suggestions=[{"action": "CONFIRM_FUZZY_MATCH" if price_diff <= price_tolerance else "ROUTE_TO_REVIEW",
+                              "fuzzy_score": tf2_score, "price_variance": pvar}],
+            ))
+            idx += 1
+            continue
+
+        # ── TF3: Economics-only match — no usable reference (FZ-12/15) ──────────
+        tf3_ccf: Optional[CcfTransaction] = None
+        for ccf in ccf_transactions:
+            if ccf.clearing_ref in used_ccf:
+                continue
+            if ccf.isin.upper() != fix.isin.upper():
+                continue
+            if ccf.side != fix.side:
+                continue
+            if abs(fix.quantity - ccf.quantity) > quantity_tolerance:
+                continue
+            if abs(fix.price - ccf.price) > price_tolerance:
+                continue
+            tf3_ccf = ccf
+            break
+        if tf3_ccf:
+            used_ccf.add(tf3_ccf.clearing_ref)
+            cases.append(_build_trade_case(
+                idx, fix, tf3_ccf,
+                status="Suggested Match - Analyst Review",
+                reason="ECONOMICS_MATCH",
+                match_type="1_TO_1", confidence=78, rule="TF3_ECONOMICS_MATCH", exception_flag="Y",
+                explanation=f"No order reference match. Matched on economics: ISIN {fix.isin}, side {fix.side}, qty {fix.quantity:,.0f}, price ${fix.price:,.2f}. Reference may be missing or not yet received from custodian.",
+                suggestions=[{"action": "CONFIRM_ECONOMICS_MATCH"}],
+            ))
+            idx += 1
+            continue
+
+        # T4 will be appended in a second pass below
+        pass
+
+    # ── TF4: Split settlement — 1 FIX → N CCFs (FZ-11) ──────────────────────────
+    unmatched_fix = [f for f in fix_transactions if f.exec_id not in {
+        c.psr_id for c in cases if c.psr_id
+    }]
+    residual_ccf = [c for c in ccf_transactions if c.clearing_ref not in used_ccf]
+
+    split_consumed_fix: set = set()
+    for fix in unmatched_fix:
+        if fix.exec_id in split_consumed_fix:
+            continue
+        candidates = [c for c in residual_ccf
+                      if c.clearing_ref not in used_ccf
+                      and c.isin.upper() == fix.isin.upper()
+                      and c.side == fix.side]
+        if len(candidates) < 2:
+            continue
+        # Greedy: accumulate CCFs whose quantities sum to fix.quantity within tolerance
+        chosen: List[CcfTransaction] = []
+        running = 0.0
+        for ccf in sorted(candidates, key=lambda c: c.quantity, reverse=True):
+            if running + ccf.quantity <= fix.quantity + quantity_tolerance:
+                chosen.append(ccf)
+                running += ccf.quantity
+        if len(chosen) >= 2 and abs(running - fix.quantity) <= quantity_tolerance:
+            for c in chosen:
+                used_ccf.add(c.clearing_ref)
+            split_consumed_fix.add(fix.exec_id)
+            ccf_refs = ", ".join(c.clearing_ref for c in chosen)
+            cases.append(_build_trade_case(
+                idx, fix, chosen[0],
+                status="Suggested Match - Analyst Review",
+                reason="SPLIT_SETTLEMENT",
+                match_type="1_TO_N", confidence=82, rule="TF4_SPLIT_SETTLEMENT", exception_flag="Y",
+                explanation=f"FIX {fix.exec_id} qty {fix.quantity:,.0f} split across {len(chosen)} custodian records ({ccf_refs}) summing to {running:,.0f}. Probable partial allocation settlement.",
+                suggestions=[{"action": "CONFIRM_SPLIT_MATCH", "ccf_refs": ccf_refs, "split_count": len(chosen)}],
+            ))
+            idx += 1
+
+    # ── T4: Orphan FIX — no match found by any tier ──────────────────────────────
+    matched_fix_ids = {c.psr_id for c in cases if c.psr_id}
+    for fix in fix_transactions:
+        if fix.exec_id in matched_fix_ids:
+            continue
         cases.append(_build_trade_case(
             idx, fix, None,
             status="Exception - Unmatched Trade",
             reason="ORPHAN_FIX",
-            match_type="UNMATCHED_TRADE",
-            confidence=0,
-            rule="T4_ORPHAN_TRADE",
-            exception_flag="Y",
+            match_type="UNMATCHED_TRADE", confidence=0, rule="T4_ORPHAN_TRADE", exception_flag="Y",
             explanation=f"Trade {fix.exec_id} (ISIN {fix.isin}, {fix.side} {fix.quantity:,.0f}) has no matching custodian record. Possible settlement failure or late confirmation.",
             suggestions=[{"action": "INVESTIGATE", "desk": "Operations", "trade_id": fix.exec_id}],
         ))
         idx += 1
 
-    # T5: Orphan CCF records not matched to any trade
+    # ── T5: Orphan CCF — no FIX claimed it ───────────────────────────────────────
     for ccf in ccf_transactions:
         if ccf.clearing_ref in used_ccf:
             continue
@@ -196,16 +411,13 @@ def reconcile_trades(
             idx, None, ccf,
             status="Exception - Unmatched Custodian Record",
             reason="ORPHAN_CCF",
-            match_type="UNMATCHED_CUSTODIAN",
-            confidence=0,
-            rule="T5_ORPHAN_CUSTODIAN",
-            exception_flag="Y",
+            match_type="UNMATCHED_CUSTODIAN", confidence=0, rule="T5_ORPHAN_CUSTODIAN", exception_flag="Y",
             explanation=f"Custodian record {ccf.clearing_ref} (ISIN {ccf.isin}, {ccf.quantity:,.0f}) has no matching front-office trade. Possible unsolicited settlement or missing booking.",
             suggestions=[{"action": "INVESTIGATE", "desk": "Operations", "clearing_ref": ccf.clearing_ref}],
         ))
         idx += 1
 
-    matched = sum(1 for c in cases if c.exception_flag == "N")
+    matched  = sum(1 for c in cases if c.exception_flag == "N")
     exceptions = sum(1 for c in cases if c.exception_flag == "Y")
     logger.info("trade_reconciliation complete: %d cases (%d matched, %d exceptions)", len(cases), matched, exceptions)
     return cases

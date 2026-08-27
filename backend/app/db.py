@@ -27,6 +27,8 @@ DEFAULT_PATTERNS = [
     ("P6", "One-to-Many Bank Settlement", "SEED", {"fields": ["pmt_ref", "invoice", "amount_sum"], "counterparty_threshold": 0.85, "max_group_size": 6, "date_window_days": 3, "variance_subpass_enabled": True, "variance_subpass_max_group_size": 3}, "ACTIVE", "SUGGESTION", 0.85),
     ("P7", "Amount Variance", "SEED", {"fields": ["identity", "amount_variance"], "minor_tolerance": settings.minor_variance_tolerance}, "ACTIVE", "LEDGER_OR_IN_TRANSIT", 0.75),
     ("P10", "Split Settlement (1 PSR -> N CAMTs)", "SEED", {"fields": ["pmt_ref", "invoice", "amount_sum"], "max_split_size": 5, "date_window_days": 3, "bank_counterparty_min_similarity": 0.95, "shared_reference_confidence": 92, "subset_sum_confidence": 86}, "ACTIVE", "SUGGESTION", 0.85),
+    # P8: discovered by the 6-tier file-pattern engine (EXACT_AMT_DATE_CCY tier 2)
+    ("P8", "Exact Amount + Date + Currency", "SEED", {"fields": ["amount", "booking_date", "currency"], "mode": "AUTO"}, "ACTIVE", "AUTO_CLOSE", 0.88),
 ]
 
 class ManagedConnection(sqlite3.Connection):
@@ -83,10 +85,10 @@ def init_db() -> None:
                 pass  # column already exists
         # Ensure P6 seed has the full rule knobs (UPDATE existing rows with the old sparse rule)
         for pattern_id, _, _, rule, _, _, _ in DEFAULT_PATTERNS:
-            if pattern_id == "P6":
+            if pattern_id in ("P6", "P8"):
                 conn.execute(
-                    "UPDATE recon_pattern_registry SET pattern_rule_json = ? WHERE pattern_id = 'P6'",
-                    (json.dumps(rule),),
+                    "UPDATE recon_pattern_registry SET pattern_rule_json = ? WHERE pattern_id = ?",
+                    (json.dumps(rule), pattern_id),
                 )
         conn.commit()
 

@@ -1,7 +1,13 @@
 from __future__ import annotations
 
+import itertools
 import logging
 import re
+
+try:
+    from rapidfuzz import fuzz as _fuzz
+except ImportError:
+    _fuzz = None  # type: ignore[assignment]
 import shutil
 import tempfile
 import xml.etree.ElementTree as ET
@@ -377,7 +383,35 @@ def _infer_flat_file_format(matched_records: List[Dict[str, object]]) -> Dict[st
                 ref_offsets.append(idx)
     ref_offset_avg = int(sum(ref_offsets) / len(ref_offsets)) if ref_offsets else 0
 
+    _FIELD_META = {
+        "tx_id":        {"maps_to_camt": "Refs/EndToEndId",    "reason": "TX- prefix + 4-digit year + sequence number — highly specific, very low false-positive risk"},
+        "reference":    {"maps_to_camt": "Ustrd (remittance)", "reason": "PMT-REF- prefix + numeric suffix — structured token, collision is extremely rare"},
+        "invoice":      {"maps_to_camt": "Ustrd (remittance)", "reason": "INV- prefix + digits — specific but optional separator widens match surface slightly"},
+        "amount":       {"maps_to_camt": "Amt",                "reason": "12-digit zero-padded integer anchored by CR/DR lookahead — positional and fully numeric"},
+        "direction":    {"maps_to_camt": "CdtDbtInd",          "reason": "CR|DR are only 2 characters — may appear elsewhere in the line; relies on positional context to avoid false positives"},
+        "booking_date": {"maps_to_camt": "BookgDt/Dt",         "reason": "8-digit YYYYMMDD immediately after the tx_id sequence number"},
+        "counterparty": {"maps_to_camt": "RltdPties/Dbtr/Nm",  "reason": "free-text name field starting 25 chars after CR/DR — captures company name for fuzzy matching"},
+    }
+
+    def _enrich(regex_map: Dict[str, str]) -> Dict[str, object]:
+        return {
+            field: {"regex": pattern, **_FIELD_META.get(field, {"maps_to_camt": "", "confidence": "medium"})}
+            for field, pattern in regex_map.items()
+        }
+
     if is_fixed_width:
+        regex_map = {
+            # Greedy \d+ backtracks to stop before the 8-digit date (lazy caused truncation).
+            "tx_id":        r"^.{2}(?P<tx_id>TX-\d{4}-\d+)(?=\d{8})",
+            "booking_date": r"^.{2}TX-\d{4}-\d+(?P<booking_date>\d{8})",
+            "reference":    r"(?P<reference>PMT-REF-\d+)",
+            "invoice":      r"(?P<invoice>INV-?\d{4}-?\d+)",
+            # 12-digit zero-padded amount immediately before CR/DR.
+            "amount":       r"(?P<amount>\d{12})(?=CR|DR)",
+            "direction":    r"(?P<direction>CR|DR)",
+            # 25-char fixed-width invoice slot after CR/DR, then the counterparty name.
+            "counterparty": r"(?:CR|DR).{25}\s*(?P<counterparty>[A-Za-z][A-Za-z0-9 ,\.&'\-/]+)",
+        }
         return {
             "detected_type": "FIXED_WIDTH",
             "record_prefix": dominant_prefix,
@@ -386,31 +420,26 @@ def _infer_flat_file_format(matched_records: List[Dict[str, object]]) -> Dict[st
                 "record_type": (0, 2),
                 "ref_approx_start": ref_offset_avg,
             },
-            "suggested_regex_map": {
-                # Skip the 2-char record-type prefix; lazy \d+ stops before the 8-digit date.
-                "tx_id":     r"^.{2}(?P<tx_id>TX-\d{4}-\d+?)(?=\d{8})",
-                "reference": r"(?P<reference>PMT-REF-\d+)",
-                "invoice":   r"(?P<invoice>INV-?\d{4}-?\d+)",
-                # 12-digit zero-padded amount immediately before CR/DR.
-                "amount":    r"(?P<amount>\d{12})(?=CR|DR)",
-                "direction": r"(?P<direction>CR|DR)",
-            },
+            "suggested_regex_map": regex_map,
+            "structural_field_info": _enrich(regex_map),
             "sample_lines": sample_lines,
         }
 
     if is_delimited:
+        regex_map = {
+            "tx_id":     r"(?P<tx_id>TX-\d{4}-\d+)",
+            "reference": r"(?P<reference>PMT-REF-\d+)",
+            "invoice":   r"(?P<invoice>INV-?\d{4}-?\d+)",
+            "amount":    r"(?P<amount>\d+(?:\.\d+)?)",
+            "direction": r"(?P<direction>CR|DR)",
+        }
         return {
             "detected_type": "DELIMITED",
             "record_prefix": None,
             "delimiter": dominant_delim,
             "field_positions": {},
-            "suggested_regex_map": {
-                "tx_id":     r"(?P<tx_id>TX-\d{4}-\d+)",
-                "reference": r"(?P<reference>PMT-REF-\d+)",
-                "invoice":   r"(?P<invoice>INV-?\d{4}-?\d+)",
-                "amount":    r"(?P<amount>\d+(?:\.\d+)?)",
-                "direction": r"(?P<direction>CR|DR)",
-            },
+            "suggested_regex_map": regex_map,
+            "structural_field_info": _enrich(regex_map),
             "sample_lines": sample_lines,
         }
 
@@ -420,6 +449,7 @@ def _infer_flat_file_format(matched_records: List[Dict[str, object]]) -> Dict[st
         "delimiter": None,
         "field_positions": {"ref_approx_start": ref_offset_avg},
         "suggested_regex_map": {},
+        "structural_field_info": {},
         "sample_lines": sample_lines,
     }
 
@@ -718,108 +748,385 @@ def _norm_amount(raw: str) -> str:
     return str(int(s)) if s.isdigit() else s
 
 
+def _norm_date(s: str) -> str:
+    """Normalise YYYYMMDD or YYYY-MM-DD to YYYY-MM-DD for comparison."""
+    s = (s or "").strip()
+    if len(s) == 8 and s.isdigit():
+        return f"{s[:4]}-{s[4:6]}-{s[6:]}"
+    return s
+
+
+def _within_pct(a_norm: str, b_norm: str, pct: float) -> bool:
+    """True if two normalised integer-string amounts are within pct of each other."""
+    try:
+        ai, bi = int(a_norm), int(b_norm)
+        if ai == 0 and bi == 0:
+            return True
+        return abs(ai - bi) / max(abs(ai), abs(bi)) <= pct
+    except (ValueError, TypeError):
+        return False
+
+
+_AMT_VARIANCE_PCT        = 0.02   # ±2 % for tier-5 variance rules
+_AMT_FUZZY_PCT           = 0.005  # ±0.5 % for tier-4 fuzzy rule
+_BATCH_MAX_N             = 5      # max PSR lines in one batch
+_BATCH_GROUP_CAP         = 30     # skip subset-sum if candidate pool exceeds this
+_COUNTERPARTY_THRESHOLD  = 85     # rapidfuzz token_set_ratio floor for P4 (0–100)
+_SPLIT_MAX_N             = 5      # max CAMT entries in a split group (P10)
+
+
 _DET_RULES = [
-    ("EXACT_E2E",        "EndToEndId Exact Match",   ["end_to_end_id"]),
-    ("EXACT_PMT_REF",    "PMT-REF Exact Match",      ["pmt_ref"]),
-    ("EXACT_INVOICE",    "Invoice Exact Match",      ["invoice"]),
-    ("AMOUNT_DIRECTION", "Amount + Direction Match", ["amount", "direction"]),
+    # Tier 1 – reference ID + exact amount
+    ("EXACT_E2E",                  "Exact EndToEndId Match",                   ["end_to_end_id", "amount"]),
+    ("EXACT_PMT_REF",              "PMT-REF + Amount",                         ["pmt_ref", "amount"]),
+    ("EXACT_INVOICE",              "Invoice Extracted from Ustrd",             ["invoice", "amount"]),
+    # Tier 2 – batch (N PSR → 1 CAMT); runs early to avoid starving batch groups
+    ("BATCH_SUM",                  "One-to-Many Bank Settlement",              ["amount"]),
+    ("BATCH_SUM_VAR",              "One-to-Many Settlement (Amount Variance)", ["amount"]),
+    # Tier 3 – identity-anchored amount variance ±0.5 % (≡ P7 minor)
+    ("FUZZY_AMT_DIR",              "Amount Variance",                          ["amount", "direction"]),
+    # Tier 4 – identity-anchored amount variance ±2 %
+    ("APPROX_E2E_VAR",             "Amount Variance – EndToEndId",             ["end_to_end_id", "amount"]),
+    ("APPROX_PMT_REF_VAR",         "Amount Variance – PMT-REF",               ["pmt_ref", "amount"]),
+    ("APPROX_INVOICE_VAR",         "Amount Variance – Invoice",               ["invoice", "amount"]),
+    # Tier 5 – counterparty fuzzy match (P4); before date/ccy so P4 wins
+    ("FUZZY_COUNTERPARTY",         "Counterparty Fuzzy Match",                 ["counterparty", "amount"]),
+    # Tier 6 – financial attributes only (no identity, no counterparty match)
+    ("EXACT_AMT_DATE_CCY",         "Exact Amount + Date + Currency",           ["amount", "booking_date", "currency"]),
+    ("APPROX_AMT_DATE_VAR",        "Amount Variance – Date + Currency",        ["amount", "booking_date", "currency"]),
+    # Tier 7 – post-pass: 1 PSR → N CAMT split settlement (P10)
+    ("SPLIT_SETTLEMENT",           "Split Settlement (1 PSR -> N CAMTs)",      ["pmt_ref", "amount_sum"]),
+    ("SPLIT_SETTLEMENT_MINOR_VAR", "Split Settlement – Minor Variance",        ["pmt_ref", "amount_sum"]),
+    ("SPLIT_SETTLEMENT_MAJOR_VAR", "Split Settlement – Major Variance",        ["pmt_ref", "amount_sum"]),
+    # Remainder → exception queue (unmatched_camt return value)
 ]
+
+# Maps each discovery rule → the seed pattern it confirms or is closest to.
+# None means the rule covers a scenario not yet represented in the seed registry.
+_DET_RULE_SEED: Dict[str, Optional[str]] = {
+    "EXACT_E2E":                  "P1",
+    "EXACT_PMT_REF":              "P2",
+    "EXACT_INVOICE":              "P3",
+    "BATCH_SUM":                  "P6",
+    "BATCH_SUM_VAR":              "P6",
+    "EXACT_AMT_DATE_CCY":         "P8",
+    "FUZZY_AMT_DIR":              "P7",
+    "APPROX_E2E_VAR":             "P7",
+    "APPROX_PMT_REF_VAR":         "P7",
+    "APPROX_INVOICE_VAR":         "P7",
+    "APPROX_AMT_DATE_VAR":        None,
+    "FUZZY_COUNTERPARTY":         "P4",
+    "SPLIT_SETTLEMENT":           "P10",
+    "SPLIT_SETTLEMENT_MINOR_VAR": "P10",
+    "SPLIT_SETTLEMENT_MAJOR_VAR": "P10",
+}
 
 
 def _run_deterministic_matching(
     camt_transactions: List[CamtTransaction],
     flat_records: List[Dict[str, str]],
 ) -> Dict[str, object]:
-    """Apply strict deterministic rules in priority order.
+    """Six-tier deterministic cascade; each side consumed at most once.
 
-    Each CAMT entry and each flat-file line is consumed at most once.
-    Returns patterns, matched_pairs, unmatched_camt, unmatched_flat, stats.
+    Tiers: 1=Exact ID+Amount  2=Amt+Date+Ccy  3=Batch Sum
+           4=Fuzzy Amt(±0.5%)  5=Variance variants(±2%)  6→exception queue
     """
+    # --- static indexes (built once) ---
     flat_by: Dict[str, Dict[str, Dict]] = {k: {} for k in ("tx_id", "reference", "invoice")}
     flat_by_amount: Dict[str, List[Dict]] = {}
+    flat_by_amt_date_ccy: Dict[tuple, List[Dict]] = {}
 
     for rec in flat_records:
         for field in ("tx_id", "reference", "invoice"):
             val = rec.get(field, "").strip().upper()
             if val and val not in flat_by[field]:
                 flat_by[field][val] = rec
-        amt = _norm_amount(rec.get("amount", ""))
+        amt  = _norm_amount(rec.get("amount", ""))
+        date = _norm_date(rec.get("booking_date", ""))
+        ccy  = (rec.get("currency", "") or "").strip().upper()
         if amt:
             flat_by_amount.setdefault(amt, []).append(rec)
+            flat_by_amt_date_ccy.setdefault((amt, date, ccy), []).append(rec)
 
     consumed_flat: set = set()
     consumed_camt: set = set()
     stats_map: Dict[str, Dict] = {
         rid: {"rule": rid, "pattern_name": name, "fields_used": fields,
+              "seed_pattern_id": _DET_RULE_SEED.get(rid),
               "matched_count": 0, "sample_pairs": []}
         for rid, name, fields in _DET_RULES
     }
     all_pairs: List[Dict] = []
 
+    def _unconsumed(field_dict: Dict, key: str) -> Optional[Dict]:
+        r = field_dict.get(key)
+        return r if r and r["line_no"] not in consumed_flat else None
+
+    def _find_batch(target_norm: str, candidates: List[Dict]) -> Optional[List[Dict]]:
+        avail = [r for r in candidates if r["line_no"] not in consumed_flat]
+        if len(avail) < 2 or len(avail) > _BATCH_GROUP_CAP or not target_norm.isdigit():
+            return None
+        target = int(target_norm)
+        for n in range(2, min(_BATCH_MAX_N + 1, len(avail) + 1)):
+            for combo in itertools.combinations(avail, n):
+                total = sum(int(_norm_amount(r.get("amount", "0")) or "0") for r in combo)
+                if total == target:
+                    return list(combo)
+        return None
+
+    def _find_batch_approx(target_norm: str, candidates: List[Dict], tol: float) -> Optional[List[Dict]]:
+        avail = [r for r in candidates if r["line_no"] not in consumed_flat]
+        if len(avail) < 2 or len(avail) > _BATCH_GROUP_CAP or not target_norm.isdigit():
+            return None
+        target = int(target_norm)
+        for n in range(2, min(_BATCH_MAX_N + 1, len(avail) + 1)):
+            for combo in itertools.combinations(avail, n):
+                total = sum(int(_norm_amount(r.get("amount", "0")) or "0") for r in combo)
+                if abs(total - target) <= tol:
+                    return list(combo)
+        return None
+
+    def _record_match(rule: str, camt: CamtTransaction, recs: List[Dict]) -> None:
+        consumed_camt.add(camt.ntry_id)
+        for r in recs:
+            consumed_flat.add(r["line_no"])
+        is_batch = len(recs) > 1
+        pair = {
+            "camt_id": camt.camt_id,
+            "camt_amount": camt.amount, "camt_currency": camt.currency,
+            "camt_direction": camt.direction,
+            "camt_counterparty": camt.counterparty,
+            "flat_line_no":  recs[0].get("line_no") if not is_batch else None,
+            "flat_line_nos": [r.get("line_no") for r in recs] if is_batch else None,
+            "flat_tx_id":    recs[0].get("tx_id", "") if not is_batch else "",
+            "flat_reference": recs[0].get("reference", "") if not is_batch else "",
+            "flat_amount": (recs[0].get("amount", "") if not is_batch
+                            else str(sum(int(_norm_amount(r.get("amount", "0")) or "0") for r in recs))),
+            "flat_direction": recs[0].get("direction", ""),
+            "batch_size": len(recs),
+            "rule": rule,
+        }
+        all_pairs.append(pair)
+        bucket = stats_map[rule]
+        bucket["matched_count"] += 1
+        if len(bucket["sample_pairs"]) < 3:
+            bucket["sample_pairs"].append(pair)
+
     for camt in camt_transactions:
-        if camt.camt_id in consumed_camt:
+        if camt.ntry_id in consumed_camt:
             continue
+
+        camt_amt = _norm_amount(str(int(camt.amount)) if camt.amount else "")
+        cdir  = (camt.direction or "").strip().upper()
+        cdate = _norm_date(camt.booking_date or camt.value_date or "")
+        cccy  = (camt.currency or "").strip().upper()
+        e2e   = (camt.end_to_end_id or "").strip().upper()
+        ref   = (camt.pmt_ref or "").strip().upper()
+        inv   = (camt.invoice or "").strip().upper()
         matched_rule: Optional[str] = None
-        matched_rec: Optional[Dict] = None
+        matched_recs: Optional[List[Dict]] = None
 
-        e2e = (camt.end_to_end_id or "").strip().upper()
+        # ── Tier 1: reference ID + exact amount ────────────────────────────
         if e2e:
-            r = flat_by["tx_id"].get(e2e)
-            if r and r["line_no"] not in consumed_flat:
-                matched_rule, matched_rec = "EXACT_E2E", r
+            r = _unconsumed(flat_by["tx_id"], e2e)
+            if r and _norm_amount(r.get("amount", "")) == camt_amt:
+                matched_rule, matched_recs = "EXACT_E2E", [r]
 
-        if not matched_rule:
-            ref = (camt.pmt_ref or "").strip().upper()
-            if ref:
-                r = flat_by["reference"].get(ref)
-                if r and r["line_no"] not in consumed_flat:
-                    matched_rule, matched_rec = "EXACT_PMT_REF", r
+        if not matched_rule and ref:
+            r = _unconsumed(flat_by["reference"], ref)
+            if r and _norm_amount(r.get("amount", "")) == camt_amt:
+                matched_rule, matched_recs = "EXACT_PMT_REF", [r]
 
-        if not matched_rule:
-            inv = (camt.invoice or "").strip().upper()
-            if inv:
-                r = flat_by["invoice"].get(inv)
-                if r and r["line_no"] not in consumed_flat:
-                    matched_rule, matched_rec = "EXACT_INVOICE", r
+        if not matched_rule and inv:
+            r = _unconsumed(flat_by["invoice"], inv)
+            if r and _norm_amount(r.get("amount", "")) == camt_amt:
+                matched_rule, matched_recs = "EXACT_INVOICE", [r]
+            if not matched_rule:
+                suf = invoice_suffix(inv)
+                if suf:
+                    for k, r2 in flat_by["invoice"].items():
+                        if (invoice_suffix(k) == suf
+                                and r2["line_no"] not in consumed_flat
+                                and _norm_amount(r2.get("amount", "")) == camt_amt):
+                            matched_rule, matched_recs = "EXACT_INVOICE", [r2]
+                            break
+
+        # Cross-field: CAMT e2e may live in PSR reference slot and vice-versa
+        if not matched_rule and e2e:
+            r = _unconsumed(flat_by["reference"], e2e)
+            if r and _norm_amount(r.get("amount", "")) == camt_amt:
+                matched_rule, matched_recs = "EXACT_E2E", [r]
+        if not matched_rule and ref:
+            r = _unconsumed(flat_by["tx_id"], ref)
+            if r and _norm_amount(r.get("amount", "")) == camt_amt:
+                matched_rule, matched_recs = "EXACT_PMT_REF", [r]
+
+        # ── Tier 2: batch sum – extract ALL refs/invoices from remittance ────
+        # Runs before EXACT_AMT_DATE_CCY so batch groups are not starved by
+        # an unrelated PSR that happens to share amount+date.
+        if not matched_rule and camt_amt:
+            all_refs = {m.upper() for m in PMT_REF_RE.findall(camt.remittance or "")}
+            all_invs = {
+                m.group(0).upper().replace(" ", "-")
+                for m in INVOICE_RE.finditer(camt.remittance or "")
+            }
+            ref_set = all_refs | all_invs
+            if ref_set:
+                batch_cands = [
+                    r for r in flat_records
+                    if r["line_no"] not in consumed_flat
+                    and (not cdir or (r.get("direction", "") or "").strip().upper() == cdir)
+                    and (
+                        (r.get("reference", "") or "").strip().upper() in ref_set
+                        or (r.get("invoice", "") or "").strip().upper() in ref_set
+                    )
+                ]
+                batch = _find_batch(camt_amt, batch_cands)
+                if batch:
+                    matched_rule, matched_recs = "BATCH_SUM", batch
                 else:
-                    suf = invoice_suffix(inv)
-                    if suf:
-                        for k, r2 in flat_by["invoice"].items():
-                            if invoice_suffix(k) == suf and r2["line_no"] not in consumed_flat:
-                                matched_rule, matched_rec = "EXACT_INVOICE", r2
-                                break
+                    batch_var = _find_batch_approx(
+                        camt_amt, batch_cands, settings.minor_variance_tolerance * 4
+                    )
+                    if batch_var:
+                        matched_rule, matched_recs = "BATCH_SUM_VAR", batch_var
 
+        # ── Tier 3: identity-anchored amount variance ±0.5 % (≡ P7 minor) ──
+        # Only fires when an ID field points to a known PSR but amounts differ
+        # slightly — keeps unanchored entries available for P4 (counterparty).
         if not matched_rule:
-            amt = _norm_amount(str(int(camt.amount)) if camt.amount else "")
-            cdir = (camt.direction or "").strip().upper()
-            for r in flat_by_amount.get(amt, []):
+            for _field, _key in (("tx_id", e2e), ("reference", ref), ("invoice", inv)):
+                if not _key:
+                    continue
+                r = flat_by[_field].get(_key)
+                if r and r["line_no"] not in consumed_flat:
+                    if _within_pct(camt_amt, _norm_amount(r.get("amount", "")), _AMT_FUZZY_PCT):
+                        matched_rule, matched_recs = "FUZZY_AMT_DIR", [r]
+                        break
+
+        # ── Tier 4: identity-anchored amount variance ±2 % ─────────────────
+        if not matched_rule and e2e:
+            r = _unconsumed(flat_by["tx_id"], e2e)
+            if r and _within_pct(camt_amt, _norm_amount(r.get("amount", "")), _AMT_VARIANCE_PCT):
+                matched_rule, matched_recs = "APPROX_E2E_VAR", [r]
+
+        if not matched_rule and ref:
+            r = _unconsumed(flat_by["reference"], ref)
+            if r and _within_pct(camt_amt, _norm_amount(r.get("amount", "")), _AMT_VARIANCE_PCT):
+                matched_rule, matched_recs = "APPROX_PMT_REF_VAR", [r]
+
+        if not matched_rule and inv:
+            r = _unconsumed(flat_by["invoice"], inv)
+            if r and _within_pct(camt_amt, _norm_amount(r.get("amount", "")), _AMT_VARIANCE_PCT):
+                matched_rule, matched_recs = "APPROX_INVOICE_VAR", [r]
+
+        # ── Tier 5: counterparty fuzzy match (P4) ──────────────────────────
+        # Runs before EXACT_AMT_DATE_CCY so counterparty-confirmed pairs are
+        # not stolen by a same-amount PSR with a different counterparty.
+        if not matched_rule and camt_amt and camt.counterparty and _fuzz:
+            cparty = (camt.counterparty or "").strip()
+            for r in flat_records:
                 if r["line_no"] in consumed_flat:
                     continue
-                rdir = (r.get("direction", "") or "").strip().upper()
-                if not rdir or rdir == cdir:
-                    matched_rule, matched_rec = "AMOUNT_DIRECTION", r
+                if _norm_amount(r.get("amount", "")) != camt_amt:
+                    continue
+                rcparty = (r.get("counterparty", "") or "").strip()
+                if not rcparty:
+                    continue
+                if _fuzz.token_set_ratio(cparty, rcparty) >= _COUNTERPARTY_THRESHOLD:
+                    matched_rule, matched_recs = "FUZZY_COUNTERPARTY", [r]
                     break
 
-        if matched_rule and matched_rec:
-            consumed_camt.add(camt.camt_id)
-            consumed_flat.add(matched_rec["line_no"])
+        # ── Tier 6: exact amount + date + currency ───────────────────────
+        if not matched_rule and camt_amt and cdate:
+            for key in ((camt_amt, cdate, cccy), (camt_amt, cdate, "")):
+                for r in flat_by_amt_date_ccy.get(key, []):
+                    if r["line_no"] not in consumed_flat:
+                        matched_rule, matched_recs = "EXACT_AMT_DATE_CCY", [r]
+                        break
+                if matched_rule:
+                    break
+
+        if not matched_rule and camt_amt and cdate:
+            for r in flat_records:
+                if r["line_no"] in consumed_flat:
+                    continue
+                rdate = _norm_date(r.get("booking_date", ""))
+                rccy  = (r.get("currency", "") or "").strip().upper()
+                if rdate != cdate:
+                    continue
+                if cccy and rccy and cccy != rccy:
+                    continue
+                if _within_pct(camt_amt, _norm_amount(r.get("amount", "")), _AMT_VARIANCE_PCT):
+                    matched_rule, matched_recs = "APPROX_AMT_DATE_VAR", [r]
+                    break
+
+        if matched_rule and matched_recs:
+            _record_match(matched_rule, camt, matched_recs)
+
+    # ── SPLIT_SETTLEMENT post-pass: 1 PSR → N CAMTs (P10) ───────────────────
+    # Group remaining unmatched CAMTs by shared pmt_ref (or invoice fallback)
+    split_groups: Dict[str, list] = {}
+    for c in camt_transactions:
+        if c.ntry_id in consumed_camt:
+            continue
+        key = (c.pmt_ref or c.invoice or "").strip().upper()
+        if key:
+            split_groups.setdefault(key, []).append(c)
+
+    for key, group in split_groups.items():
+        if len(group) < 2 or len(group) > _SPLIT_MAX_N:
+            continue
+        dirs = {(c.direction or "").strip().upper() for c in group}
+        if len(dirs) > 1:
+            continue
+        group_dir = next(iter(dirs), "")
+        group_amt_int = sum(
+            int(_norm_amount(str(int(c.amount)) if c.amount else "0") or "0")
+            for c in group
+        )
+        minor_tol = settings.minor_variance_tolerance
+        for r in flat_records:
+            if r["line_no"] in consumed_flat:
+                continue
+            rdir = (r.get("direction", "") or "").strip().upper()
+            if group_dir and rdir and rdir != group_dir:
+                continue
+            try:
+                r_amt_int = int(_norm_amount(r.get("amount", "")) or "0")
+            except ValueError:
+                continue
+            diff = abs(group_amt_int - r_amt_int)
+            if diff == 0:
+                split_rule = "SPLIT_SETTLEMENT"
+            elif diff <= minor_tol:
+                split_rule = "SPLIT_SETTLEMENT_MINOR_VAR"
+            elif diff <= minor_tol * 4:
+                split_rule = "SPLIT_SETTLEMENT_MAJOR_VAR"
+            else:
+                continue
+            for c in group:
+                consumed_camt.add(c.ntry_id)
+            consumed_flat.add(r["line_no"])
             pair = {
-                "camt_id": camt.camt_id,
-                "camt_amount": camt.amount, "camt_currency": camt.currency,
-                "camt_direction": camt.direction,
-                "camt_counterparty": camt.counterparty,
-                "flat_line_no": matched_rec.get("line_no"),
-                "flat_tx_id": matched_rec.get("tx_id", ""),
-                "flat_reference": matched_rec.get("reference", ""),
-                "flat_amount": matched_rec.get("amount", ""),
-                "flat_direction": matched_rec.get("direction", ""),
-                "rule": matched_rule,
+                "camt_ids":      [c.ntry_id for c in group],
+                "camt_amounts":  [c.amount for c in group],
+                "camt_total":    sum(c.amount for c in group if c.amount),
+                "camt_currency": group[0].currency,
+                "camt_direction": group_dir,
+                "flat_line_no":  r.get("line_no"),
+                "flat_amount":   r.get("amount", ""),
+                "flat_reference": r.get("reference", "") or key,
+                "split_size":    len(group),
+                "batch_size":    1,
+                "rule":          split_rule,
             }
             all_pairs.append(pair)
-            bucket = stats_map[matched_rule]
+            bucket = stats_map[split_rule]
             bucket["matched_count"] += 1
             if len(bucket["sample_pairs"]) < 3:
                 bucket["sample_pairs"].append(pair)
+            break
 
     unmatched_camt = [c for c in camt_transactions if c.camt_id not in consumed_camt]
     unmatched_flat = [r for r in flat_records if r["line_no"] not in consumed_flat]
@@ -868,8 +1175,9 @@ def _build_unmatched_pattern_prompt(
     return (
         "You are an expert payment reconciliation analyst.\n\n"
         "The following CAMT.053 entries could NOT be matched to any internal payment "
-        "record using exact identifier rules (EndToEndId, PMT-REF, Invoice, "
-        "Amount+Direction).\n\n"
+        "record using the full deterministic cascade (Exact ID+Amount, Exact Amt+Date+Ccy, "
+        "One-to-Many Batch, Amount Variance ±0.5%, Variance ±2%, Counterparty Fuzzy, "
+        "Split Settlement).\n\n"
         f"Unmatched CAMT entries ({len(unmatched_camt)} total, showing ≤{max_samples}):\n"
         f"{camt_block}\n\n"
         f"Unmatched flat-file records ({len(unmatched_flat)} total, showing ≤{max_samples}):\n"
@@ -906,15 +1214,18 @@ def generate_reconciliation_patterns(
 ) -> Dict[str, object]:
     """Two-phase reconciliation pattern discovery.
 
-    Phase 1 — Deterministic
-        Parse the flat file (using field-extractor regexes when provided,
-        falling back to the structured PSR parser otherwise).  Apply exact-match
-        rules in priority order: E2E id → PMT-REF → Invoice → Amount+Direction.
+    Phase 1 — Deterministic (12-rule cascade)
+        Tier 1: Exact reference ID + amount (E2E, PMT-REF, Invoice)
+        Tier 2: Exact Amount + Date + Currency
+        Tier 3: Aggregated batch (N PSR → 1 CAMT, One-to-Many Settlement)
+        Tier 4: Amount Variance ±0.5% + direction
+        Tier 5: Variance variants ±2% (ID-anchored + date/ccy)
+        Tier 5b: Counterparty Fuzzy Match (≥85%)
+        Tier 6: Split Settlement post-pass (1 PSR → N CAMTs)
 
     Phase 2 — LLM-assisted
-        For CAMT entries that no deterministic rule could match, ask the LLM
-        to propose tolerance / fuzzy patterns (amount variance, date proximity,
-        counterparty similarity, etc.).
+        For CAMT entries not matched by any deterministic rule, ask the LLM
+        to propose additional tolerance / fuzzy patterns.
     """
     camt_transactions = _load_camt(camt_path)
     field_regexes = _normalise_field_extractors(provided_regex_map)
@@ -946,7 +1257,7 @@ def generate_reconciliation_patterns(
                 "invoice": t.invoice,
                 "amount": _norm_amount(str(int(t.amount)) if t.amount else ""),
                 "direction": t.direction, "booking_date": t.execution_date,
-                "counterparty": t.counterparty,
+                "currency": t.currency, "counterparty": t.counterparty,
             }
             for t in psr_transactions
         ]
@@ -1358,12 +1669,68 @@ def generate_mapping_regex(camt_path: Path, other_path: Path, max_examples: int 
     format_info = _infer_flat_file_format(matched_records)
 
     # Overall pattern-confidence score (0–100):
-    #   65 % weight  — match ratio: what fraction of CAMT identifiers were found in
-    #                   the flat file (high ratio → files are well-aligned)
+    #   65 % weight  — match ratio: unique CAMT entries found in the flat file
+    #                   ÷ total CAMT entries with any indexable ref
     #   35 % weight  — structural clarity: how unambiguously the format was detected
-    match_ratio = len(matched_records) / max(len(all_values), 1)
+    all_indexed_refs: Dict[str, Dict] = {}  # ntry_ref -> entry for all indexed entries
+    for entry in value_to_entry.values():
+        ref = entry.get("ntry_ref", "")
+        if ref and ref not in all_indexed_refs:
+            all_indexed_refs[ref] = entry
+
+    matched_ntry_refs: set = set(
+        m["camt_entry"].get("ntry_ref", "")
+        for rec in matched_records
+        for m in rec["matched"]
+        if m["camt_entry"].get("ntry_ref")
+    )
+
+    unique_camt_total = len(all_indexed_refs)
+    unique_camt_matched = len(matched_ntry_refs)
+
+    unmatched_entries = [
+        {
+            "ntry_ref": ref,
+            "amount": entry.get("amount"),
+            "currency": entry.get("currency"),
+            "counterparty": entry.get("counterparty"),
+            "refs": entry.get("refs", {}),
+            "pmt_ref": entry.get("pmt_ref"),
+            "invoice": entry.get("invoice"),
+        }
+        for ref, entry in sorted(all_indexed_refs.items())
+        if ref not in matched_ntry_refs
+    ]
+    if unmatched_entries:
+        logger.warning(
+            "generate_mapping_regex: %d CAMT entr%s not found in flat file: %s",
+            len(unmatched_entries),
+            "y" if len(unmatched_entries) == 1 else "ies",
+            ", ".join(e["ntry_ref"] for e in unmatched_entries),
+        )
+
+    # Compute per-field hit rate against matched PSR lines and patch structural_field_info
+    total_matched_lines = len(matched_records)
+    structural_info = format_info.get("structural_field_info", {})
+    for field, pattern in format_info.get("suggested_regex_map", {}).items():
+        if field not in structural_info:
+            continue
+        try:
+            compiled_field = re.compile(pattern)
+            hits = sum(1 for rec in matched_records if compiled_field.search(rec["line"]))
+        except Exception:
+            hits = 0
+        rate = hits / max(total_matched_lines, 1)
+        pct = round(rate * 100, 1)
+        level = "high" if rate >= 0.85 else "medium" if rate >= 0.60 else "low"
+        structural_info[field]["confidence"] = level
+        structural_info[field]["confidence_pct"] = pct
+        structural_info[field]["hits"] = hits
+        structural_info[field]["total"] = total_matched_lines
+
+    match_ratio = unique_camt_matched / max(unique_camt_total, 1)
     structural_score = (
-        0.90 if format_info["detected_type"] == "FIXED_WIDTH" else
+        1.00 if format_info["detected_type"] == "FIXED_WIDTH" else
         0.85 if format_info["detected_type"] == "DELIMITED" else
         0.30
     )
@@ -1371,20 +1738,44 @@ def generate_mapping_regex(camt_path: Path, other_path: Path, max_examples: int 
         min(structural_score * 0.35 + min(match_ratio, 1.0) * 0.65, 1.0) * 100, 1
     )
 
+    try:
+        _, psr_transactions = parse_psr_file(other_path)
+        psr_transaction_count = len(psr_transactions)
+    except Exception:
+        psr_transaction_count = None
+
     prompt = _build_regex_prompt(samples)
     result: Dict[str, object] = {
         "examples": samples,
         "prompt": prompt,
         "llm_available": False,
         "format_info": format_info,
-        "match_count": len(matched_records),
-        "camt_ref_index_size": len(all_values),
+        "match_count": unique_camt_matched,
+        "camt_ref_index_size": unique_camt_total,
+        "psr_transaction_count": psr_transaction_count,
         "pattern_confidence": pattern_confidence,
         "llm_samples_sent": len(samples),
+        "unmatched_camt_entries": unmatched_entries,
     }
     try:
         llm_output = _llm_json_completion(prompt)
         result["llm_available"] = True
+        # Enrich any LLM-derived fields with the same data-driven hit-rate stats
+        for field, info in (llm_output.get("field_extractors") or {}).items():
+            pattern = info.get("regex", "")
+            if not pattern:
+                continue
+            try:
+                compiled_field = re.compile(pattern)
+                hits = sum(1 for rec in matched_records if compiled_field.search(rec["line"]))
+            except Exception:
+                hits = 0
+            rate = hits / max(total_matched_lines, 1)
+            pct = round(rate * 100, 1)
+            info["confidence"] = "high" if rate >= 0.85 else "medium" if rate >= 0.60 else "low"
+            info["confidence_pct"] = pct
+            info["hits"] = hits
+            info["total"] = total_matched_lines
         result["llm_output"] = llm_output
     except ValueError as exc:
         result["llm_error"] = str(exc)

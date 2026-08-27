@@ -1,0 +1,16 @@
+Scenario_ID,Custodian_Record,Scenario,Changed_Field,Original_Value,Amended_Value,Suggested_Matching_Rule,Expected_Classification
+FZ-01,CSTCST30000065,Partial / truncated execution reference (existing source anomaly),exec_ref,EXE10000065,EXE10      ,"Strip padding; use prefix similarity plus exact security, side, quantity and price",Fuzzy match / review
+FZ-02,CSTCST30000078,Missing custodian record (existing source gap),record,Expected sequence 78,No record present,Do not fuzzy-match absence; classify source trade as unmatched / missing at custodian,Unmatched exception
+FZ-03,CSTCST30000082,Order reference punctuation / formatting variance,order_ref,ORD20260082,ORD2026-082,Normalize non-alphanumeric characters before comparison,Auto fuzzy match
+FZ-04,CSTCST30000083,CUSIP supplied instead of 12-character ISIN,security_id,US0231351067,  0231351067,Map CUSIP to ISIN using security master; compare normalized identifier,Reference-data fuzzy match
+FZ-05,CSTCST30000084,Quantity differs by one share,quantity,000030000,000029999,Quantity tolerance of +/-1 share when other core economics agree,Tolerance match / review
+FZ-06,CSTCST30000085,Execution price rounded / differs by $0.01,price,00126.12,00126.13,"Price absolute tolerance <= $0.01 with exact security, side and near-exact quantity",Tolerance match
+FZ-07,CSTCST30000087,Side code differs only by letter case,side,S,s,Upper-case and normalize side code before comparison,Auto fuzzy match
+FZ-08,CSTCST30000088,One-character execution reference transcription error,exec_ref,EXE10000088,EXE1000008B,Edit-distance <=1 on execution reference plus exact economic fields,Fuzzy match / review
+FZ-09,CSTCST30000089,Embedded whitespace in order reference,order_ref,ORD20260089,ORD2026 089,Remove spaces and punctuation from reference before comparison,Auto fuzzy match
+FZ-10,CSTCST30000090,Security identifier case variation,security_id,US67066G1040,us67066g1040,Upper-case identifier before comparison,Auto fuzzy match
+FZ-11,CSTCST30000092 + CSTCST39000092,One execution split into two custodian settlement records,quantity / record cardinality,000025000,000010000 + 000015000,Group by order/exec/security/side/price and compare summed quantity to source trade,One-to-many aggregate match
+FZ-12,CSTCST30000094,Missing execution reference,exec_ref,EXE10000094,           ,Fallback weighted match on order reference + security + side + quantity + price,Probable match / manual review
+FZ-13,CSTCST30000095,Order reference separator introduced,order_ref,ORD20260095,ORD2026-095,Normalize reference punctuation before comparison,Auto fuzzy match
+FZ-14,CSTCST30000096,Single-character security identifier typo,security_id,US92826C8394,US92826C839X,Use edit-distance only when trade economics and account context uniquely support the candidate; otherwise reject,Fuzzy candidate / manual review
+FZ-15,CSTCST30000097,Small price variance combined with exact trade economics,price,00479.54,00479.55,"Price tolerance <= $0.01; require exact normalized security, side and quantity",Tolerance match

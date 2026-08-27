@@ -158,7 +158,9 @@ def parse_camt_file(path: Path) -> List[CamtTransaction]:
         direction = normalise_direction(_first_text_by_local_name(entry, "CdtDbtInd"))
         booking_date = _first_text_by_local_name(entry, "Dt")
         e2e_raw = _first_text_by_local_name(entry, "EndToEndId")
-        end_to_end_id = e2e_raw if e2e_raw and e2e_raw.upper() not in ("NOTFOUND", "NOT FOUND", "N/A", "NOTAVAILABLE") else ""
+        end_to_end_id = e2e_raw if e2e_raw and e2e_raw.upper() not in (
+            "NOTPROVIDED", "NOTFOUND", "NOT FOUND", "N/A", "NOTAVAILABLE"
+        ) else ""
         counterparty = _first_text_by_local_name(entry, "Nm")
         remittance = " ".join(clean_text(item.text) for item in _children_by_local_name(entry, "Ustrd") if item.text)
         pmt_ref = extract_pmt_ref(remittance)
@@ -262,7 +264,7 @@ def parse_ccf_file(path: Path) -> List[CcfTransaction]:
             clearing_ref = line[18:30].strip()
             exec_id = line[30:42].strip()
             isin = line[42:54].strip()
-            side = CCF_SIDE_MAP.get(line[54], "UNKNOWN")
+            side = CCF_SIDE_MAP.get(line[54].upper(), "UNKNOWN")
             try:
                 quantity = float(line[55:63])
             except ValueError:

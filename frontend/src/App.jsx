@@ -200,7 +200,7 @@ function DataIntake({ batches, submissions, selectedBatchId, setSelectedBatchId,
       setSelectedPatternGroup(patternGroups[0]);
     }
   }, [patternGroups.join(',')]); // eslint-disable-line react-hooks/exhaustive-deps
-  const selectedBatch = (batches.items || []).find((b) => b.batch_id === selectedBatchId) || (batches.items || [])[0];
+  const selectedBatch = selectedBatchId ? (batches.items || []).find((b) => b.batch_id === selectedBatchId) : null;
   const batchId = selectedBatch?.batch_id || selectedBatchId || '';
   const issues = quality?.issues || [];
   const files = submissions?.items || [];
@@ -970,30 +970,101 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
     }
   };
 
-  const DET_EXEC = { EXACT_E2E: 'AUTO_CLOSE', EXACT_PMT_REF: 'AUTO_CLOSE', EXACT_INVOICE: 'SUGGESTION', AMOUNT_DIRECTION: 'SUGGESTION' };
-  const DET_CONF = { EXACT_E2E: 0.95, EXACT_PMT_REF: 0.92, EXACT_INVOICE: 0.90, AMOUNT_DIRECTION: 0.80 };
+  const DET_EXEC = {
+    EXACT_E2E:                  'AUTO_CLOSE', EXACT_PMT_REF:             'AUTO_CLOSE',
+    EXACT_INVOICE:              'AUTO_CLOSE', EXACT_AMT_DATE_CCY:        'AUTO_CLOSE',
+    BATCH_SUM:                  'SUGGESTION', BATCH_SUM_VAR:             'SUGGESTION',
+    FUZZY_AMT_DIR:              'SUGGESTION',
+    APPROX_E2E_VAR:             'SUGGESTION', APPROX_PMT_REF_VAR:        'SUGGESTION',
+    APPROX_INVOICE_VAR:         'SUGGESTION', APPROX_AMT_DATE_VAR:       'SUGGESTION',
+    FUZZY_COUNTERPARTY:         'SUGGESTION',
+    SPLIT_SETTLEMENT:           'SUGGESTION',
+    SPLIT_SETTLEMENT_MINOR_VAR: 'SUGGESTION',
+    SPLIT_SETTLEMENT_MAJOR_VAR: 'SUGGESTION',
+  };
+  const DET_CONF = {
+    EXACT_E2E: 0.95, EXACT_PMT_REF: 0.92, EXACT_INVOICE: 0.90,
+    EXACT_AMT_DATE_CCY: 0.88,
+    BATCH_SUM: 0.82, BATCH_SUM_VAR: 0.72,
+    FUZZY_AMT_DIR: 0.75,
+    APPROX_E2E_VAR: 0.70, APPROX_PMT_REF_VAR: 0.68, APPROX_INVOICE_VAR: 0.65,
+    APPROX_AMT_DATE_VAR: 0.60,
+    FUZZY_COUNTERPARTY: 0.80,
+    SPLIT_SETTLEMENT: 0.85, SPLIT_SETTLEMENT_MINOR_VAR: 0.78, SPLIT_SETTLEMENT_MAJOR_VAR: 0.65,
+  };
   const DET_REASON = {
-    EXACT_E2E:        (n) => `Exact end-to-end ID match across ${n} transaction${n !== 1 ? 's' : ''} — unique identifier, collision risk near zero → 95%`,
-    EXACT_PMT_REF:    (n) => `Exact payment reference match across ${n} transaction${n !== 1 ? 's' : ''} — structured reference, very low false-positive rate → 92%`,
-    EXACT_INVOICE:    (n) => `Exact invoice number match across ${n} transaction${n !== 1 ? 's' : ''} — reliable but occasionally reused → 90%`,
-    AMOUNT_DIRECTION: (n) => `Amount + debit/credit direction match across ${n} transaction${n !== 1 ? 's' : ''} — amounts can coincide across parties, higher ambiguity → 80%`,
+    EXACT_E2E:                  (n) => `Exact EndToEndId Match — unique ID + amount confirmed across ${n} tx → 95%`,
+    EXACT_PMT_REF:              (n) => `PMT-REF + Amount — structured reference with amount guard across ${n} tx → 92%`,
+    EXACT_INVOICE:              (n) => `Invoice Extracted from Ustrd — invoice + amount match across ${n} tx → 90%`,
+    EXACT_AMT_DATE_CCY:         (n) => `Exact Amount + Date + Currency — three-attribute financial fingerprint across ${n} tx → 88%`,
+    BATCH_SUM:                  (n) => `One-to-Many Bank Settlement — N PSR lines sum to 1 CAMT entry across ${n} tx → 82%`,
+    BATCH_SUM_VAR:              (n) => `One-to-Many Settlement (Variance) — N PSR lines sum ≈ 1 CAMT entry (within tolerance) across ${n} tx → 72%`,
+    FUZZY_AMT_DIR:              (n) => `Amount Variance — ±0.5% tolerance on identity-matched entry across ${n} tx → 75%`,
+    APPROX_E2E_VAR:             (n) => `Amount Variance – EndToEndId — ID match, amount within ±2% across ${n} tx → 70%`,
+    APPROX_PMT_REF_VAR:         (n) => `Amount Variance – PMT-REF — reference match, amount within ±2% across ${n} tx → 68%`,
+    APPROX_INVOICE_VAR:         (n) => `Amount Variance – Invoice — invoice match, amount within ±2% across ${n} tx → 65%`,
+    APPROX_AMT_DATE_VAR:        (n) => `Amount Variance – Date + Currency — ±2% amount + date + currency across ${n} tx → 60%`,
+    FUZZY_COUNTERPARTY:         (n) => `Counterparty Fuzzy Match — name ≥85% similarity + exact amount across ${n} tx → 80%`,
+    SPLIT_SETTLEMENT:           (n) => `Split Settlement (1 PSR -> N CAMTs) — 1 PSR line splits across ${n} CAMT entries by shared reference → 85%`,
+    SPLIT_SETTLEMENT_MINOR_VAR: (n) => `Split Settlement – Minor Variance — split sum within minor tolerance across ${n} CAMT entries → 78%`,
+    SPLIT_SETTLEMENT_MAJOR_VAR: (n) => `Split Settlement – Major Variance — split sum within major tolerance across ${n} CAMT entries → 65%`,
+  };
+
+  // Maps discovery rule → seed pattern ID and its display label
+  const DET_SEED = {
+    EXACT_E2E:           { id: 'P1', label: 'P1 – Exact EndToEndId' },
+    EXACT_PMT_REF:       { id: 'P2', label: 'P2 – PMT-REF + Amount' },
+    EXACT_INVOICE:       { id: 'P3', label: 'P3 – Invoice + Amount' },
+    EXACT_AMT_DATE_CCY:  { id: 'P8', label: 'P8 – Amt + Date + Ccy' },
+    BATCH_SUM:                  { id: 'P6', label: 'P6 – One-to-Many Settlement' },
+    BATCH_SUM_VAR:              { id: 'P6', label: 'P6 – One-to-Many Settlement' },
+    FUZZY_AMT_DIR:       { id: 'P7', label: 'P7 – Amount Variance' },
+    APPROX_E2E_VAR:      { id: 'P7', label: 'P7 – Amount Variance' },
+    APPROX_PMT_REF_VAR:  { id: 'P7', label: 'P7 – Amount Variance' },
+    APPROX_INVOICE_VAR:  { id: 'P7', label: 'P7 – Amount Variance' },
+    APPROX_AMT_DATE_VAR: null,
+    FUZZY_COUNTERPARTY:  { id: 'P4',  label: 'P4 – Counterparty Fuzzy' },
+    SPLIT_SETTLEMENT:           { id: 'P10', label: 'P10 – Split Settlement' },
+    SPLIT_SETTLEMENT_MINOR_VAR: { id: 'P10', label: 'P10 – Split Settlement' },
+    SPLIT_SETTLEMENT_MAJOR_VAR: { id: 'P10', label: 'P10 – Split Settlement' },
+  };
+
+  // Workbench-compatible pattern_rule for each rule; must include capability keys
+  // (max_group_size, max_split_size, minor_tolerance) so _find_by_cap() fires.
+  const DET_WORKBENCH_RULE = {
+    EXACT_E2E:                  { fields: ['end_to_end_id'] },
+    EXACT_PMT_REF:              { fields: ['pmt_ref', 'amount'] },
+    EXACT_INVOICE:              { fields: ['invoice', 'amount'] },
+    EXACT_AMT_DATE_CCY:         { fields: ['amount', 'booking_date', 'currency'] },
+    BATCH_SUM:                  { fields: ['pmt_ref', 'invoice', 'amount_sum'], max_group_size: 6 },
+    BATCH_SUM_VAR:              { fields: ['pmt_ref', 'invoice', 'amount_sum'], max_group_size: 6 },
+    FUZZY_AMT_DIR:              { fields: ['identity', 'amount_variance'], minor_tolerance: 50 },
+    APPROX_E2E_VAR:             { fields: ['identity', 'amount_variance'], minor_tolerance: 50 },
+    APPROX_PMT_REF_VAR:         { fields: ['identity', 'amount_variance'], minor_tolerance: 50 },
+    APPROX_INVOICE_VAR:         { fields: ['identity', 'amount_variance'], minor_tolerance: 50 },
+    APPROX_AMT_DATE_VAR:        { fields: ['identity', 'amount_variance'], minor_tolerance: 50 },
+    FUZZY_COUNTERPARTY:         { fields: ['counterparty', 'amount'], threshold: 0.85 },
+    SPLIT_SETTLEMENT:           { fields: ['pmt_ref', 'invoice', 'amount_sum'], max_split_size: 5 },
+    SPLIT_SETTLEMENT_MINOR_VAR: { fields: ['pmt_ref', 'invoice', 'amount_sum'], max_split_size: 5 },
+    SPLIT_SETTLEMENT_MAJOR_VAR: { fields: ['pmt_ref', 'invoice', 'amount_sum'], max_split_size: 5 },
   };
 
   const allSaveable = patternResult ? [
     ...(patternResult.deterministic_patterns || []).map(p => ({
       key: `det-${p.rule}`, label: p.pattern_name, origin: 'Deterministic', originTone: 'success',
       fields: p.fields_used || [], mode: DET_EXEC[p.rule] || 'SUGGESTION', status: 'ACTIVE',
+      seedRef: p.seed_pattern_id ? (DET_SEED[p.rule] || { id: p.seed_pattern_id, label: p.seed_pattern_id }) : null,
       reason: DET_REASON[p.rule] ? DET_REASON[p.rule](p.matched_count) : `Matched ${p.matched_count} transaction(s)`,
       toPayload: () => ({
         pattern_name: p.pattern_name, pattern_type: 'FILE_DETECTED', pattern_version: '1.0',
-        pattern_rule: { fields: p.fields_used || [], mode: 'AUTO' },
+        pattern_rule: { ...(DET_WORKBENCH_RULE[p.rule] || { fields: p.fields_used || [] }), mode: 'AUTO' },
         status: 'ACTIVE', execution_mode: DET_EXEC[p.rule] || 'SUGGESTION',
         confidence_threshold: DET_CONF[p.rule] ?? 0.80, approved_by: 'prototype_user',
       }),
     })),
     ...(patternResult.llm_patterns || []).map((p, i) => ({
       key: `llm-${p.rule_id || i}`, label: p.pattern_name, origin: 'LLM suggested', originTone: 'warning',
-      fields: p.fields_used || [], mode: 'SUGGESTION', status: 'DRAFT',
+      fields: p.fields_used || [], mode: 'SUGGESTION', status: 'DRAFT', seedRef: null,
       reason: p.description || `AI-proposed fuzzy pattern — lower certainty, requires human review → 75%`,
       toPayload: () => ({
         pattern_name: p.pattern_name, pattern_type: 'LLM_SUGGESTED', pattern_version: '1.0',
@@ -1096,7 +1167,8 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                       { label: 'Format', value: mappingResult.format_info?.detected_type ?? '—' },
                       { label: 'Record prefix', value: mappingResult.format_info?.record_prefix ?? '—' },
                       { label: 'Delimiter', value: mappingResult.format_info?.delimiter ?? 'none' },
-                      { label: 'Matched lines', value: `${mappingResult.match_count ?? '—'} / ${mappingResult.camt_ref_index_size ?? '?'}`, hint: 'CAMT IDs' },
+                      ...(mappingResult.psr_transaction_count != null ? [{ label: 'PSR records', value: mappingResult.psr_transaction_count }] : []),
+                      { label: 'Matched entries', value: `${mappingResult.match_count ?? '—'} / ${mappingResult.camt_ref_index_size ?? '?'}`, hint: 'CAMT entries' },
                       ...(mappingResult.pattern_confidence != null ? [{ label: 'Confidence', value: `${mappingResult.pattern_confidence}%`, hint: 'match ratio × clarity' }] : []),
                     ].map((item, i, arr) => (
                       <div key={item.label} style={{ flex: 1, padding: '0.55rem 0.85rem', borderRight: i < arr.length - 1 ? '1px solid var(--border, #e2e8f0)' : 'none', minWidth: 0 }}>
@@ -1117,24 +1189,15 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                       <tbody>
                         {(() => {
                           const llmEx = mappingResult.llm_output?.field_extractors;
-                          const structural = mappingResult.format_info?.suggested_regex_map;
-                          if (llmEx && Object.keys(llmEx).length > 0) {
-                            return Object.entries(llmEx).map(([field, info]) => (
+                          const structuralInfo = mappingResult.format_info?.structural_field_info;
+                          const rows = llmEx && Object.keys(llmEx).length > 0 ? llmEx : structuralInfo;
+                          if (rows && Object.keys(rows).length > 0) {
+                            return Object.entries(rows).map(([field, info]) => (
                               <tr key={field}>
                                 <td><code>{field}</code></td>
                                 <td><pre style={{ margin: 0, fontSize: '0.73rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{info.regex}</pre></td>
-                                <td><code style={{ fontSize: '0.78rem' }}>{info.maps_to_camt}</code></td>
-                                <td><Tag tone={info.confidence === 'high' ? 'success' : info.confidence === 'medium' ? 'warning' : 'danger'}>{info.confidence}</Tag></td>
-                              </tr>
-                            ));
-                          }
-                          if (structural && Object.keys(structural).length > 0) {
-                            return Object.entries(structural).map(([field, pattern]) => (
-                              <tr key={field}>
-                                <td><code>{field}</code></td>
-                                <td><pre style={{ margin: 0, fontSize: '0.73rem', whiteSpace: 'pre-wrap', wordBreak: 'break-all' }}>{pattern}</pre></td>
-                                <td>—</td>
-                                <td><Tag tone="neutral">structural</Tag></td>
+                                <td><code style={{ fontSize: '0.78rem' }}>{info.maps_to_camt || '—'}</code></td>
+                                <td><Tag tone={info.confidence === 'high' ? 'success' : info.confidence === 'medium' ? 'warning' : 'danger'} title={info.confidence_pct != null ? `${info.hits}/${info.total} matched PSR lines (${info.confidence_pct}%)${info.reason ? ` — ${info.reason}` : ''}` : undefined}>{info.confidence}{info.confidence_pct != null ? ` · ${info.confidence_pct}%` : ''}</Tag></td>
                               </tr>
                             ));
                           }
@@ -1147,6 +1210,31 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                     <p style={{ marginTop: '0.75rem', fontSize: '0.83rem', color: 'var(--text-muted, #888)' }}>
                       <strong>Layout: </strong>{mappingResult.llm_output.explanation}
                     </p>
+                  )}
+
+                  {mappingResult.unmatched_camt_entries?.length > 0 && (
+                    <details style={{ marginTop: '1rem' }}>
+                      <summary style={{ cursor: 'pointer', fontSize: '0.83rem', fontWeight: 600, color: 'var(--warning, #b45309)' }}>
+                        {mappingResult.unmatched_camt_entries.length} CAMT entr{mappingResult.unmatched_camt_entries.length === 1 ? 'y' : 'ies'} not found in PSR file
+                      </summary>
+                      <div className="table-wrap compact tight" style={{ marginTop: '0.5rem' }}>
+                        <table>
+                          <thead><tr><th>CAMT ref</th><th>Amount</th><th>Counterparty</th><th>Indexed refs</th></tr></thead>
+                          <tbody>
+                            {mappingResult.unmatched_camt_entries.map((e) => (
+                              <tr key={e.ntry_ref}>
+                                <td><code>{e.ntry_ref}</code></td>
+                                <td>{e.amount} {e.currency}</td>
+                                <td>{e.counterparty || '—'}</td>
+                                <td style={{ fontSize: '0.73rem' }}>
+                                  {[e.pmt_ref, e.invoice, ...Object.values(e.refs || {})].filter(Boolean).join(', ') || '—'}
+                                </td>
+                              </tr>
+                            ))}
+                          </tbody>
+                        </table>
+                      </div>
+                    </details>
                   )}
                 </>
               )}
@@ -1185,7 +1273,6 @@ function PatternBuilder({ onGenerateMapping, onGeneratePatterns, onSave, onSaveB
                             {item.fields.length > 0 && <div style={{ fontSize: '0.7rem', color: 'var(--muted, #94a3b8)', marginTop: '0.1rem' }}>Fields: {item.fields.join(' · ')}</div>}
                           </div>
                           <div style={{ display: 'flex', gap: '0.4rem', flexShrink: 0 }}>
-                            <Tag tone={item.originTone}>{item.origin}</Tag>
                             <Tag tone={item.mode === 'AUTO_CLOSE' ? 'success' : 'warning'}>{item.mode}</Tag>
                             <Tag tone="neutral" title={item.reason || `${Math.round((item.toPayload().confidence_threshold ?? 0.8) * 100)}% — minimum match confidence threshold`}>{Math.round((item.toPayload().confidence_threshold ?? 0.8) * 100)}% confidence</Tag>
                           </div>
@@ -3573,7 +3660,7 @@ export default function App() {
           </div>
         </div>
         <nav className="nav-list">
-          {tabs.map(([key, label]) => <button key={key} className={active === key ? 'active' : ''} onClick={() => setActive(key)}>{label}</button>)}
+          {tabs.map(([key, label]) => <button key={key} className={active === key ? 'active' : ''} onClick={() => { if (key === 'intake') setSelectedBatchId(''); setActive(key); }}>{label}</button>)}
         </nav>
 
       </aside>

@@ -1,62 +1,62 @@
-10MAINBKGRP20260610IE12BOFI90000098765432EUR
-20TX-2027-000120260610PMT-REF-30001                 000000002500CRINV-2027-9001            Artisan Bakers Ltd            
-20TX-2027-000220260610PMT-REF-30002                 000000003750CRINV-2027-9002            BlueStar Logistics            
-20TX-2027-000320260610PMT-REF-30003                 000000001200CRINV-2027-9003            Cascade Supplies              
-20TX-2027-000420260610PMT-REF-30004                 000000008900CRINV-2027-9004            Delta Trading Co              
-20TX-2027-000520260610PMT-REF-30005                 000000004400CRINV-2027-9005            Echo Beverages                
-20TX-2027-000620260610PMT-REF-30006                 000000006750CRINV-2027-9006            Falcon Freight                
-20TX-2027-000720260610PMT-REF-30007                 000000001850CRINV-2027-9007            Global Grains                 
-20TX-2027-000820260610PMT-REF-30008                 000000009200CRINV-2027-9008            Harbour Marine                
-20TX-2027-000920260610PMT-REF-30009                 000000003300CRINV-2027-9009            Indigo Textiles               
-20TX-2027-001020260610PMT-REF-30010                 000000005500CRINV-2027-9010            Junction Foods                
-20TX-2027-001120260610PMT-REF-30011                 000000002100CRINV-2027-9011            Kestrel Capital               
-20TX-2027-001220260610PMT-REF-30012                 000000007800CRINV-2027-9012            Linden Partners               
-20TX-2027-001320260610PMT-REF-30013                 000000004150CRINV-2027-9013            Metro Couriers                
-20TX-2027-001420260610PMT-REF-30014                 000000006000CRINV-2027-9014            Nordic Exports                
-20TX-2027-001520260610PMT-REF-30015                 000000001600CRINV-2027-9015            Ocean Freight Ltd             
-20TX-2027-001620260610PMT-REF-30016                 000000003200CRINV-2027-9016            Pinnacle Group                
-20TX-2027-001720260610PMT-REF-30017                 000000004700CRINV-2027-9017            Quorum Finance                
-20TX-2027-001820260610PMT-REF-30018                 000000002850CRINV-2027-9018            Redwood Holdings              
-20TX-2027-001920260610PMT-REF-30019                 000000009100CRINV-2027-9019            Silveroak Ltd                 
-20TX-2027-002020260610PMT-REF-30020                 000000005600CRINV-2027-9020            Thornfield Co                 
-20TX-2027-002120260610PMT-REF-30021                 000000007300CRINV-2027-9021            Upstream Trade                
-20TX-2027-002220260610PMT-REF-30022                 000000001950CRINV-2027-9022            Valley Produce                
-20TX-2027-002320260610PMT-REF-30023                 000000008450CRINV-2027-9023            Westbrook Corp                
-20TX-2027-002420260610PMT-REF-30024                 000000006500CRINV-2027-9024            Xtend Partners                
-20TX-2027-002520260610PMT-REF-30025                 000000004200CRINV-2027-9025            Yorkfield Bank                
-20TX-2027-002620260610PMT-REF-30026                 000000011000CRINV-2027-9026            Zenith Capital                
-20TX-2027-002720260610PMT-REF-30027                 000000003600CRINV-2027-9027            Ashfield Traders              
-20TX-2027-002820260610PMT-REF-30028                 000000005100CRINV-2027-9028            Bridgeway Ltd                 
-20TX-2027-002920260610PMT-REF-30029                 000000002200CRINV-2027-9029            Clearwater Corp               
-20TX-2027-003020260610PMT-REF-30030                 000000007400CRINV-2027-9030            Dawnlight Group               
-20TX-2027-003120260610PMT-REF-30031                 000000001700CRINV-2027-9031            Eastfield Foods               
-20TX-2027-003220260610PMT-REF-30032                 000000004800CRINV-2027-9032            Forestry Exports              
-20TX-2027-003320260610PMT-REF-30033                 000000003900CRINV-2027-9033            Glenwood Exports              
-20TX-2027-003420260610PMT-REF-30034                 000000006200CRINV-2027-9034            Highfield Capital             
-20TX-2027-003520260610PMT-REF-30035                 000000002700CRINV-2027-9035            Ironwood Partners             
-20TX-2027-003620260610PMT-REF-30036                 000000005300CRINV-2027-9036            Juniper Trading               
-20TX-2027-003720260610PMT-REF-30037                 000000001450CRINV-2027-9037            Kettle Creek Ltd              
-20TX-2027-003820260610PMT-REF-30038                 000000004600CRINV-2027-9038            Riverside Energy              
-20TX-2027-003920260610PMT-REF-30039                 000000002900CRINV-2027-9039            Crestwood Retail              
-20TX-2027-004020260610PMT-REF-30040                 000000008100CRINV-2027-9040            Brightwater Ltd               
-20TX-2027-004120260610PMT-REF-30041                 000000003400CRINV-2027-9041            Shoreline Foods               
-20TX-2027-004220260610PMT-REF-30042                 000000005700CRINV-2027-9042            Lakefront Ventures            
-20TX-2027-004320260610PMT-REF-30043                 000000002100CRINV-2027-9043            Meadowbrook Inc               
-20TX-2027-004420260610PMT-REF-30044                 000000006800CRINV-2027-9044            Northgate Supplies            
-20TX-2027-004520260610PMT-REF-30045                 000000001300CRINV-2027-9045            Orchard Creek Ltd             
-20TX-2027-004620260610PMT-REF-30046                 000000004100CRINV-2027-9046            Pinewood Trading              
-20TX-2027-004720260610PMT-REF-30047                 000000007900CRINV-2027-9047            Queensway Exports             
-20TX-2027-004820260610PMT-REF-30048                 000000002600CRINV-2027-9048            Riverstone Corp               
-20TX-2027-004920260610PMT-REF-30049                 000000005800CRINV-2027-9049            Sterling Commerce             
-20TX-2027-005020260610PMT-REF-30050                 000000003200CRINV-2027-9050            Thorngate Ltd                 
-20TX-2027-005120260610PMT-AI-051                    000000004250CRINV-2027-9051            MerCo Foods                   
-20TX-2027-005220260610PMT-AI-052                    000000003150CRINV-2027-9052            TDL Express                   
-20TX-2027-005320260610PMT-AI-053                    000000007850CRINV-2027-9053            Summit Grain                  
-20TX-2027-005420260610PMT-AI-054                    000000005450CRINV-2027-9054            Norsk Trade                   
-20TX-2027-005520260610PMT-AI-055                    000000002950CRINV-2027-9055            Atlas Finance                 
-20TX-2027-005620260610PMT-AI-056                    000000006100CRINV-2027-9056            Pacific Logistics             
-20TX-2027-005720260610PMT-AI-057                    000000004300CRINV-2027-9057            Euro Tech                     
-20TX-2027-005820260610PMT-AI-058                    000000008200CRINV-2027-9058            City Couriers                 
-20TX-2027-005920260610PMT-AI-059                    000000003700CRINV-2027-9059            Farm Direct                   
-20TX-2027-006020260610PMT-AI-060                    000000005200CRINV-2027-9060            Swift Move                    
+10MAINBKGRP20260824IE12BOFI90000098765432EUR
+20TX-2027-000120260824PMT-REF-30001                 000000002500CRINV-2027-9001            Artisan Bakers Ltd            
+20TX-2027-000220260824PMT-REF-30002                 000000003750CRINV-2027-9002            BlueStar Logistics            
+20TX-2027-000320260824PMT-REF-30003                 000000001200CRINV-2027-9003            Cascade Supplies              
+20TX-2027-000420260824PMT-REF-30004                 000000008900CRINV-2027-9004            Delta Trading Co              
+20TX-2027-000520260824PMT-REF-30005                 000000004400CRINV-2027-9005            Echo Beverages                
+20TX-2027-000620260824PMT-REF-30006                 000000006750CRINV-2027-9006            Falcon Freight                
+20TX-2027-000720260824PMT-REF-30007                 000000001850CRINV-2027-9007            Global Grains                 
+20TX-2027-000820260824PMT-REF-30008                 000000009200CRINV-2027-9008            Harbour Marine                
+20TX-2027-000920260824PMT-REF-30009                 000000003300CRINV-2027-9009            Indigo Textiles               
+20TX-2027-001020260824PMT-REF-30010                 000000005500CRINV-2027-9010            Junction Foods                
+20TX-2027-001120260824PMT-REF-30011                 000000002100CRINV-2027-9011            Kestrel Capital               
+20TX-2027-001220260824PMT-REF-30012                 000000007800CRINV-2027-9012            Linden Partners               
+20TX-2027-001320260824PMT-REF-30013                 000000004150CRINV-2027-9013            Metro Couriers                
+20TX-2027-001420260824PMT-REF-30014                 000000006000CRINV-2027-9014            Nordic Exports                
+20TX-2027-001520260824PMT-REF-30015                 000000001600CRINV-2027-9015            Ocean Freight Ltd             
+20TX-2027-001620260824PMT-REF-30016                 000000003200CRINV-2027-9016            Pinnacle Group                
+20TX-2027-001720260824PMT-REF-30017                 000000004700CRINV-2027-9017            Quorum Finance                
+20TX-2027-001820260824PMT-REF-30018                 000000002850CRINV-2027-9018            Redwood Holdings              
+20TX-2027-001920260824PMT-REF-30019                 000000009100CRINV-2027-9019            Silveroak Ltd                 
+20TX-2027-002020260824PMT-REF-30020                 000000005600CRINV-2027-9020            Thornfield Co                 
+20TX-2027-002120260824PMT-REF-30021                 000000007300CRINV-2027-9021            Upstream Trade                
+20TX-2027-002220260824PMT-REF-30022                 000000001950CRINV-2027-9022            Valley Produce                
+20TX-2027-002320260824PMT-REF-30023                 000000008450CRINV-2027-9023            Westbrook Corp                
+20TX-2027-002420260824PMT-REF-30024                 000000006500CRINV-2027-9024            Xtend Partners                
+20TX-2027-002520260824PMT-REF-30025                 000000004200CRINV-2027-9025            Yorkfield Bank                
+20TX-2027-002620260824PMT-REF-30026                 000000011000CRINV-2027-9026            Zenith Capital                
+20TX-2027-002720260824PMT-REF-30027                 000000003600CRINV-2027-9027            Ashfield Traders              
+20TX-2027-002820260824PMT-REF-30028                 000000005100CRINV-2027-9028            Bridgeway Ltd                 
+20TX-2027-002920260824PMT-REF-30029                 000000002200CRINV-2027-9029            Clearwater Corp               
+20TX-2027-003020260824PMT-REF-30030                 000000007400CRINV-2027-9030            Dawnlight Group               
+20TX-2027-003120260824PMT-REF-30031                 000000001700CRINV-2027-9031            Eastfield Foods               
+20TX-2027-003220260824PMT-REF-30032                 000000004800CRINV-2027-9032            Forestry Exports              
+20TX-2027-003320260824PMT-REF-30033                 000000003900CRINV-2027-9033            Glenwood Exports              
+20TX-2027-003420260824PMT-REF-30034                 000000006200CRINV-2027-9034            Highfield Capital             
+20TX-2027-003520260824PMT-REF-30035                 000000002700CRINV-2027-9035            Ironwood Partners             
+20TX-2027-003620260824PMT-REF-30036                 000000005300CRINV-2027-9036            Juniper Trading               
+20TX-2027-003720260824PMT-REF-30037                 000000001450CRINV-2027-9037            Kettle Creek Ltd              
+20TX-2027-003820260824PMT-REF-30038                 000000004600CRINV-2027-9038            Riverside Energy              
+20TX-2027-003920260824PMT-REF-30039                 000000002900CRINV-2027-9039            Crestwood Retail              
+20TX-2027-004020260824PMT-REF-30040                 000000008100CRINV-2027-9040            Brightwater Ltd               
+20TX-2027-004120260824PMT-REF-30041                 000000003400CRINV-2027-9041            Shoreline Foods               
+20TX-2027-004220260824PMT-REF-30042                 000000005700CRINV-2027-9042            Lakefront Ventures            
+20TX-2027-004320260824PMT-REF-30043                 000000002100CRINV-2027-9043            Meadowbrook Inc               
+20TX-2027-004420260824PMT-REF-30044                 000000006800CRINV-2027-9044            Northgate Supplies            
+20TX-2027-004520260824PMT-REF-30045                 000000001300CRINV-2027-9045            Orchard Creek Ltd             
+20TX-2027-004620260824PMT-REF-30046                 000000004100CRINV-2027-9046            Pinewood Trading              
+20TX-2027-004720260824PMT-REF-30047                 000000007900CRINV-2027-9047            Queensway Exports             
+20TX-2027-004820260824PMT-REF-30048                 000000002600CRINV-2027-9048            Riverstone Corp               
+20TX-2027-004920260824PMT-REF-30049                 000000005800CRINV-2027-9049            Sterling Commerce             
+20TX-2027-005020260824PMT-REF-30050                 000000003200CRINV-2027-9050            Thorngate Ltd                 
+20TX-2027-005120260824PMT-AI-051                    000000004250CRINV-2027-9051            MerCo Foods                   
+20TX-2027-005220260824PMT-AI-052                    000000003150CRINV-2027-9052            TDL Express                   
+20TX-2027-005320260824PMT-AI-053                    000000007850CRINV-2027-9053            Summit Grain                  
+20TX-2027-005420260824PMT-AI-054                    000000005450CRINV-2027-9054            Norsk Trade                   
+20TX-2027-005520260824PMT-AI-055                    000000002950CRINV-2027-9055            Atlas Finance                 
+20TX-2027-005620260824PMT-AI-056                    000000006100CRINV-2027-9056            Pacific Logistics             
+20TX-2027-005720260824PMT-AI-057                    000000004300CRINV-2027-9057            Euro Tech                     
+20TX-2027-005820260824PMT-AI-058                    000000008200CRINV-2027-9058            City Couriers                 
+20TX-2027-005920260824PMT-AI-059                    000000003700CRINV-2027-9059            Farm Direct                   
+20TX-2027-006020260824PMT-AI-060                    000000005200CRINV-2027-9060            Swift Move                    
 99000060

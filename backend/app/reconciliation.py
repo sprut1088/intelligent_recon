@@ -268,12 +268,15 @@ def pattern_config(pattern_registry_rows: Sequence[Dict]) -> Dict[str, Dict]:
 
     # Copied groups have PX-* IDs; add seed aliases so the engine's hard-coded
     # P1/P2/… checks still fire when field signatures match the seed pattern.
+    # Includes pattern-gen output formats (e.g. ["end_to_end_id","amount"] for P1).
     _SEED_SIGS: Dict[frozenset, str] = {
-        frozenset(["end_to_end_id"]): "P1",
-        frozenset(["pmt_ref", "amount"]): "P2",
-        frozenset(["invoice", "amount"]): "P3",
-        frozenset(["counterparty", "amount"]): "P4",
+        frozenset(["end_to_end_id"]):               "P1",
+        frozenset(["end_to_end_id", "amount"]):     "P1",  # pattern-gen EXACT_E2E / APPROX_E2E_VAR
+        frozenset(["pmt_ref", "amount"]):           "P2",
+        frozenset(["invoice", "amount"]):           "P3",
+        frozenset(["counterparty", "amount"]):      "P4",
         frozenset(["identity", "amount_variance"]): "P7",
+        frozenset(["amount", "direction"]):         "P7",  # pattern-gen FUZZY_AMT_DIR
     }
     _P6_P10_FIELDS = frozenset(["pmt_ref", "invoice", "amount_sum"])
     for pid, entry in list(config.items()):
@@ -287,7 +290,12 @@ def pattern_config(pattern_registry_rows: Sequence[Dict]) -> Dict[str, Dict]:
         elif fields in _SEED_SIGS:
             alias = _SEED_SIGS[fields]
             if alias not in config:
-                config[alias] = entry
+                if alias == "P7" and "amount_variance" not in fields:
+                    # _find_by_cap(has_field="amount_variance") requires the key in fields
+                    patched = {**rule, "fields": list(fields | {"amount_variance"})}
+                    config[alias] = {**entry, "rule": patched}
+                else:
+                    config[alias] = entry
         elif fields == _P6_P10_FIELDS:
             if "max_split_size" in rule and "P10" not in config:
                 config["P10"] = entry
